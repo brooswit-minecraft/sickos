@@ -16,7 +16,7 @@ jobs:
     # ci.yml only reads the repo, so keep that workflow's permissions untouched.
     permissions:
       contents: write
-    uses: brooswit-factory/schematic/.github/workflows/reusable-release.yml@v1
+    uses: brooswit-minecraft/schematic/.github/workflows/reusable-release.yml@v1
     with:
       version: ${{ inputs.version }}
     secrets: inherit

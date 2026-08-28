@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   server-update:
-    uses: brooswit-factory/schematic/.github/workflows/reusable-server-update.yml@v1
+    uses: brooswit-minecraft/schematic/.github/workflows/reusable-server-update.yml@v1
     with:
       version: ${{ inputs.version }}
     secrets: inherit
