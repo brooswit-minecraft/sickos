@@ -1,0 +1,13 @@
+name = "Project Atmosphere: Realistic Climate & Weather - NEW LOGO"
+filename = "NeoForge-projectatmosphere-0.9.1.2.jar"
+side = "both"
+
+[download]
+url = "https://cdn.modrinth.com/data/qIWoLcKJ/versions/QBPZU1Dp/NeoForge-projectatmosphere-0.9.1.2.jar"
+hash-format = "sha512"
+hash = "02ca75ca33acd45c221d81c94e706ea77c529f793f3b95b62993667c5ea7d0421ebd98a96fefeab3202f9a66f6e4569e6beaa46767491c265b2f231679ca1db9"
+
+[update]
+[update.modrinth]
+mod-id = "qIWoLcKJ"
+version = "QBPZU1Dp"
