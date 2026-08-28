@@ -1,0 +1,13 @@
+name = "Peaceful Nights"
+filename = "peaceful_nights-neoforge-0.1.0+1.21.1.jar"
+side = "server"
+
+[download]
+url = "https://cdn.modrinth.com/data/wusZLXmN/versions/y93rTym7/peaceful_nights-neoforge-0.1.0%2B1.21.1.jar"
+hash-format = "sha512"
+hash = "4856c2c8746797b6fc337ac95a3132fd7047d1ebae8e5965c39e77d8d4ea2677dd54d9565ffd3cc706d8afbd9c15c6fc0117c1032fc23f0660ab03b0a0e1a85b"
+
+[update]
+[update.modrinth]
+mod-id = "wusZLXmN"
+version = "y93rTym7"
