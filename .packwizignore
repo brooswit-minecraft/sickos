@@ -6,7 +6,6 @@ Makefile
 .packwizignore
 .github/
 scripts/
-server/
 build/
 *.mrpack
 *.zip
