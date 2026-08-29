@@ -1,3 +1,15 @@
+# sickos
+
+A [Create](https://modrinth.com/mod/create)-focused Minecraft **1.21.1 / NeoForge
+21.1.248** modpack, built from the [schematic](https://github.com/brooswit-minecraft/schematic)
+template below. Pinned mods live under `mods/`; `Rediculous Ore Generation` and
+`Immersive Weathering` are intentionally omitted — neither has a 1.21.1 release.
+
+Everything from here down is inherited from the template, kept intact so future
+`git merge template/main` pulls stay cheap.
+
+---
+
 # schematic
 
 A [packwiz](https://packwiz.infra.link) modpack **template** for Minecraft **1.20.1 /
