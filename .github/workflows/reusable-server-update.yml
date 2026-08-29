@@ -1,11 +1,12 @@
 name: Reusable Server update
 
-# Callable from a consumer's thin server-update.yml stub. Uploads the packwiz
-# pack to a game server over FTP, then announces and restarts it over RCON.
-# Both halves skip independently (and the run still succeeds) when their
-# secrets are not configured — see the "Check secrets" step below. Runs
-# against the CALLER's checkout — actions/checkout below checks out whichever
-# repo invoked this workflow, not this one.
+# Callable from a consumer's thin server-update.yml stub. After a release
+# publishes a version to Modrinth, re-points a Modrinth-hosted server's
+# upstream at that published version and restarts it. Skips cleanly (and the
+# run still succeeds) when MODRINTH_SERVER_ID / MODRINTH_TOKEN are not
+# configured — see the "Check configuration" step below. Runs against the
+# CALLER's checkout — actions/checkout below checks out whichever repo
+# invoked this workflow, not this one.
 #
 # `github.event_name` / `github.event.release.*` here reflect the CALLER's
 # original triggering event, not a synthetic "workflow_call" event — see the
@@ -16,9 +17,9 @@ on:
     inputs:
       version:
         description: >-
-          Version to announce, forwarded from the stub's workflow_dispatch
-          input. Ignored when the caller was triggered by a published
-          release — this workflow reads github.event.release.tag_name
+          Version to look up on Modrinth, forwarded from the stub's
+          workflow_dispatch input. Ignored when the caller was triggered by a
+          published release — this workflow reads github.event.release.tag_name
           directly for that case, falling back to pack.toml otherwise.
         required: false
         type: string
@@ -52,76 +53,63 @@ jobs:
           printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
 
       # Secrets cannot be read directly in an `if:` expression, so this step
-      # reads them from env and writes booleans to $GITHUB_OUTPUT instead.
-      # Never echo the secret values themselves.
-      - name: Check secrets
-        id: secrets
+      # reads them from env and writes a single boolean to $GITHUB_OUTPUT
+      # instead. Never echo the values themselves. A missing
+      # MODRINTH_PROJECT_ID alongside the other two IS configured is a
+      # misconfiguration (it would otherwise fall through to an opaque
+      # /v2/project//version 404 below), so it fails loudly rather than
+      # skipping.
+      - name: Check configuration
+        id: config
         env:
-          FTP_HOST: ${{ secrets.FTP_HOST }}
-          FTP_USER: ${{ secrets.FTP_USER }}
-          FTP_PASSWORD: ${{ secrets.FTP_PASSWORD }}
-          RCON_HOST: ${{ secrets.RCON_HOST }}
-          RCON_PASSWORD: ${{ secrets.RCON_PASSWORD }}
+          MODRINTH_SERVER_ID: ${{ vars.MODRINTH_SERVER_ID }}
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+          MODRINTH_PROJECT_ID: ${{ vars.MODRINTH_PROJECT_ID }}
         run: |
-          if [ -n "$FTP_HOST" ] && [ -n "$FTP_USER" ] && [ -n "$FTP_PASSWORD" ]; then
-            echo "has_ftp=true" >> "$GITHUB_OUTPUT"
+          if [ -n "$MODRINTH_SERVER_ID" ] && [ -n "$MODRINTH_TOKEN" ]; then
+            if [ -z "$MODRINTH_PROJECT_ID" ]; then
+              echo "::error::MODRINTH_SERVER_ID and MODRINTH_TOKEN are set but MODRINTH_PROJECT_ID is not — set the MODRINTH_PROJECT_ID repo variable to the Modrinth project this server should follow."
+              exit 1
+            fi
+            echo "configured=true" >> "$GITHUB_OUTPUT"
           else
-            echo "has_ftp=false" >> "$GITHUB_OUTPUT"
-          fi
-          if [ -n "$RCON_HOST" ] && [ -n "$RCON_PASSWORD" ]; then
-            echo "has_rcon=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_rcon=false" >> "$GITHUB_OUTPUT"
+            echo "configured=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # Uploads only modpack content (pack.toml, index.toml, mods/, config/ if
-      # present) — never .git, bin/, build/, or repo tooling/docs.
-      - name: Upload pack over FTP
-        if: steps.secrets.outputs.has_ftp == 'true'
-        # Pinned to a specific release tag.
-        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
-        with:
-          server: ${{ secrets.FTP_HOST }}
-          username: ${{ secrets.FTP_USER }}
-          password: ${{ secrets.FTP_PASSWORD }}
-          server-dir: ${{ vars.FTP_REMOTE_DIR || '/' }}
-          exclude: |
-            **/.git*
-            **/.git*/**
-            bin/**
-            build/**
-            .github/**
-            server/**
-            README.md
-            Makefile
-            .packwizignore
+      - name: Skip Modrinth server update
+        if: steps.config.outputs.configured != 'true'
+        run: echo "MODRINTH_SERVER_ID / MODRINTH_TOKEN not set — skipping Modrinth server update"
 
-      - name: Skip server upload
-        if: steps.secrets.outputs.has_ftp != 'true'
-        run: echo "FTP secrets not set — skipping server upload"
-
-      # mcrcon, pinned to release v0.7.2 (https://github.com/Tiiffi/mcrcon).
-      - name: Install mcrcon
-        if: steps.secrets.outputs.has_rcon == 'true'
-        run: |
-          curl -fsSL -o mcrcon.tar.gz \
-            https://github.com/Tiiffi/mcrcon/releases/download/v0.7.2/mcrcon-0.7.2-linux-x86-64.tar.gz
-          tar -xzf mcrcon.tar.gz mcrcon
-          rm mcrcon.tar.gz
-
-      - name: Announce and restart over RCON
-        if: steps.secrets.outputs.has_rcon == 'true'
+      # Looks up the just-published version on Modrinth by its version
+      # number. A miss here means the release hasn't published to Modrinth
+      # yet, which is a real error worth failing loudly for, not a skip.
+      - name: Resolve published version id
+        if: steps.config.outputs.configured == 'true'
+        id: modrinth_version
         env:
-          MCRCON_HOST: ${{ secrets.RCON_HOST }}
-          MCRCON_PORT: ${{ vars.RCON_PORT || '25575' }}
-          MCRCON_PASS: ${{ secrets.RCON_PASSWORD }}
-          RESTART_COMMAND: ${{ vars.RCON_RESTART_COMMAND || 'stop' }}
-          PACK_VERSION: ${{ steps.version.outputs.version }}
+          PROJECT_ID: ${{ vars.MODRINTH_PROJECT_ID }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
-          ./mcrcon -H "$MCRCON_HOST" -P "$MCRCON_PORT" \
-            "say Modpack updated to $PACK_VERSION — restart to apply" \
-            "$RESTART_COMMAND"
+          versions="$(curl -fsSL -H "User-Agent: brooswit-minecraft/schematic (server-update workflow)" "https://api.modrinth.com/v2/project/${PROJECT_ID}/version")"
+          version_id="$(printf '%s' "$versions" | jq -r --arg v "$VERSION" '[.[] | select(.version_number == $v)][0].id // empty')"
+          if [ -z "$version_id" ]; then
+            echo "::error::No Modrinth version found for project ${PROJECT_ID} with version_number ${VERSION} — has this release been published to Modrinth yet?"
+            exit 1
+          fi
+          echo "id=$version_id" >> "$GITHUB_OUTPUT"
 
-      - name: Skip RCON announce
-        if: steps.secrets.outputs.has_rcon != 'true'
-        run: echo "RCON secrets not set — skipping RCON announce"
+      - uses: oven-sh/setup-bun@v2
+        if: steps.config.outputs.configured == 'true'
+
+      # Re-points the server's upstream at the resolved version id above and
+      # restarts it, via the rinth CLI. Pinned to a commit sha (rinth has no
+      # tags yet) rather than a branch ref, since a branch ref is a moving
+      # target an upstream maintainer could repoint underneath this workflow.
+      - name: Update Modrinth server
+        if: steps.config.outputs.configured == 'true'
+        env:
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+          SERVER_ID: ${{ vars.MODRINTH_SERVER_ID }}
+          PROJECT_ID: ${{ vars.MODRINTH_PROJECT_ID }}
+          VERSION_ID: ${{ steps.modrinth_version.outputs.id }}
+        run: bunx --bun github:brooswit-minecraft/rinth#206e4e4d9913c5c0013cf3109c237cd4bb84954e servers upstream "$SERVER_ID" --project "$PROJECT_ID" --version "$VERSION_ID" --restart --json

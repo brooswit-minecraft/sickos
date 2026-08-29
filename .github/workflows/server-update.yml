@@ -1,8 +1,9 @@
 name: Server update
 
-# Uploads the packwiz pack to a game server over FTP, then announces and
-# restarts it over RCON. Both halves skip independently (and the run still
-# succeeds) when their secrets are not configured — see reusable-server-update.yml.
+# After a release publishes a version to Modrinth, re-points a
+# Modrinth-hosted server's upstream at that version and restarts it. Skips
+# cleanly (and the run still succeeds) when MODRINTH_SERVER_ID /
+# MODRINTH_TOKEN are not configured — see reusable-server-update.yml.
 
 on:
   release:
