@@ -1,0 +1,194 @@
+# Dogfood harness for the `rinth` CLI against the LIVE Modrinth API.
+#
+# Serves epic SICKOS-1 / story SICKOS-2 ("Prove rinth runs against the live
+# DRAFT project from sickos CI"). This is the READ-ONLY half: four named
+# steps (whoami, project get, versions list, versions latest) run against
+# the real Modrinth API using this repo's MODRINTH_TOKEN secret, which only
+# exists here in Actions — it is never available locally. This workflow
+# performs NO writes (no publish/edit/submit/icon/delete); write paths are
+# separate stories (SICKOS-3, SICKOS-5).
+#
+# workflow_dispatch ONLY, always. This must never be wired into push,
+# pull_request, release, or schedule — it exists purely to be run by hand
+# while proving out the rinth integration, and is expected to be REMOVED or
+# folded into the real release path once SICKOS-1's write-path stories land.
+
+name: rinth dogfood (read-only)
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  # Pinned deliberately at v0.8.0, NOT the #v0.5.0 rinth's own README
+  # examples still use — v0.5.0 predates the commands this harness needs.
+  RINTH_REF: github:brooswit-minecraft/rinth#v0.8.0
+
+jobs:
+  dogfood:
+    name: Dogfood rinth reads
+    runs-on: ubuntu-latest
+    steps:
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Resolve project id
+        id: project
+        env:
+          PROJECT_ID_VAR: ${{ vars.MODRINTH_PROJECT_ID }}
+        run: |
+          project_id="${PROJECT_ID_VAR:-RuhnnPqO}"
+          echo "Resolved Modrinth project id: $project_id"
+          printf 'id=%s\n' "$project_id" >> "$GITHUB_OUTPUT"
+          {
+            echo "## rinth dogfood (read-only)"
+            echo ""
+            echo "Resolved project id: \`$project_id\` (from \`vars.MODRINTH_PROJECT_ID\`, falling back to the literal \`RuhnnPqO\`)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # --- rinth whoami --------------------------------------------------
+      # The single most important step: proves MODRINTH_TOKEN is valid and
+      # shows which identity we act as. If this fails, nothing else in the
+      # epic can work.
+      - name: rinth whoami
+        id: whoami
+        if: always()
+        env:
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+        run: |
+          set +e
+          bunx --bun "$RINTH_REF" whoami > >(tee whoami.stdout.log) 2> >(tee whoami.stderr.log >&2)
+          ec=$?
+          set -e
+          echo "exit_code=$ec" >> "$GITHUB_OUTPUT"
+          echo "rinth whoami exit code: $ec"
+          {
+            echo "### rinth whoami"
+            echo "- exit code: \`$ec\`"
+            echo '```'
+            echo "-- stdout --"; cat whoami.stdout.log
+            echo "-- stderr --"; cat whoami.stderr.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # --- rinth project get ----------------------------------------------
+      # THE HEADLINE PROOF: unauthenticated reads of this draft project 404.
+      # If rinth resolves it here, we've proven the authenticated draft
+      # lookup this epic exists to demonstrate.
+      - name: rinth project get
+        id: project_get
+        if: always()
+        env:
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+          PROJECT_ID: ${{ steps.project.outputs.id }}
+        run: |
+          set +e
+          bunx --bun "$RINTH_REF" project get "$PROJECT_ID" > >(tee project_get.stdout.log) 2> >(tee project_get.stderr.log >&2)
+          ec=$?
+          set -e
+          echo "exit_code=$ec" >> "$GITHUB_OUTPUT"
+          echo "rinth project get exit code: $ec"
+          {
+            echo "### rinth project get $PROJECT_ID"
+            echo "- exit code: \`$ec\`"
+            echo '```'
+            echo "-- stdout --"; cat project_get.stdout.log
+            echo "-- stderr --"; cat project_get.stderr.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # --- rinth versions list --------------------------------------------
+      - name: rinth versions list
+        id: versions_list
+        if: always()
+        env:
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+          PROJECT_ID: ${{ steps.project.outputs.id }}
+        run: |
+          set +e
+          bunx --bun "$RINTH_REF" versions list "$PROJECT_ID" > >(tee versions_list.stdout.log) 2> >(tee versions_list.stderr.log >&2)
+          ec=$?
+          set -e
+          echo "exit_code=$ec" >> "$GITHUB_OUTPUT"
+          echo "rinth versions list exit code: $ec"
+          {
+            echo "### rinth versions list $PROJECT_ID"
+            echo "- exit code: \`$ec\`"
+            echo '```'
+            echo "-- stdout --"; cat versions_list.stdout.log
+            echo "-- stderr --"; cat versions_list.stderr.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # --- rinth versions latest -------------------------------------------
+      # No --wait: this is a snapshot read, not a poll. Exit 7 here
+      # (NoVersionMatch) is a MEANINGFUL, expected-possible outcome on a
+      # draft project with no versions yet: it means the authenticated
+      # project read itself succeeded and there simply are no versions to
+      # return — a second, independent confirmation of the draft lookup,
+      # distinct from exit 4 (NotFound), which would mean the project
+      # itself could not be read at all. See rinth's src/errors.ts.
+      - name: rinth versions latest
+        id: versions_latest
+        if: always()
+        env:
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+          PROJECT_ID: ${{ steps.project.outputs.id }}
+        run: |
+          set +e
+          bunx --bun "$RINTH_REF" versions latest "$PROJECT_ID" > >(tee versions_latest.stdout.log) 2> >(tee versions_latest.stderr.log >&2)
+          ec=$?
+          set -e
+          echo "exit_code=$ec" >> "$GITHUB_OUTPUT"
+          echo "rinth versions latest exit code: $ec"
+          if [ "$ec" = "7" ]; then
+            echo "NOTE: exit 7 = NoVersionMatch — project read succeeded, there are simply no versions yet. Distinct from exit 4 (NotFound), which would mean the project itself was unreadable."
+          fi
+          {
+            echo "### rinth versions latest $PROJECT_ID"
+            echo "- exit code: \`$ec\`"
+            if [ "$ec" = "7" ]; then
+              echo "- note: exit 7 = NoVersionMatch — project read succeeded, there are simply no versions yet (distinct from exit 4 NotFound, which would mean the project itself was unreadable)"
+            fi
+            echo '```'
+            echo "-- stdout --"; cat versions_latest.stdout.log
+            echo "-- stderr --"; cat versions_latest.stderr.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # --- Summary ---------------------------------------------------------
+      # Each command step above always exits 0 itself (so one failure never
+      # hides the rest), but the job's overall conclusion must still reflect
+      # whether something failed — this step is that verdict.
+      - name: Summary
+        if: always()
+        env:
+          WHOAMI_EC: ${{ steps.whoami.outputs.exit_code }}
+          PROJECT_GET_EC: ${{ steps.project_get.outputs.exit_code }}
+          VERSIONS_LIST_EC: ${{ steps.versions_list.outputs.exit_code }}
+          VERSIONS_LATEST_EC: ${{ steps.versions_latest.outputs.exit_code }}
+        run: |
+          echo "whoami:          $WHOAMI_EC"
+          echo "project get:     $PROJECT_GET_EC"
+          echo "versions list:   $VERSIONS_LIST_EC"
+          echo "versions latest: $VERSIONS_LATEST_EC"
+          {
+            echo "## Result"
+            echo "| command | exit code |"
+            echo "|---|---|"
+            echo "| whoami | $WHOAMI_EC |"
+            echo "| project get | $PROJECT_GET_EC |"
+            echo "| versions list | $VERSIONS_LIST_EC |"
+            echo "| versions latest | $VERSIONS_LATEST_EC |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          fail=0
+          for ec in "$WHOAMI_EC" "$PROJECT_GET_EC" "$VERSIONS_LIST_EC" "$VERSIONS_LATEST_EC"; do
+            if [ "$ec" != "0" ]; then
+              fail=1
+            fi
+          done
+          if [ "$fail" = "1" ]; then
+            echo "::error::One or more rinth dogfood commands exited non-zero — see the job summary above for exact exit codes and stderr (exit 7 on 'versions latest' is expected-possible on a draft project with no versions yet, see that step's note)."
+            exit 1
+          fi
