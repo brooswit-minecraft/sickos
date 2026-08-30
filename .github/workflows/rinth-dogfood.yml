@@ -192,3 +192,273 @@ jobs:
             echo "::error::One or more rinth dogfood commands exited non-zero — see the job summary above for exact exit codes and stderr (exit 7 on 'versions latest' is expected-possible on a draft project with no versions yet, see that step's note)."
             exit 1
           fi
+
+  # --- servers (v0.9.0 wall probe) ----------------------------------------
+  # Serves story SICKOS-4 ("Attempt the server re-point through rinth and
+  # record the outcome, stopping at the wall if it stands"). Unlike the
+  # read-only job above, this job attempts the actual re-point through
+  # `rinth servers upstream` — it IS expected to fail, and recording
+  # precisely which wall it hits (and with what exit code / reason string)
+  # is the entire point. Pinned at v0.9.0 (NOT the read-only job's v0.8.0
+  # RINTH_REF above): v0.9.0 is the first tag whose diagnose layer tells
+  # the dead v0 reinstall route (404, wall A) apart from the per-server
+  # identity wall (403, wall B, KAN-713) instead of surfacing both as a
+  # bare "not found" / exit 4. See SICKOS-8 for the full evidence trail.
+  #
+  # No `--restart` on `servers upstream`, ever: the command fails long
+  # before the restart, so passing it risks the live server for nothing.
+  # No `servers power` / `servers exec` steps: out of scope and one of them
+  # mutates a live server.
+  servers-v090-wall-probe:
+    name: Dogfood rinth servers (v0.9.0 wall probe)
+    runs-on: ubuntu-latest
+    env:
+      # Pinned deliberately at v0.9.0 — the fix under test. Deliberately its
+      # own env var, distinct from the read-only job's RINTH_REF (v0.8.0),
+      # so both pins stay visible and neither job disturbs the other.
+      RINTH_REF_SERVERS: github:brooswit-minecraft/rinth#v0.9.0
+      SERVER_ID: ff783f0f-ec3c-4037-b39f-452ce590891d
+    steps:
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Resolve project id
+        id: project
+        env:
+          PROJECT_ID_VAR: ${{ vars.MODRINTH_PROJECT_ID }}
+        run: |
+          project_id="${PROJECT_ID_VAR:-RuhnnPqO}"
+          echo "Resolved Modrinth project id: $project_id"
+          printf 'id=%s\n' "$project_id" >> "$GITHUB_OUTPUT"
+          {
+            echo "## rinth dogfood: servers (v0.9.0 wall probe)"
+            echo ""
+            echo "Resolved project id: \`$project_id\` (from \`vars.MODRINTH_PROJECT_ID\`, falling back to the literal \`RuhnnPqO\`)"
+            echo "Server id under test: \`$SERVER_ID\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # --- rinth versions latest (resolve version id) ---------------------
+      # Feeds the version id into the `upstream` step below. Falls back to
+      # the literal aud76zIt (the id production used) if this fails or
+      # yields nothing, and says so loudly — a fallback here must never be
+      # silent.
+      - name: rinth versions latest
+        id: version
+        if: always()
+        env:
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+          PROJECT_ID: ${{ steps.project.outputs.id }}
+        run: |
+          set +e
+          bunx --bun "$RINTH_REF_SERVERS" versions latest "$PROJECT_ID" --json > >(tee versions_latest.stdout.log) 2> >(tee versions_latest.stderr.log >&2)
+          ec=$?
+          set -e
+          echo "exit_code=$ec" >> "$GITHUB_OUTPUT"
+          version_id=""
+          if [ "$ec" = "0" ]; then
+            version_id=$(jq -r '.id // .version_id // empty' versions_latest.stdout.log 2>/dev/null)
+          fi
+          fell_back=0
+          if [ -z "$version_id" ]; then
+            version_id="aud76zIt"
+            fell_back=1
+            echo "FALLBACK: 'versions latest' failed or yielded no id (exit $ec) — falling back to literal aud76zIt, the version id production used."
+          fi
+          printf 'id=%s\n' "$version_id" >> "$GITHUB_OUTPUT"
+          printf 'fell_back=%s\n' "$fell_back" >> "$GITHUB_OUTPUT"
+          echo "rinth versions latest exit code: $ec"
+          echo "Resolved version id: $version_id (fell back: $fell_back)"
+          {
+            echo "### rinth versions latest $PROJECT_ID (v0.9.0)"
+            echo "- exit code: \`$ec\`"
+            if [ "$fell_back" = "1" ]; then
+              echo "- **FELL BACK** to literal \`aud76zIt\` (the version id production used) because \`versions latest\` failed or returned no id."
+            else
+              echo "- resolved version id: \`$version_id\`"
+            fi
+            echo '```'
+            echo "-- stdout --"; cat versions_latest.stdout.log
+            echo "-- stderr --"; cat versions_latest.stderr.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # --- rinth servers list ----------------------------------------------
+      # Does the account see any servers at all with a PAT? Deliberately
+      # left undiagnosed by v0.9.0 (a PAT genuinely works for this route) —
+      # expected: SUCCESS, exit 0.
+      - name: rinth servers list
+        id: servers_list
+        if: always()
+        env:
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+        run: |
+          set +e
+          bunx --bun "$RINTH_REF_SERVERS" servers list --json > >(tee servers_list.stdout.log) 2> >(tee servers_list.stderr.log >&2)
+          ec=$?
+          set -e
+          echo "exit_code=$ec" >> "$GITHUB_OUTPUT"
+          echo "rinth servers list exit code: $ec"
+          {
+            echo "### rinth servers list (v0.9.0)"
+            echo "- exit code: \`$ec\`"
+            echo '```'
+            echo "-- stdout --"; cat servers_list.stdout.log
+            echo "-- stderr --"; cat servers_list.stderr.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # --- rinth servers get ------------------------------------------------
+      # The per-server read. Expected: HTTP 403, exit 3, reason
+      # servers_credential_refused — wall B, the identity wall from KAN-713.
+      - name: rinth servers get
+        id: servers_get
+        if: always()
+        env:
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+        run: |
+          set +e
+          bunx --bun "$RINTH_REF_SERVERS" servers get "$SERVER_ID" --json > >(tee servers_get.stdout.log) 2> >(tee servers_get.stderr.log >&2)
+          ec=$?
+          set -e
+          reason=$(jq -r '.error.reason // .reason // empty' servers_get.stdout.log 2>/dev/null)
+          if [ -z "$reason" ]; then
+            reason=$(jq -r '.error.reason // .reason // empty' servers_get.stderr.log 2>/dev/null)
+          fi
+          status=$(jq -r '.error.status // .status // empty' servers_get.stdout.log 2>/dev/null)
+          if [ -z "$status" ]; then
+            status=$(jq -r '.error.status // .status // empty' servers_get.stderr.log 2>/dev/null)
+          fi
+          echo "exit_code=$ec" >> "$GITHUB_OUTPUT"
+          printf 'reason=%s\n' "$reason" >> "$GITHUB_OUTPUT"
+          printf 'status=%s\n' "$status" >> "$GITHUB_OUTPUT"
+          echo "rinth servers get exit code: $ec, HTTP status: $status, reason: $reason"
+          {
+            echo "### rinth servers get $SERVER_ID (v0.9.0)"
+            echo "- exit code: \`$ec\`"
+            echo "- HTTP status: \`${status:-<none>}\`"
+            echo "- reason: \`${reason:-<none>}\`"
+            echo '```'
+            echo "-- stdout --"; cat servers_get.stdout.log
+            echo "-- stderr --"; cat servers_get.stderr.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # --- rinth servers upstream -------------------------------------------
+      # THE ACTUAL RE-POINT ATTEMPT. No --restart: the command fails long
+      # before the restart, so there is nothing to gain and a live server to
+      # lose. Expected: HTTP 404, exit 4, reason servers_upstream_route_dead
+      # — wall A, the dead v0 reinstall route.
+      - name: rinth servers upstream
+        id: servers_upstream
+        if: always()
+        env:
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+          PROJECT_ID: ${{ steps.project.outputs.id }}
+          VERSION_ID: ${{ steps.version.outputs.id }}
+        run: |
+          set +e
+          bunx --bun "$RINTH_REF_SERVERS" servers upstream "$SERVER_ID" --project "$PROJECT_ID" --version "$VERSION_ID" --json > >(tee servers_upstream.stdout.log) 2> >(tee servers_upstream.stderr.log >&2)
+          ec=$?
+          set -e
+          reason=$(jq -r '.error.reason // .reason // empty' servers_upstream.stdout.log 2>/dev/null)
+          if [ -z "$reason" ]; then
+            reason=$(jq -r '.error.reason // .reason // empty' servers_upstream.stderr.log 2>/dev/null)
+          fi
+          status=$(jq -r '.error.status // .status // empty' servers_upstream.stdout.log 2>/dev/null)
+          if [ -z "$status" ]; then
+            status=$(jq -r '.error.status // .status // empty' servers_upstream.stderr.log 2>/dev/null)
+          fi
+          echo "exit_code=$ec" >> "$GITHUB_OUTPUT"
+          printf 'reason=%s\n' "$reason" >> "$GITHUB_OUTPUT"
+          printf 'status=%s\n' "$status" >> "$GITHUB_OUTPUT"
+          echo "rinth servers upstream exit code: $ec, HTTP status: $status, reason: $reason"
+          {
+            echo "### rinth servers upstream $SERVER_ID --project $PROJECT_ID --version $VERSION_ID (v0.9.0)"
+            echo "- exit code: \`$ec\`"
+            echo "- HTTP status: \`${status:-<none>}\`"
+            echo "- reason: \`${reason:-<none>}\`"
+            echo '```'
+            echo "-- stdout --"; cat servers_upstream.stdout.log
+            echo "-- stderr --"; cat servers_upstream.stderr.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # --- Summary -----------------------------------------------------------
+      # Unlike the read-only job's Summary (fail on ANY non-zero exit), this
+      # job's verdict compares OBSERVED against EXPECTED per command and
+      # exits 0 when the expected walls are hit — the expected walls are the
+      # whole point and must not paint every run red forever. Anything else
+      # is a genuine surprise and fails the job loudly.
+      - name: Summary
+        if: always()
+        env:
+          VERSION_EC: ${{ steps.version.outputs.exit_code }}
+          VERSION_FELL_BACK: ${{ steps.version.outputs.fell_back }}
+          VERSION_ID: ${{ steps.version.outputs.id }}
+          LIST_EC: ${{ steps.servers_list.outputs.exit_code }}
+          GET_EC: ${{ steps.servers_get.outputs.exit_code }}
+          GET_REASON: ${{ steps.servers_get.outputs.reason }}
+          GET_STATUS: ${{ steps.servers_get.outputs.status }}
+          UPSTREAM_EC: ${{ steps.servers_upstream.outputs.exit_code }}
+          UPSTREAM_REASON: ${{ steps.servers_upstream.outputs.reason }}
+          UPSTREAM_STATUS: ${{ steps.servers_upstream.outputs.status }}
+        run: |
+          echo "versions latest:  exit=$VERSION_EC fell_back=$VERSION_FELL_BACK id=$VERSION_ID"
+          echo "servers list:     exit=$LIST_EC"
+          echo "servers get:      exit=$GET_EC status=$GET_STATUS reason=$GET_REASON"
+          echo "servers upstream: exit=$UPSTREAM_EC status=$UPSTREAM_STATUS reason=$UPSTREAM_REASON"
+
+          fail=0
+
+          if [ "$LIST_EC" = "0" ]; then
+            list_verdict="OK"
+          else
+            list_verdict="**SURPRISE**"
+            fail=1
+            echo "::error::servers list expected exit 0, got exit $LIST_EC"
+          fi
+
+          if [ "$GET_EC" = "3" ] && [ "$GET_REASON" = "servers_credential_refused" ]; then
+            get_verdict="OK (wall B)"
+          else
+            get_verdict="**SURPRISE**"
+            fail=1
+            echo "::error::servers get expected exit 3 reason servers_credential_refused, got exit $GET_EC reason '$GET_REASON'"
+          fi
+
+          if [ "$UPSTREAM_EC" = "4" ] && [ "$UPSTREAM_REASON" = "servers_upstream_route_dead" ]; then
+            upstream_verdict="OK (wall A)"
+          elif [ "$UPSTREAM_EC" = "0" ]; then
+            upstream_verdict="**SURPRISE: SUCCEEDED**"
+            fail=1
+            echo "::error::servers upstream SUCCEEDED (exit 0) — a significant and welcome surprise that contradicts rinth's README known-gaps and RINTH-1's stated evidence."
+          else
+            upstream_verdict="**SURPRISE**"
+            fail=1
+            echo "::error::servers upstream expected exit 4 reason servers_upstream_route_dead, got exit $UPSTREAM_EC reason '$UPSTREAM_REASON'"
+          fi
+
+          if [ -n "$GET_REASON" ] && [ "$GET_REASON" = "$UPSTREAM_REASON" ]; then
+            fail=1
+            echo "::error::servers get and servers upstream returned the SAME reason ('$GET_REASON') — the v0.9.0 diagnosis is blanket, not discriminating between the two walls."
+          fi
+
+          if grep -q "426" servers_list.stdout.log servers_list.stderr.log servers_get.stdout.log servers_get.stderr.log servers_upstream.stdout.log servers_upstream.stderr.log 2>/dev/null; then
+            fail=1
+            echo "::error::HTTP 426 observed somewhere in the logs — the X-Panel-Version header the Servers API requires may not be getting set. This is a HIGH-VALUE rinth bug."
+          fi
+
+          {
+            echo "## Result: servers (v0.9.0 wall probe)"
+            echo ""
+            echo "| command | expected | observed | verdict |"
+            echo "|---|---|---|---|"
+            echo "| versions latest | exit 0 with an id, else literal fallback | exit \`$VERSION_EC\`, id \`$VERSION_ID\`, fell back: \`$VERSION_FELL_BACK\` | (informational) |"
+            echo "| servers list | exit 0 | exit \`$LIST_EC\` | $list_verdict |"
+            echo "| servers get | exit 3, HTTP 403, reason \`servers_credential_refused\` (wall B) | exit \`$GET_EC\`, HTTP \`$GET_STATUS\`, reason \`$GET_REASON\` | $get_verdict |"
+            echo "| servers upstream | exit 4, HTTP 404, reason \`servers_upstream_route_dead\` (wall A) | exit \`$UPSTREAM_EC\`, HTTP \`$UPSTREAM_STATUS\`, reason \`$UPSTREAM_REASON\` | $upstream_verdict |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$fail" = "1" ]; then
+            echo "::error::One or more servers (v0.9.0) results differed from expected — see the job summary table above."
+            exit 1
+          fi
