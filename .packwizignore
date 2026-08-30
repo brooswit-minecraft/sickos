@@ -5,6 +5,7 @@ Makefile
 .gitignore
 .packwizignore
 .github/
+docs/
 scripts/
 build/
 *.mrpack
