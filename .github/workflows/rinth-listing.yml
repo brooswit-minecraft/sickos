@@ -1,0 +1,131 @@
+# Read-only harness for the sickos Modrinth listing text.
+#
+# Serves epic SICKOS-1 / story SICKOS-5 ("Update the sickos Modrinth listing
+# text through rinth project edit"). This is PHASE 1, the READ-ONLY half:
+# it reads the live project via `rinth --json project get` so the current
+# `description` and `body` can be reviewed and a reasoned "edit warranted?"
+# judgment made. It performs NO writes. An edit step is Phase 2, added only
+# after explicit sign-off recorded on SICKOS-9.
+#
+# workflow_dispatch ONLY, always — this is a hand-run investigation step,
+# not part of the release path.
+
+name: rinth listing (read-only)
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  # Pinned by hand, NOT copied from rinth's README (that has bitten this
+  # fleet before). v0.9.1 is the current rinth tag.
+  RINTH_REF: github:brooswit-minecraft/rinth#v0.9.1
+
+jobs:
+  read-listing:
+    name: Read rinth project listing (description + body)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Resolve project id
+        id: project
+        env:
+          PROJECT_ID_VAR: ${{ vars.MODRINTH_PROJECT_ID }}
+        run: |
+          project_id="${PROJECT_ID_VAR:-RuhnnPqO}"
+          echo "Resolved Modrinth project id: $project_id"
+          printf 'id=%s\n' "$project_id" >> "$GITHUB_OUTPUT"
+          {
+            echo "## rinth listing (read-only)"
+            echo ""
+            echo "Resolved project id: \`$project_id\` (from \`vars.MODRINTH_PROJECT_ID\`, falling back to the literal \`RuhnnPqO\`)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # --- rinth --json project get ---------------------------------------
+      # The human output of `project get` does not print `description` or
+      # `body` at all (see formatProject in rinth's src/commands/project.ts)
+      # — `--json` is required to see them. `--json` is a global flag parsed
+      # anywhere in argv, so it is passed before the subcommand here.
+      - name: rinth project get (json)
+        id: project_get
+        if: always()
+        env:
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+          PROJECT_ID: ${{ steps.project.outputs.id }}
+        run: |
+          set +e
+          bunx --bun "$RINTH_REF" --json project get "$PROJECT_ID" > >(tee project_get.stdout.log) 2> >(tee project_get.stderr.log >&2)
+          ec=$?
+          set -e
+          echo "exit_code=$ec" >> "$GITHUB_OUTPUT"
+          echo "rinth --json project get exit code: $ec"
+
+          pretty=""
+          if [ "$ec" = "0" ] && jq -e . project_get.stdout.log > project_get.pretty.json 2>/dev/null; then
+            pretty=1
+          fi
+
+          {
+            echo "### rinth --json project get $PROJECT_ID"
+            echo "- exit code: \`$ec\`"
+            echo ""
+            if [ "$pretty" = "1" ]; then
+              echo "Full JSON (pretty-printed):"
+              echo '```json'
+              cat project_get.pretty.json
+              echo '```'
+              echo ""
+              echo "\`description\`:"
+              echo '```'
+              jq -r '.description // "<absent>"' project_get.pretty.json
+              echo '```'
+              echo ""
+              echo "\`body\`:"
+              echo '```'
+              jq -r '.body // "<absent>"' project_get.pretty.json
+              echo '```'
+            else
+              echo "-- stdout --"
+              echo '```'
+              cat project_get.stdout.log
+              echo '```'
+            fi
+            echo ""
+            echo "-- stderr --"
+            echo '```'
+            cat project_get.stderr.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Raw JSON as an artifact too, in case $GITHUB_STEP_SUMMARY truncates
+      # a long body.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rinth-project-get-json
+          path: |
+            project_get.stdout.log
+            project_get.stderr.log
+            project_get.pretty.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Summary
+        if: always()
+        env:
+          PROJECT_GET_EC: ${{ steps.project_get.outputs.exit_code }}
+        run: |
+          echo "project get: $PROJECT_GET_EC"
+          {
+            echo "## Result"
+            echo "| command | exit code |"
+            echo "|---|---|"
+            echo "| project get (json) | $PROJECT_GET_EC |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$PROJECT_GET_EC" != "0" ]; then
+            echo "::error::rinth --json project get exited non-zero ($PROJECT_GET_EC) — see the job summary above for stderr."
+            exit 1
+          fi
