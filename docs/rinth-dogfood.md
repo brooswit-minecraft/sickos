@@ -90,6 +90,18 @@ flags — not a comma-joined string.
    comma-joined string like `neoforge,1.21.1` or `fabric,forge`. The predicted failure
    mode (SCHEM-6's stated worry) did not occur.
 
+   **But read that precisely: it did not occur, and it was also not tested.** sickos
+   declares exactly one loader and one game version, so this release cannot distinguish
+   a correct array build from a comma-joining one — both produce byte-identical argv.
+   The old code was `paste -sd,`, which on single-line input emits `neoforge`, giving
+   `--loader neoforge`; the array build gives `--loader neoforge`. They only diverge at
+   two or more values, where `paste -sd,` gives the single bogus flag `--loader
+   fabric,neoforge` while the array gives `--loader fabric --loader neoforge`. The
+   fix is verified **structurally** — the invocation
+   genuinely builds a bash array — and confirmed to round-trip correctly for the
+   single-value case, but it is **not exercised**. A pack declaring two or more loaders
+   would be required to actually exercise it.
+
    As a secondary, non-required data point, the same run's `rinth-dogfood.yml` "servers"
    job (rinth **v0.9.0**, `versions latest --json`) resolved the correct version
    (`Qt4z9dHa`, `fell_back=0`) on the first call — consistent with RINTH-1's note that
