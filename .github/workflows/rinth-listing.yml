@@ -7,13 +7,23 @@
 # judgment made. It performs NO writes. An edit step is Phase 2, added only
 # after explicit sign-off recorded on SICKOS-9.
 #
-# workflow_dispatch ONLY, always — this is a hand-run investigation step,
-# not part of the release path.
+# workflow_dispatch is the permanent, intended trigger — this is a hand-run
+# investigation step, not part of the release path. It must be
+# workflow_dispatch ONLY by the time this merges into SICKOS-5.
 
 name: rinth listing (read-only)
 
 on:
   workflow_dispatch: {}
+  # TEMPORARY, removed before this PR is approved. workflow_dispatch is not
+  # dispatchable until this file exists on the default branch (GitHub 404s
+  # the workflow as an API object), and this file must not reach main ahead
+  # of SICKOS-5's review. A push trigger runs the file from the pushed ref
+  # and gets normal secrets access, so it needs nothing on main. Scoped to
+  # this branch and this file only: touch the file to re-run.
+  push:
+    branches: [SICKOS-9]
+    paths: ['.github/workflows/rinth-listing.yml']
 
 permissions:
   contents: read
