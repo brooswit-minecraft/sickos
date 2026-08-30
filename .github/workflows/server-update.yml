@@ -4,10 +4,30 @@ name: Server update
 # Modrinth-hosted server's upstream at that version and restarts it. Skips
 # cleanly (and the run still succeeds) when MODRINTH_SERVER_ID /
 # MODRINTH_TOKEN are not configured — see reusable-server-update.yml.
-
+#
+# Chained on the "Release" workflow's completion (workflow_run) rather than
+# on `release: published` directly, so this only starts once release.yml has
+# actually finished publishing to Modrinth — no race with reusable-release.yml.
+# `workflows: ["Release"]` matches release.yml's `name: Release` (its display
+# name), NOT its filename — renaming that `name:` field would silently break
+# this chain. NOTE: a workflow_run trigger only arms once this file is on the
+# repo's default branch; it will not fire from a PR branch (see README) — an
+# existing consumer's stub can keep the older `release: published` trigger
+# indefinitely instead (see the migration note in README), it is not required
+# to switch.
+#
+# This still needs a guard beyond "the Release run succeeded": release.yml
+# also runs on workflow_dispatch for dry runs that deliberately create no
+# GitHub Release (see README), and those must NOT trigger a server update.
+# The `if:` below requires BOTH a successful conclusion AND that the Release
+# run's own trigger was `release`, which excludes dry runs. It also has to
+# admit this workflow's OWN workflow_dispatch (the manual re-point path) —
+# `github.event.workflow_run.*` is unset there, so the guard is an explicit
+# OR rather than a single combined condition.
 on:
-  release:
-    types: [published]
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       version:
@@ -20,6 +40,9 @@ permissions:
 
 jobs:
   server-update:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'release')
     uses: brooswit-minecraft/schematic/.github/workflows/reusable-server-update.yml@v1
     with:
       version: ${{ inputs.version }}
