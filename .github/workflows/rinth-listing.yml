@@ -1,14 +1,19 @@
 # Read-only harness for the sickos Modrinth listing text.
 #
-# Serves epic SICKOS-1 / story SICKOS-5 ("Update the sickos Modrinth listing
-# text through rinth project edit"). This is PHASE 1, the READ-ONLY half:
-# it reads the live project via `rinth --json project get` so the current
-# `description` and `body` can be reviewed and a reasoned "edit warranted?"
-# judgment made. It performs NO writes. An edit step is Phase 2, added only
-# after explicit sign-off recorded on SICKOS-9.
+# Serves epic SICKOS-1 / story SICKOS-5. `rinth project get`'s human output
+# does not print `description` or `body` at all (see formatProject in
+# rinth's src/commands/project.ts), so `--json` is the only way to read the
+# two fields a listing operator cares about. That is what this workflow
+# exists to do.
 #
-# workflow_dispatch ONLY, always — this is a hand-run investigation step,
-# not part of the release path.
+# It performs NO writes and is not part of the release path.
+# workflow_dispatch ONLY, always: never wire it into push, pull_request,
+# release or schedule, matching rinth-dogfood.yml's rule for a workflow
+# that talks to the live Modrinth API.
+#
+# SICKOS-5 concluded NO CHANGE was needed: the listing text was already
+# accurate against mods/ on main. This harness remains as the way to read
+# the listing next time the question comes up.
 
 name: rinth listing (read-only)
 
