@@ -319,16 +319,22 @@ jobs:
           bunx --bun "$RINTH_REF_SERVERS" servers get "$SERVER_ID" --json > >(tee servers_get.stdout.log) 2> >(tee servers_get.stderr.log >&2)
           ec=$?
           set -e
-          reason=$(jq -r '.reason // empty' servers_get.stdout.log 2>/dev/null)
+          reason=$(jq -r '.error.reason // .reason // empty' servers_get.stdout.log 2>/dev/null)
           if [ -z "$reason" ]; then
-            reason=$(jq -r '.reason // empty' servers_get.stderr.log 2>/dev/null)
+            reason=$(jq -r '.error.reason // .reason // empty' servers_get.stderr.log 2>/dev/null)
+          fi
+          status=$(jq -r '.error.status // .status // empty' servers_get.stdout.log 2>/dev/null)
+          if [ -z "$status" ]; then
+            status=$(jq -r '.error.status // .status // empty' servers_get.stderr.log 2>/dev/null)
           fi
           echo "exit_code=$ec" >> "$GITHUB_OUTPUT"
           printf 'reason=%s\n' "$reason" >> "$GITHUB_OUTPUT"
-          echo "rinth servers get exit code: $ec, reason: $reason"
+          printf 'status=%s\n' "$status" >> "$GITHUB_OUTPUT"
+          echo "rinth servers get exit code: $ec, HTTP status: $status, reason: $reason"
           {
             echo "### rinth servers get $SERVER_ID (v0.9.0)"
             echo "- exit code: \`$ec\`"
+            echo "- HTTP status: \`${status:-<none>}\`"
             echo "- reason: \`${reason:-<none>}\`"
             echo '```'
             echo "-- stdout --"; cat servers_get.stdout.log
@@ -353,16 +359,22 @@ jobs:
           bunx --bun "$RINTH_REF_SERVERS" servers upstream "$SERVER_ID" --project "$PROJECT_ID" --version "$VERSION_ID" --json > >(tee servers_upstream.stdout.log) 2> >(tee servers_upstream.stderr.log >&2)
           ec=$?
           set -e
-          reason=$(jq -r '.reason // empty' servers_upstream.stdout.log 2>/dev/null)
+          reason=$(jq -r '.error.reason // .reason // empty' servers_upstream.stdout.log 2>/dev/null)
           if [ -z "$reason" ]; then
-            reason=$(jq -r '.reason // empty' servers_upstream.stderr.log 2>/dev/null)
+            reason=$(jq -r '.error.reason // .reason // empty' servers_upstream.stderr.log 2>/dev/null)
+          fi
+          status=$(jq -r '.error.status // .status // empty' servers_upstream.stdout.log 2>/dev/null)
+          if [ -z "$status" ]; then
+            status=$(jq -r '.error.status // .status // empty' servers_upstream.stderr.log 2>/dev/null)
           fi
           echo "exit_code=$ec" >> "$GITHUB_OUTPUT"
           printf 'reason=%s\n' "$reason" >> "$GITHUB_OUTPUT"
-          echo "rinth servers upstream exit code: $ec, reason: $reason"
+          printf 'status=%s\n' "$status" >> "$GITHUB_OUTPUT"
+          echo "rinth servers upstream exit code: $ec, HTTP status: $status, reason: $reason"
           {
             echo "### rinth servers upstream $SERVER_ID --project $PROJECT_ID --version $VERSION_ID (v0.9.0)"
             echo "- exit code: \`$ec\`"
+            echo "- HTTP status: \`${status:-<none>}\`"
             echo "- reason: \`${reason:-<none>}\`"
             echo '```'
             echo "-- stdout --"; cat servers_upstream.stdout.log
@@ -385,13 +397,15 @@ jobs:
           LIST_EC: ${{ steps.servers_list.outputs.exit_code }}
           GET_EC: ${{ steps.servers_get.outputs.exit_code }}
           GET_REASON: ${{ steps.servers_get.outputs.reason }}
+          GET_STATUS: ${{ steps.servers_get.outputs.status }}
           UPSTREAM_EC: ${{ steps.servers_upstream.outputs.exit_code }}
           UPSTREAM_REASON: ${{ steps.servers_upstream.outputs.reason }}
+          UPSTREAM_STATUS: ${{ steps.servers_upstream.outputs.status }}
         run: |
           echo "versions latest:  exit=$VERSION_EC fell_back=$VERSION_FELL_BACK id=$VERSION_ID"
           echo "servers list:     exit=$LIST_EC"
-          echo "servers get:      exit=$GET_EC reason=$GET_REASON"
-          echo "servers upstream: exit=$UPSTREAM_EC reason=$UPSTREAM_REASON"
+          echo "servers get:      exit=$GET_EC status=$GET_STATUS reason=$GET_REASON"
+          echo "servers upstream: exit=$UPSTREAM_EC status=$UPSTREAM_STATUS reason=$UPSTREAM_REASON"
 
           fail=0
 
@@ -440,8 +454,8 @@ jobs:
             echo "|---|---|---|---|"
             echo "| versions latest | exit 0 with an id, else literal fallback | exit \`$VERSION_EC\`, id \`$VERSION_ID\`, fell back: \`$VERSION_FELL_BACK\` | (informational) |"
             echo "| servers list | exit 0 | exit \`$LIST_EC\` | $list_verdict |"
-            echo "| servers get | exit 3, reason \`servers_credential_refused\` (wall B) | exit \`$GET_EC\`, reason \`$GET_REASON\` | $get_verdict |"
-            echo "| servers upstream | exit 4, reason \`servers_upstream_route_dead\` (wall A) | exit \`$UPSTREAM_EC\`, reason \`$UPSTREAM_REASON\` | $upstream_verdict |"
+            echo "| servers get | exit 3, HTTP 403, reason \`servers_credential_refused\` (wall B) | exit \`$GET_EC\`, HTTP \`$GET_STATUS\`, reason \`$GET_REASON\` | $get_verdict |"
+            echo "| servers upstream | exit 4, HTTP 404, reason \`servers_upstream_route_dead\` (wall A) | exit \`$UPSTREAM_EC\`, HTTP \`$UPSTREAM_STATUS\`, reason \`$UPSTREAM_REASON\` | $upstream_verdict |"
           } >> "$GITHUB_STEP_SUMMARY"
 
           if [ "$fail" = "1" ]; then
