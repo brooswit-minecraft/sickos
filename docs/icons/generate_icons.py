@@ -73,6 +73,13 @@ def candidate_a():
 # A bold "S" built as geometry, not text: the path is a sampled sine wave
 # (so it curves like an S) stroked with a very thick rounded line. No font
 # is used or needed.
+#
+# The spine: top terminal flares right, curves through a left bulge in the
+# upper third, crosses centre at mid-height, curves through a right bulge
+# in the lower third, and the bottom terminal flares left. That is the
+# actual shape of an S (top bowl bulges left, bottom bowl bulges right) —
+# a plain `sin(2*pi*t)` bulges the opposite way (right on top, left on
+# bottom) and pinches both terminals to dead centre, which reads as a Z.
 # ---------------------------------------------------------------------------
 
 def candidate_b():
@@ -85,13 +92,14 @@ def candidate_b():
     cx = SIZE // 2
     top, bottom = 96, 416
     amplitude = 108
+    flare = 46
     width = 122
     r = width // 2
     steps = 400
     for i in range(steps + 1):
         t = i / steps
         y = top + t * (bottom - top)
-        x = cx + amplitude * math.sin(2 * math.pi * t)
+        x = cx - amplitude * math.sin(2 * math.pi * t) + flare * math.cos(math.pi * t)
         d.ellipse([x - r, y - r, x + r, y + r], fill=stroke)
 
     return save(img, "candidate_b_monogram.png")
