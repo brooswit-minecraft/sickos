@@ -181,23 +181,68 @@ silently drifting.
    Identical to the gate check at the top of this page. `icon_url` is still
    `null`.
 
-## Proof (a) — outstanding, blocked on SICKOS-12
+7. **Proof (a): dry run against a real candidate icon** — SICKOS-12 merged
+   (PR #19) and its candidate icons landed on `main`, which is what
+   unblocked this proof; the workflow itself needed no changes. Dispatched
+   with `icon_file=docs/icons/candidate_a_rotation.png`, `mode=dry-run`
+   (the default).
 
-Proof (a) (a green dry run against the real candidate icon file, showing
-the current `icon_url` and exactly what the real run would send) needs a
-real icon file. That belongs to sibling story SICKOS-12, and as of this
-writing SICKOS-12's remote branch is still byte-identical to `main`
-(`a78c28c`) — no icon file exists on it. SICKOS-15 (a task that adds three
-candidate icon PNGs, `docs/icons/candidate_{a,b,c}_*.png`) has an open PR
-(#17) into SICKOS-12, not yet merged, and even once merged those are
-candidates for a human to choose between, not a chosen icon.
+   Run: https://github.com/brooswit-minecraft/sickos/actions/runs/33660475677
+   (success). Event: `workflow_dispatch`, on `main`.
 
-This is the honest "outstanding, blocked" case the ticket names explicitly
-rather than a failure to invent a workaround for: this task does not choose
-or fabricate an icon to unblock itself. Once SICKOS-12 lands a chosen icon
-file, dispatching `rinth-icon.yml` with `icon_file=<that path>` and
-`mode=dry-run` (default) is the remaining step to close proof (a) — no code
-change needed.
+   ```
+   Resolved Modrinth project id: RuhnnPqO
+   Requested mode input: 'dry-run' -> resolved mode: dry-run
+   Requested icon_file input: 'docs/icons/candidate_a_rotation.png'
+   Live (from rinth@v0.9.1):  png,jpg,jpeg,bmp,gif,webp,svg,svgz,rgb
+   Hardcoded (this file):   png,jpg,jpeg,bmp,gif,webp,svg,svgz,rgb
+   rinth --json project get exit code: 0
+   Dry run: would PATCH /project/RuhnnPqO/icon?ext=png, Content-Type image/png, body docs/icons/candidate_a_rotation.png (3049 bytes). icon_url before: null. No write performed.
+   ```
+
+   The "Real upload" step shows `skipped` in the job's step list. See
+   "Proof (a) — run and passed" below for the failure conditions stated
+   before this run, and for why dispatching against candidate A is not a
+   choice of icon.
+
+## Proof (a) — run and passed
+
+SICKOS-12 merged (PR #19, merge commit `c82cde2`) and its candidate icon
+files (`docs/icons/candidate_{a,b,c}_*.png`) landed on `main`. That is what
+unblocked this proof — the workflow itself needed no code change, only a
+real file to point it at.
+
+Dispatched `rinth-icon.yml` on `main` with
+`icon_file=docs/icons/candidate_a_rotation.png`, `mode=dry-run` (the
+default).
+
+Run: https://github.com/brooswit-minecraft/sickos/actions/runs/33660475677
+(success). Event: `workflow_dispatch`, on `main`.
+
+```
+Resolved Modrinth project id: RuhnnPqO
+Requested mode input: 'dry-run' -> resolved mode: dry-run
+Requested icon_file input: 'docs/icons/candidate_a_rotation.png'
+Live (from rinth@v0.9.1):  png,jpg,jpeg,bmp,gif,webp,svg,svgz,rgb
+Hardcoded (this file):   png,jpg,jpeg,bmp,gif,webp,svg,svgz,rgb
+rinth --json project get exit code: 0
+Dry run: would PATCH /project/RuhnnPqO/icon?ext=png, Content-Type image/png, body docs/icons/candidate_a_rotation.png (3049 bytes). icon_url before: null. No write performed.
+```
+
+The "Real upload" step shows `skipped` in the job's step list. No write was
+performed and `icon_url` is still `null`.
+
+The failure conditions were stated before the run: it would have failed if
+the run exited non-zero, if it printed an `icon_url` disagreeing with a
+direct read, if the file it named was not the one passed, or if the
+extension-drift check tripped. None occurred. The 3049 byte count also
+matches git's own record for that blob, which is what confirms the file it
+named is the file that was passed.
+
+**Dispatching against candidate A is not a choice of icon.** This proof is
+about the machinery working against a real file. Choosing the icon belongs
+to a human, and the real upload belongs to a separate, shelved sibling
+story.
 
 ## Findings
 
@@ -208,9 +253,12 @@ change needed.
   exactly.** The bad-extension case additionally proves the accepted-types
   list the workflow shows matches what `rinth project icon` itself would
   say, at the pinned ref.
-- **The live listing is unchanged.** `icon_url` is `null` both before and
-  after this task's work, confirmed by two independent authenticated reads.
-- **Proof (a) is honestly outstanding**, not skipped or faked. See above.
+- **The live listing is unchanged.** `icon_url` is `null`, confirmed by
+  independent authenticated reads both before and after this task's work
+  and again after proof (a)'s dry run.
+- **Proof (a) has been run and has passed**, against real candidate icon
+  `docs/icons/candidate_a_rotation.png`, once SICKOS-12 landed that file on
+  `main`. See above.
 
 ## After (pending)
 
