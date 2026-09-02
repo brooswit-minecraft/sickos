@@ -1,0 +1,425 @@
+# Upload harness for the sickos Modrinth project icon.
+#
+# Serves epic SICKOS-10 / story SICKOS-13 ("Give the sickos Modrinth listing
+# an icon"). This is the MACHINERY: it performs the icon upload through
+# `rinth project icon`, but the epic forbids uploading an icon nobody has
+# chosen, so a default run of this workflow — including a run with NO
+# inputs at all — must not be able to touch the live listing. See the
+# `mode` input below and the "Resolve mode" step, which is what actually
+# enforces that for every trigger, not just workflow_dispatch's own input
+# defaults.
+#
+# workflow_dispatch ONLY in its final, merged state — never push,
+# pull_request, release or schedule for anything that touches the live
+# Modrinth API. This is a standing rule in this repo (see rinth-listing.yml
+# and rinth-dogfood.yml). A workflow_dispatch workflow is not dispatchable
+# until it exists on the default branch, so while this file lived only on a
+# feature branch it temporarily carried a push trigger scoped to that
+# branch and this file's path alone, to produce real run evidence before
+# review — removed again in its own commit before merge, following the
+# precedent in rinth-listing.yml's own git history (see SICKOS-16's PR body
+# for the run URLs this produced).
+#
+# rinth's `project icon` has no --dry-run flag (that only exists on
+# `publish`), and there is no way to invoke it without it performing the
+# PATCH. So the dry run below never calls `rinth project icon` at all — it
+# does the equivalent read/validate work itself and stops short of the
+# write.
+
+name: rinth icon
+
+on:
+  workflow_dispatch:
+    inputs:
+      icon_file:
+        description: 'Path to the icon file, repo-relative (e.g. assets/icon.png). Left empty, the run fails cleanly in dry-run mode rather than doing nothing silently.'
+        required: false
+        default: ''
+      mode:
+        description: 'dry-run (default, no writes) or upload (real PATCH to the live Modrinth listing). Must be deliberately changed to "upload" — anything else, including no input at all, is treated as dry-run.'
+        required: false
+        default: dry-run
+        type: choice
+        options:
+          - dry-run
+          - upload
+
+permissions:
+  contents: read
+
+env:
+  # Pinned by hand, NOT copied from rinth's README (that has bitten this
+  # fleet before — see rinth-listing.yml's own comment). v0.9.1 is the
+  # current rinth tag as of 2026-09-02; re-verify before bumping this.
+  RINTH_REF: github:brooswit-minecraft/rinth#v0.9.1
+
+jobs:
+  icon:
+    name: rinth project icon (dry-run by default)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Resolve project id
+        id: project
+        env:
+          PROJECT_ID_VAR: ${{ vars.MODRINTH_PROJECT_ID }}
+        run: |
+          project_id="${PROJECT_ID_VAR:-RuhnnPqO}"
+          echo "Resolved Modrinth project id: $project_id"
+          printf 'id=%s\n' "$project_id" >> "$GITHUB_OUTPUT"
+          {
+            echo "## rinth icon"
+            echo ""
+            echo "Resolved project id: \`$project_id\` (from \`vars.MODRINTH_PROJECT_ID\`, falling back to the literal \`RuhnnPqO\`)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Resolve mode
+        id: mode
+        env:
+          # Routed through env: rather than interpolated directly into the
+          # script, matching rinth-listing.yml's own convention for
+          # vars.MODRINTH_PROJECT_ID — GitHub expands ${{ }} into the
+          # script text before the shell ever sees it, so an inline
+          # interpolation of an operator-supplied value is a shell
+          # injection vector. `mode` is a `type: choice` input so this is
+          # lower risk than icon_file below, but the shape is the same.
+          RAW_MODE: ${{ github.event.inputs.mode }}
+        run: |
+          # workflow_dispatch's own `default: dry-run` covers a manual
+          # dispatch with the field left blank, but NOT the temporary push
+          # trigger this file carried on its feature branch (see header) —
+          # a push event has no `inputs` at all, so
+          # `github.event.inputs.mode` reads empty there, not the
+          # dispatch-declared default. This step is what actually makes
+          # "no inputs supplied => dry run" true for EVERY trigger, not
+          # just workflow_dispatch: only the literal string `upload`
+          # selects a write; anything else, including empty, is dry-run.
+          raw_mode="$RAW_MODE"
+          if [ "$raw_mode" = "upload" ]; then
+            mode="upload"
+          else
+            mode="dry-run"
+          fi
+          echo "Requested mode input: '${raw_mode:-<empty>}' -> resolved mode: $mode"
+          printf 'mode=%s\n' "$mode" >> "$GITHUB_OUTPUT"
+          {
+            echo ""
+            echo "Requested mode input: \`${raw_mode:-<empty>}\`"
+            echo "Resolved mode: **$mode**"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Resolve icon file input
+        id: file
+        env:
+          # See the Resolve mode step's env: comment — operator-supplied
+          # dispatch input, routed through env: rather than interpolated
+          # inline, to keep an icon_file value like `x"; <cmd>; :"` from
+          # being expanded into the script text before the shell runs it.
+          ICON_FILE_INPUT: ${{ github.event.inputs.icon_file }}
+        run: |
+          icon_file="$ICON_FILE_INPUT"
+          echo "Requested icon_file input: '${icon_file:-<empty>}'"
+          printf 'path=%s\n' "$icon_file" >> "$GITHUB_OUTPUT"
+          {
+            echo "Requested icon file: \`${icon_file:-<empty>}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # --- Accepted extension list, verified live against rinth's own source ---
+      #
+      # Source of truth: rinth's src/client/index.ts, the ICON_CONTENT_TYPES
+      # constant, read by hand at RINTH_REF's tag on 2026-09-02. Hardcoded
+      # below in the SAME KEY ORDER as that object literal, because rinth's
+      # own usage error joins Object.keys(ICON_CONTENT_TYPES) in insertion
+      # order — this dry run's error text is meant to match that exactly,
+      # not an alphabetized version of it. This step re-fetches
+      # RINTH_REF's own tag from GitHub and re-checks the hardcoded copy
+      # against it on every run, so a rinth bump that changes the list
+      # fails this workflow loudly instead of silently drifting.
+      #
+      # This mirrors rinth's CLIENT-SIDE check, which is WIDER than what
+      # Modrinth's live server actually accepts today: svg/svgz/rgb pass
+      # rinth's own gate but are rejected server-side (see rinth's README,
+      # "Reconciled against the server source" note under `project icon`).
+      # Mirroring ICON_CONTENT_TYPES exactly is correct for what THIS dry
+      # run's job actually is: predicting what `rinth project icon` will
+      # do, not what Modrinth will ultimately accept. A file with one of
+      # those three extensions will pass this dry run and pass rinth's own
+      # gate, then be rejected by Modrinth at upload time — a known,
+      # documented mismatch inside rinth itself, not something this
+      # workflow can or should paper over.
+      - name: Resolve accepted icon extensions (verified against rinth's own source)
+        id: ext_list
+        run: |
+          set -euo pipefail
+          tag="${RINTH_REF##*#}"
+          src_url="https://raw.githubusercontent.com/brooswit-minecraft/rinth/${tag}/src/client/index.ts"
+          echo "Fetching ICON_CONTENT_TYPES from $src_url"
+          curl -fsSL "$src_url" -o rinth_client_index.ts
+
+          expected_list="png,jpg,jpeg,bmp,gif,webp,svg,svgz,rgb"
+
+          live_list=$(awk '
+            /^export const ICON_CONTENT_TYPES/ { flag=1; next }
+            flag && /^};/ { flag=0; next }
+            flag { print }
+          ' rinth_client_index.ts | grep -oE '^[[:space:]]*[A-Za-z0-9]+:' | tr -d ' :' | paste -sd, -)
+
+          echo "Live (from rinth@$tag):  $live_list"
+          echo "Hardcoded (this file):   $expected_list"
+
+          {
+            echo ""
+            echo "### Accepted icon extensions"
+            echo "- Live, fetched from \`rinth@$tag\`'s \`src/client/index.ts\`: \`$live_list\`"
+            echo "- Hardcoded in this workflow: \`$expected_list\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$live_list" != "$expected_list" ]; then
+            echo "::error::Accepted icon extension list has drifted from rinth@$tag's ICON_CONTENT_TYPES. Live: [$live_list] Hardcoded: [$expected_list]. Update this workflow's hardcoded list to match."
+            echo "drifted=1" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+          printf 'list=%s\n' "$expected_list" >> "$GITHUB_OUTPUT"
+          printf 'display=%s\n' "$(echo "$expected_list" | sed 's/,/, /g')" >> "$GITHUB_OUTPUT"
+          echo "drifted=0" >> "$GITHUB_OUTPUT"
+
+      # --- Validate the icon file, mirroring rinth project icon's OWN check
+      # order exactly: file existence first, extension second, both before
+      # any network call — see src/commands/project.ts's icon() function at
+      # RINTH_REF. This is also what makes proof (b) (a rejected input
+      # failing cleanly) possible without a token or network access: it is
+      # the same local, offline check rinth itself runs before touching the
+      # network. ---
+      - name: Validate icon file
+        id: validate
+        if: steps.ext_list.outputs.drifted == '0'
+        env:
+          # icon_file traces back to the operator-supplied dispatch input
+          # (see Resolve icon file input) — routed through env: for the
+          # same reason.
+          ICON_FILE: ${{ steps.file.outputs.path }}
+          ACCEPTED_DISPLAY: ${{ steps.ext_list.outputs.display }}
+          ACCEPTED_LIST: ${{ steps.ext_list.outputs.list }}
+        run: |
+          icon_file="$ICON_FILE"
+          accepted_display="$ACCEPTED_DISPLAY"
+          accepted_list="$ACCEPTED_LIST"
+
+          ok=1
+          reason=""
+
+          if [ -z "$icon_file" ]; then
+            ok=0
+            reason="no icon_file input supplied"
+          elif [ ! -f "$icon_file" ]; then
+            ok=0
+            reason="--file not found: $icon_file"
+          else
+            ext=$(printf '%s' "$icon_file" | sed -n 's/.*\.\([A-Za-z0-9]*\)$/\1/p' | tr 'A-Z' 'a-z')
+            if ! printf ',%s,' "$accepted_list" | grep -q ",${ext:-__none__},"; then
+              ok=0
+              reason="Unsupported icon file type: ${ext:-(no extension)} (accepted: $accepted_display)"
+            fi
+          fi
+
+          {
+            echo ""
+            echo "### Validate icon file"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$ok" = "1" ]; then
+            size=$(stat -c%s "$icon_file")
+            ext=$(printf '%s' "$icon_file" | sed -n 's/.*\.\([A-Za-z0-9]*\)$/\1/p' | tr 'A-Z' 'a-z')
+            echo "valid=1" >> "$GITHUB_OUTPUT"
+            printf 'ext=%s\n' "$ext" >> "$GITHUB_OUTPUT"
+            printf 'size=%s\n' "$size" >> "$GITHUB_OUTPUT"
+            echo "File \`$icon_file\` is valid: extension \`$ext\`, $size bytes." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "valid=0" >> "$GITHUB_OUTPUT"
+            printf 'reason=%s\n' "$reason" >> "$GITHUB_OUTPUT"
+            echo "REJECTED: $reason" >> "$GITHUB_STEP_SUMMARY"
+            echo "::error::$reason"
+          fi
+
+      # --- Authenticated read, BEFORE any write. Runs whenever the file
+      # validated, in both dry-run and upload mode — this is the "before"
+      # half of rinth's own read-back discipline, and the dry run's way of
+      # showing the CURRENT icon_url without ever calling `project icon`. ---
+      - name: rinth --json project get (before)
+        id: project_get
+        if: steps.validate.outputs.valid == '1'
+        env:
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+          PROJECT_ID: ${{ steps.project.outputs.id }}
+        run: |
+          set +e
+          bunx --bun "$RINTH_REF" --json project get "$PROJECT_ID" > >(tee project_get.stdout.log) 2> >(tee project_get.stderr.log >&2)
+          ec=$?
+          set -e
+          echo "exit_code=$ec" >> "$GITHUB_OUTPUT"
+          echo "rinth --json project get exit code: $ec"
+
+          icon_url="<unavailable>"
+          if [ "$ec" = "0" ] && jq -e . project_get.stdout.log > project_get.pretty.json 2>/dev/null; then
+            icon_url=$(jq -r '.icon_url // "null"' project_get.pretty.json)
+          fi
+          printf 'icon_url=%s\n' "$icon_url" >> "$GITHUB_OUTPUT"
+
+          {
+            echo ""
+            echo "### rinth --json project get $PROJECT_ID (before)"
+            echo "- exit code: \`$ec\`"
+            echo "- current \`icon_url\`: \`$icon_url\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Dry run — state what the real run would send
+        id: dry_run
+        if: steps.validate.outputs.valid == '1' && steps.mode.outputs.mode == 'dry-run'
+        env:
+          # icon_file (and, transitively, ext) trace back to the
+          # operator-supplied dispatch input — routed through env: for
+          # the same reason as the steps above.
+          ICON_FILE: ${{ steps.file.outputs.path }}
+          EXT: ${{ steps.validate.outputs.ext }}
+          SIZE: ${{ steps.validate.outputs.size }}
+          PROJECT_ID: ${{ steps.project.outputs.id }}
+          ICON_URL: ${{ steps.project_get.outputs.icon_url }}
+        run: |
+          icon_file="$ICON_FILE"
+          ext="$EXT"
+          size="$SIZE"
+          project_id="$PROJECT_ID"
+          icon_url="$ICON_URL"
+
+          case "$ext" in
+            png) content_type="image/png" ;;
+            jpg|jpeg) content_type="image/jpeg" ;;
+            bmp) content_type="image/bmp" ;;
+            gif) content_type="image/gif" ;;
+            webp) content_type="image/webp" ;;
+            svg) content_type="image/svg" ;;
+            svgz) content_type="image/svgz" ;;
+            rgb) content_type="image/rgb" ;;
+            *) content_type="<unknown>" ;;
+          esac
+
+          {
+            echo ""
+            echo "### DRY RUN — no PATCH sent"
+            echo "The real run (\`mode: upload\`) would send:"
+            echo '```'
+            echo "PATCH /project/$project_id/icon?ext=$ext"
+            echo "Content-Type: $content_type"
+            echo "Authorization: <MODRINTH_TOKEN, redacted>"
+            echo "body: raw bytes of $icon_file ($size bytes)"
+            echo '```'
+            echo "Current \`icon_url\` before this hypothetical write: \`$icon_url\`"
+            echo ""
+            echo "**No write was performed. \`rinth project icon\` was never invoked.**"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Dry run: would PATCH /project/$project_id/icon?ext=$ext, Content-Type $content_type, body $icon_file ($size bytes). icon_url before: $icon_url. No write performed."
+
+      - name: Real upload — rinth project icon
+        id: upload
+        if: steps.validate.outputs.valid == '1' && steps.mode.outputs.mode == 'upload'
+        env:
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+          PROJECT_ID: ${{ steps.project.outputs.id }}
+          ICON_FILE: ${{ steps.file.outputs.path }}
+        run: |
+          set +e
+          bunx --bun "$RINTH_REF" --json project icon "$PROJECT_ID" --file "$ICON_FILE" > >(tee icon_upload.stdout.log) 2> >(tee icon_upload.stderr.log >&2)
+          ec=$?
+          set -e
+          echo "exit_code=$ec" >> "$GITHUB_OUTPUT"
+          echo "rinth --json project icon exit code: $ec"
+
+          icon_url_after="<unavailable>"
+          if [ "$ec" = "0" ] && jq -e . icon_upload.stdout.log > icon_upload.pretty.json 2>/dev/null; then
+            icon_url_after=$(jq -r '.icon_url // "null"' icon_upload.pretty.json)
+          fi
+          printf 'icon_url_after=%s\n' "$icon_url_after" >> "$GITHUB_OUTPUT"
+
+          {
+            echo ""
+            echo "### REAL UPLOAD — rinth --json project icon $PROJECT_ID --file $ICON_FILE"
+            echo "- exit code: \`$ec\`"
+            echo "- \`icon_url\` after: \`$icon_url_after\`"
+            echo ""
+            echo "-- stdout --"
+            echo '```'
+            cat icon_upload.stdout.log
+            echo '```'
+            echo ""
+            echo "-- stderr --"
+            echo '```'
+            cat icon_upload.stderr.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rinth-icon-json
+          path: |
+            rinth_client_index.ts
+            project_get.stdout.log
+            project_get.stderr.log
+            project_get.pretty.json
+            icon_upload.stdout.log
+            icon_upload.stderr.log
+            icon_upload.pretty.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Summary
+        if: always()
+        env:
+          DRIFTED: ${{ steps.ext_list.outputs.drifted }}
+          VALID: ${{ steps.validate.outputs.valid }}
+          REASON: ${{ steps.validate.outputs.reason }}
+          RESOLVED_MODE: ${{ steps.mode.outputs.mode }}
+          PROJECT_GET_EC: ${{ steps.project_get.outputs.exit_code }}
+          UPLOAD_EC: ${{ steps.upload.outputs.exit_code }}
+        run: |
+          echo "mode:              ${RESOLVED_MODE:-<not resolved>}"
+          echo "extension list:    drifted=${DRIFTED:-<not resolved>}"
+          echo "validate:          valid=${VALID:-<not resolved>} reason=${REASON:-}"
+          echo "project get:       ${PROJECT_GET_EC:-<skipped>}"
+          echo "upload:            ${UPLOAD_EC:-<skipped>}"
+          {
+            echo ""
+            echo "## Result"
+            echo "| step | result |"
+            echo "|---|---|"
+            echo "| resolved mode | \`${RESOLVED_MODE:-<not resolved>}\` |"
+            echo "| extension list drifted from rinth@\$RINTH_REF | \`${DRIFTED:-<not resolved>}\` |"
+            echo "| file validation | valid=\`${VALID:-<not resolved>}\`${REASON:+ (\`$REASON\`)} |"
+            echo "| project get (before) exit code | \`${PROJECT_GET_EC:-skipped}\` |"
+            echo "| real upload exit code | \`${UPLOAD_EC:-skipped (dry-run or validation failed)}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          fail=0
+          if [ "${DRIFTED:-1}" != "0" ]; then
+            echo "::error::Accepted extension list drifted from rinth's own source — see the ext_list step above."
+            fail=1
+          fi
+          if [ "${VALID:-0}" != "1" ]; then
+            echo "::error::Icon file failed validation: ${REASON:-see the validate step above}"
+            fail=1
+          fi
+          if [ -n "${PROJECT_GET_EC:-}" ] && [ "$PROJECT_GET_EC" != "0" ]; then
+            echo "::error::rinth --json project get exited non-zero ($PROJECT_GET_EC) — see the job summary above for stderr."
+            fail=1
+          fi
+          if [ -n "${UPLOAD_EC:-}" ] && [ "$UPLOAD_EC" != "0" ]; then
+            echo "::error::rinth --json project icon exited non-zero ($UPLOAD_EC) — see the job summary above for stderr."
+            fail=1
+          fi
+          if [ "$fail" = "1" ]; then
+            exit 1
+          fi
