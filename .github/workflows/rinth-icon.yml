@@ -78,6 +78,15 @@ jobs:
 
       - name: Resolve mode
         id: mode
+        env:
+          # Routed through env: rather than interpolated directly into the
+          # script, matching rinth-listing.yml's own convention for
+          # vars.MODRINTH_PROJECT_ID — GitHub expands ${{ }} into the
+          # script text before the shell ever sees it, so an inline
+          # interpolation of an operator-supplied value is a shell
+          # injection vector. `mode` is a `type: choice` input so this is
+          # lower risk than icon_file below, but the shape is the same.
+          RAW_MODE: ${{ github.event.inputs.mode }}
         run: |
           # workflow_dispatch's own `default: dry-run` covers a manual
           # dispatch with the field left blank, but NOT the temporary push
@@ -88,7 +97,7 @@ jobs:
           # "no inputs supplied => dry run" true for EVERY trigger, not
           # just workflow_dispatch: only the literal string `upload`
           # selects a write; anything else, including empty, is dry-run.
-          raw_mode="${{ github.event.inputs.mode }}"
+          raw_mode="$RAW_MODE"
           if [ "$raw_mode" = "upload" ]; then
             mode="upload"
           else
@@ -104,8 +113,14 @@ jobs:
 
       - name: Resolve icon file input
         id: file
+        env:
+          # See the Resolve mode step's env: comment — operator-supplied
+          # dispatch input, routed through env: rather than interpolated
+          # inline, to keep an icon_file value like `x"; <cmd>; :"` from
+          # being expanded into the script text before the shell runs it.
+          ICON_FILE_INPUT: ${{ github.event.inputs.icon_file }}
         run: |
-          icon_file="${{ github.event.inputs.icon_file }}"
+          icon_file="$ICON_FILE_INPUT"
           echo "Requested icon_file input: '${icon_file:-<empty>}'"
           printf 'path=%s\n' "$icon_file" >> "$GITHUB_OUTPUT"
           {
@@ -182,10 +197,17 @@ jobs:
       - name: Validate icon file
         id: validate
         if: steps.ext_list.outputs.drifted == '0'
+        env:
+          # icon_file traces back to the operator-supplied dispatch input
+          # (see Resolve icon file input) — routed through env: for the
+          # same reason.
+          ICON_FILE: ${{ steps.file.outputs.path }}
+          ACCEPTED_DISPLAY: ${{ steps.ext_list.outputs.display }}
+          ACCEPTED_LIST: ${{ steps.ext_list.outputs.list }}
         run: |
-          icon_file="${{ steps.file.outputs.path }}"
-          accepted_display="${{ steps.ext_list.outputs.display }}"
-          accepted_list="${{ steps.ext_list.outputs.list }}"
+          icon_file="$ICON_FILE"
+          accepted_display="$ACCEPTED_DISPLAY"
+          accepted_list="$ACCEPTED_LIST"
 
           ok=1
           reason=""
@@ -257,12 +279,21 @@ jobs:
       - name: Dry run — state what the real run would send
         id: dry_run
         if: steps.validate.outputs.valid == '1' && steps.mode.outputs.mode == 'dry-run'
+        env:
+          # icon_file (and, transitively, ext) trace back to the
+          # operator-supplied dispatch input — routed through env: for
+          # the same reason as the steps above.
+          ICON_FILE: ${{ steps.file.outputs.path }}
+          EXT: ${{ steps.validate.outputs.ext }}
+          SIZE: ${{ steps.validate.outputs.size }}
+          PROJECT_ID: ${{ steps.project.outputs.id }}
+          ICON_URL: ${{ steps.project_get.outputs.icon_url }}
         run: |
-          icon_file="${{ steps.file.outputs.path }}"
-          ext="${{ steps.validate.outputs.ext }}"
-          size="${{ steps.validate.outputs.size }}"
-          project_id="${{ steps.project.outputs.id }}"
-          icon_url="${{ steps.project_get.outputs.icon_url }}"
+          icon_file="$ICON_FILE"
+          ext="$EXT"
+          size="$SIZE"
+          project_id="$PROJECT_ID"
+          icon_url="$ICON_URL"
 
           case "$ext" in
             png) content_type="image/png" ;;

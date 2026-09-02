@@ -59,8 +59,9 @@ temporary push-triggered run below supplies no `inputs` object whatsoever,
 and it still resolved to `dry-run`.
 
 `rinth project icon` has no `--dry-run` flag at the pinned ref (v0.9.1;
-only `project create` has one), and there is no way to invoke it without it
-performing the PATCH. So the dry run never calls it. It does the equivalent
+other rinth commands do, `publish` and some `project` subcommands among
+them, but `project icon` is not one of them), and there is no way to
+invoke it without it performing the PATCH. So the dry run never calls it. It does the equivalent
 work itself: resolve the project id, resolve and stat the icon file,
 validate the extension against a copy of rinth's own accepted list, do an
 authenticated `project get` and print the current `icon_url`, and state
