@@ -144,7 +144,24 @@ silently drifting.
    workflow (following the first push-triggered run) — the same file
    content those runs exercised, apart from the trigger block itself.
 
-5. **Final re-check: the live listing is unchanged** — dispatching
+5. **Review fix: dispatch inputs moved into `env:` blocks** — the first
+   round of review found that `icon_file` (and values derived from it)
+   were interpolated directly into `run:` script bodies via `${{ }}`
+   rather than routed through `env:`, a shell injection path through the
+   dispatch input. Fixed in commit `e181a1c`, no logic change. Re-ran the
+   bad-extension case to confirm the error text is still byte-identical
+   after the fix (`icon_file=README.md`, `mode=dry-run`):
+
+   Run: https://github.com/brooswit-minecraft/sickos/actions/runs/33658951381
+   (failure — expected)
+
+   ```
+   Unsupported icon file type: md (accepted: png, jpg, jpeg, bmp, gif, webp, svg, svgz, rgb)
+   ```
+
+   Identical to run 33657944324 above.
+
+6. **Final re-check: the live listing is unchanged** — dispatching
    `rinth-listing.yml` on `main` again, after all of the above.
 
    Run: https://github.com/brooswit-minecraft/sickos/actions/runs/33658064247
