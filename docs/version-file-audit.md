@@ -1,6 +1,6 @@
 # version_file audit, 2026-09-10: every pinned mod vs Modrinth's `version_file`, and the state of qIWoLcKJ / N8aGZtvj
 
-This is JOB 1 and JOB 2 of SICKOS-23. It is an investigation: the deliverable
+SICKOS-23 runs the epic's JOB 1 and JOB 2. It is an investigation: the deliverable
 is a measurement and a written record of it, not a change to the modpack.
 Nothing under `mods/` changed for this record; see "What did not change,
 and how I know" at the end.
@@ -330,8 +330,12 @@ Re-taken 2026-09-10, 19:12:58Z–19:14:25Z, unauthenticated, against
 | `GET /v2/project/tectonic` (control) | 200 | 200 | no |
 | `GET /v2/project/flowing-fluids` (control) | 200 | 200 | no |
 
-Every baseline reading reproduced exactly. Nothing here has changed in the
-roughly thirteen minutes-to-hours between the baseline and this run.
+Every baseline reading reproduced exactly. That gap is about **thirteen
+minutes** (19:00Z baseline to this 19:12:58Z–19:14:25Z run) — far too short
+an interval to be evidence that the state is stable, or that a (b)-style
+re-moderation isn't quietly healing underneath it. A reproduction over
+thirteen minutes rules out "the report that opened this ticket was already
+wrong an hour ago," nothing more; it says nothing about next week.
 
 **The author is still active and still depends on the main project**,
 re-checked: the addon `nx3Le5Rv` ("Project Atmosphere for TFC", by
@@ -387,9 +391,14 @@ text, and any source/Discord the addon page names.
   Modrinth titles ("Project Atmosphere: … - NEW LOGO", "Gabou's Libs - …
   LIZZARRDD") — noted only as a stylistic coincidence across this author's
   catalog, not evidence of anything about qIWoLcKJ/N8aGZtvj specifically.
-- The addon's body text names no source repository and no Discord invite
-  link — only the instruction "If you need to report something, use
-  Discord," with no handle or URL given. Nothing to follow from it.
+- The addon's body text itself names no source repository and no handle or
+  URL — only the instruction "If you need to report something, use
+  Discord." But the addon project's own metadata (`GET
+  /v2/project/nx3Le5Rv`) does carry a populated `discord_url`
+  (`https://discord.gg/2jRhTJgYz4`; `source_url` is `null`). That invite
+  was **deliberately not followed** — joining Discords on our behalf is
+  outside this ticket's boundary — not "nothing to follow"; the boundary
+  was live here, not merely theoretical.
 - Modrinth search for "project atmosphere" (4 hits) and "gaboulibs" (0
   hits) surfaced no successor or fork; the only near-name hit,
   `beta_atmosphere` ("Beta Atmosphere - Horror Project" by `Gustavo9093`),
