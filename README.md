@@ -4,6 +4,9 @@ A [Create](https://modrinth.com/mod/create)-focused Minecraft **1.21.1 / NeoForg
 21.1.248** modpack, built from the [schematic](https://github.com/brooswit-minecraft/schematic)
 template below. Pinned mods live under `mods/`; `Rediculous Ore Generation` and
 `Immersive Weathering` are intentionally omitted — neither has a 1.21.1 release.
+`Project Atmosphere` (and its library dependency, GabouLibs) is also omitted: Modrinth
+stopped indexing both as of 2026-09-10 (see `docs/unknown-files-options.md`), so the pack
+can no longer pin them without triggering the Modrinth App's "Unknown files" warning.
 
 Everything from here down is inherited from the template, kept intact so future
 `git merge template/main` pulls stay cheap.
