@@ -26,11 +26,6 @@ hash = "848ba3d5c40903b190d9fc2f92d7369a76e73cf8881b882787d28e7bde3ac637"
 metafile = true
 
 [[files]]
-file = "mods/gabous-libs.pw.toml"
-hash = "399093ee2fdd6453ad70c097d39dd5483c8a4de7f460d904fbb3c0d57e9717aa"
-metafile = true
-
-[[files]]
 file = "mods/glitchcore.pw.toml"
 hash = "e53646f88aeb6bd54c38db50da972abdac91e83c145a8f974107b0ca103b15bc"
 metafile = true
@@ -48,11 +43,6 @@ metafile = true
 [[files]]
 file = "mods/power-grid.pw.toml"
 hash = "522ea92e4206f8d0b823e444fea75d8c6897261863b17c7c5bf16e26195a7cdb"
-metafile = true
-
-[[files]]
-file = "mods/project-atmosphere.pw.toml"
-hash = "bcb6a6775442ec2f7680708749ec1ce980507c3bf820f2e76878df7cb00f36e0"
 metafile = true
 
 [[files]]
