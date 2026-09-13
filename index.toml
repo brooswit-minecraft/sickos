@@ -1,8 +1,17 @@
 hash-format = "sha256"
 
 [[files]]
+file = "config/defaultoptions/servers.dat"
+hash = "cbe1f6166b49efb1493edef5b1d356bc879c9da61abddc6f3ef9932a6d2dee6f"
+
+[[files]]
 file = "mods/architectury-api.pw.toml"
 hash = "187eafde5974beee1263538b462b7b8fe2fc8948c5d413980d9796d55928580b"
+metafile = true
+
+[[files]]
+file = "mods/balm.pw.toml"
+hash = "2aa745e51506af80a6a2bb7dcfc4e27fc2c2323b35dbfa9e52eb290acd1ff7b4"
 metafile = true
 
 [[files]]
@@ -18,6 +27,11 @@ metafile = true
 [[files]]
 file = "mods/create.pw.toml"
 hash = "dcaf5f2e28db0b9a127d0167456832341045ddc9aec058c3d9fcf53f618d2404"
+metafile = true
+
+[[files]]
+file = "mods/default-options.pw.toml"
+hash = "a6967d761dde867ccc1af53dc9f4e530eb9917a9cb21d0fc15708e8cd2c0f2ba"
 metafile = true
 
 [[files]]

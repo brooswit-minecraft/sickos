@@ -11,6 +11,19 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 Everything from here down is inherited from the template, kept intact so future
 `git merge template/main` pulls stay cheap.
 
+## Default multiplayer server
+
+Fresh installations include **Sickos** at `breezy-trident848.modrinth.gg` in
+the multiplayer list. Client-only Default Options and Balm load the bundled
+`config/defaultoptions/servers.dat` only when the player has no existing server
+list. Updates preserve player-added servers; no graphics or keybinding defaults
+are bundled.
+
+To change the default entry, edit `scripts/generate-default-servers.py`, run
+`uv run --with nbtlib scripts/generate-default-servers.py`, then `make refresh`.
+Commit the generated file and index with a `pack.toml` version bump; CI packages
+and publishes it through the normal release workflow.
+
 ## Managed Modrinth listing
 
 The public Modrinth listing is repository-owned. Edit structured fields in
