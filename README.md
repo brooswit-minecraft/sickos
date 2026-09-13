@@ -11,6 +11,14 @@ template below. Pinned mods live under `mods/`; `Rediculous Ore Generation` and
 stopped indexing both as of 2026-09-10 (see `docs/unknown-files-options.md`), so the pack
 can no longer pin them without triggering the Modrinth App's "Unknown files" warning.
 
+## HarvestCraft
+
+Sickos 0.3.0 adds Pam's HarvestCraft 2 Food Core, Crops, Trees, and Food Extended
+on both client and server, using the author's NeoForge 1.21.1 Modrinth builds.
+Existing worlds are retained. Explore newly generated chunks for natural crop
+gardens and fruit trees; existing terrain is not regenerated. Clients must update
+to the same pack release as the server.
+
 Everything from here down is inherited from the template, kept intact so future
 `git merge template/main` pulls stay cheap.
 
