@@ -13,16 +13,36 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Atmosphere
 
-Sickos 0.8.0 uses the finer atmospheric grid from Dynamic Atmosphere 0.5.0-alpha.1.
-Water fog, clouds, rain, and dark exposed ground add material to world-aligned 4x4x4-block cells.
-Nighttime ground fog stops building as daylight returns, allowing existing material to decay.
-Cells render transparently according to their material, which decays in place.
-Server state and nearby-client synchronization are bounded; no material flows
-between cells yet. This version requires the mod on both sides, so update your
-client before connecting.
-This is not yet the planned full atmospheric simulation. Operators can run
-`/dynamicatmosphere status` and `/dynamicatmosphere demo` to verify execution.
-The same published jar is pinned on client and server. No world reset is needed.
+Sickos 0.9.0 uses Dynamic Atmosphere 0.6.0-alpha.1. The same published jar is
+pinned for client and server. This feature release advances minor.
+
+**BREAKING behavior: 0.9.0 includes default-enabled destructive pressure, which
+can damage terrain and player builds without claim/protected-area support.
+Back up your world before upgrading. A downgrade does not restore broken blocks;
+restore the backup to undo terrain damage. This is a minor bump under the 0.x
+breaking-change policy. Automated tests pass; in-game pressure verification is
+left to player testing.**
+
+Water fog, clouds, rain, and dark exposed ground feed 4x4x4-block cells. The new
+grid equalizes fullness across six face neighbors, with capacity proportional to
+vacant air blocks and opacity based on fullness. Zero-air cells block transfer;
+these coarse checks do not simulate exact airtight walls. Overfull excess seeks
+nearby capacity farther outward within bounded loaded-area searches. Confirmed
+blockage can trigger bounded pressure destruction; unknown unloaded boundaries
+and exhausted budgets leave work pending, never authorize destruction. The weakest-hardness
+eligible source-cell block breaks with drops; once source blocks are gone,
+relief proceeds outward. Each broken block adds 1 material unit. Intrinsically
+unbreakable blocks are exempt; excess that still cannot escape remains blocked
+and reported, not deleted.
+
+There is no natural decay: daylight stops the dark-ground source but does not
+clear existing fog. Sources are sampled every five seconds; simulation work is
+budgeted across ticks. Sparse amounts save with Minecraft chunks and restore on
+reload/restart, with capacity recomputed. Unload releases the simulation mirror;
+there is no range-based deletion or global 1,024-cell cap. No world reset is
+required, but both atmospheric amounts and terrain damage persist. Update
+client and server together. Operators can use `/dynamicatmosphere status` and
+`/dynamicatmosphere demo` for runtime checks; this remains an alpha simulation.
 
 ## HarvestCraft
 
