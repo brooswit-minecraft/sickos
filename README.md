@@ -13,16 +13,16 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Atmosphere
 
-Sickos 0.11.1 pins Dynamic Atmosphere 0.8.1-alpha.1 for both client and server.
-This compatible tuning patch increases scheduled delays to 40 times the original
-cadence (four times 0.11.0), following CONTRIBUTING. Condensation behavior per
-check, persistent client visuals, and coarse far fog are unchanged.
+Sickos 0.12.0 pins Dynamic Atmosphere 0.9.0-alpha.1 for both client and server.
+Distance-based client rendering LOD is a new feature, so this advances minor
+under CONTRIBUTING. The 250-tick simulation cadence,
+condensation behavior per check, and persistent client visual cache are retained.
 
 **BREAKING behavior: 0.9.0 includes default-enabled destructive pressure, which
 can damage terrain and player builds without claim/protected-area support.
 Back up your world before upgrading. A downgrade does not restore broken blocks;
 restore the backup to undo terrain damage. This is a minor bump under the 0.x
-breaking-change policy. This patch retains this terrain-damage risk;
+breaking-change policy. This feature release retains this terrain-damage risk;
 hosted runtime/client verification is left to user testing.**
 
 **New water condensation also changes the world: water sources flow normally
@@ -68,7 +68,20 @@ required, but both atmospheric amounts and terrain damage persist. Update
 client and server together. Operators can use `/dynamicatmosphere status` and
 `/dynamicatmosphere demo` for runtime checks; this remains an alpha simulation.
 
-The new client visual cache retains previously seen areas across sessions and
+Client rendering uses four non-overlapping LOD bands. With Minecraft client
+view distance `V` expressed in blocks, render 4x4x4-block volumes below `V/2`,
+8x8x8 in `[V/2, V)`, 16x16x16 in `[V, 2V)`, and 32x32x32 in `[2V, 4V]`.
+Each coarser volume recursively averages eight children, including empty volumes;
+coarse parents are not drawn on top of their finer children. This reduces the
+number of volumes and slices at distance, not server simulation resolution.
+Actual performance requires user verification; no measured FPS improvement or
+runtime verification is claimed. Cache/render/sync intervals remain unchanged.
+Aligned boundary volumes can remain finer; selection is spatially bounded and
+cached in 16-block camera regions. New views use temporary 32-block cached
+coverage while refining, and unloaded near chunks retain 16-block cached fog.
+Parents and detailed children never render over each other.
+
+The client visual cache retains previously seen areas across sessions and
 adds coarse far fog out to four times the client view distance. It is approximate
 and can be stale, not server simulation or a way to load distant chunks. A stable
 world UUID in server SavedData separates worlds; a newly reset world gets a fresh
