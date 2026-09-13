@@ -19,6 +19,12 @@ Existing worlds are retained. Explore newly generated chunks for natural crop
 gardens and fruit trees; existing terrain is not regenerated. Clients must update
 to the same pack release as the server.
 
+The separate **Reset hosted world** workflow is destructive, manual maintenance:
+dispatch with `confirm=RESET` only when intentionally starting over. It waits for
+the shared deployment lock, selects a fresh world, restarts and verifies it,
+grants `brooswit` operator access, then deletes the previous world without backup.
+It never runs on releases. Normal updates preserve the world.
+
 Everything from here down is inherited from the template, kept intact so future
 `git merge template/main` pulls stay cheap.
 
