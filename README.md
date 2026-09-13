@@ -13,10 +13,11 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Atmosphere
 
-Sickos 0.13.0 pins Dynamic Atmosphere 0.10.0-alpha.1 for both client and server.
-This client-lighting feature advances minor under CONTRIBUTING: coarse fog uses
-Minecraft's current fog/horizon color and near fog follows local light. The 250-tick simulation cadence,
-condensation behavior per check, and persistent client visual cache are retained.
+Sickos 0.14.0 pins Dynamic Atmosphere 0.11.0-alpha.1 for client and server.
+Smooth near-gray to horizon-color blending and
+loaded-chunk producers are new features, advancing minor under CONTRIBUTING.
+Condensation behavior
+per due check and the persistent client visual cache are retained.
 
 **BREAKING behavior: 0.9.0 includes default-enabled destructive pressure, which
 can damage terrain and player builds without claim/protected-area support.
@@ -33,10 +34,10 @@ roll tries one water source at a random air block in the same cell, never solids
 Only successful placement consumes 25% of the current material, rounded down
 with a minimum of 1 unit. No air or failed placement consumes nothing. Ultrawarm
 dimensions, including the Nether, skip both placement and consumption. This uses
-the 250-tick (12.5-second at 20 TPS) scheduled cadence, subject to work budgets; it is
+the fixed 200-tick (10-second at 20 TPS) simulation cadence, subject to work budgets; it is
 not Minecraft rain. No data or world reset is required.
 
-Water fog, clouds, rain, and dark exposed ground feed 4x4x4-block cells. The new
+Water fog, clouds, cloud-height rain emissions, and dark exposed ground feed 4x4x4-block cells. The new
 grid equalizes fullness across six face neighbors, with capacity proportional to
 vacant air blocks and opacity based on fullness. Zero-air cells block transfer;
 these coarse checks do not simulate exact airtight walls. Overfull excess seeks
@@ -49,18 +50,23 @@ unbreakable blocks are exempt; excess that still cannot escape remains blocked
 and reported, not deleted.
 
 There is no natural decay: daylight stops the dark-ground source but does not
-clear existing fog. Simulation/source cadence is now `1000 * cellSize / 16`
-ticks: current 4-block cells use 250 ticks, or 12.5 seconds at 20 TPS.
-Check delays are 40 times the original 6.25 ticks, up from the previous tenfold
-delay. Size 1 averages 62.5 ticks, size 16 uses 1000,
-and size 32 uses 2000. Cache/render/sync intervals are unchanged. Producer
-offsets expand from 12 to 96 blocks, still eight loaded-only samples per pass.
+clear existing fog. Simulation now uses fixed 200-tick checks (10 seconds at
+20 TPS), replacing the old size-based 250-tick cadence. Producers independently
+schedule passes every 50 ticks (2.5 seconds at 20 TPS) across all loaded chunks.
+Each chunk has a random 25% default gate and one random X/Z column per pass.
+A bounded fair queue allows backlog, so a scheduled pass need not finish within
+2.5 seconds. No chunks are force-loaded. Cache/render/sync intervals are unchanged.
+Rain checks emit 320 units at cloud height Y=192, eight times the previous 40,
+replacing ground-level rain fog. Water-depth fog, high-terrain clouds, and dark
+exposed-ground sources remain. A water-to-nonwater block transition also emits
+40 material units at that position; ordinary water-level changes and chunk
+unloads do not trigger this source.
 Live cell visibility follows Minecraft's tracked chunks and effective client render
 distance, loaded chunks, and frustum, without fixed atmospheric radii or
 nearest-cell caps. Protocol 5 requires updating both client and server together;
 large snapshots complete with world identity, scope, and chunk freshness. Delta/full sync
 remain 20/200 ticks; work remains at most 128 source cells per tick. Pressure is
-still limited to four attempts per sampling interval, now 40 times the original delay.
+still limited to four attempts per sampling interval.
 Sparse amounts save with Minecraft chunks and restore on
 reload/restart, with capacity recomputed. Unload releases the simulation mirror;
 there is no range-based deletion or global 1,024-cell cap. No world reset is
@@ -80,14 +86,16 @@ Aligned boundary volumes can remain finer; selection is spatially bounded and
 cached in 16-block camera regions. New views use temporary 32-block cached
 coverage while refining, and unloaded near chunks retain 16-block cached fog.
 Parents and detailed children never render over each other.
-Coarse LOD and cached fallback volumes use Minecraft's current fog/horizon color;
-nearby 4-block detail uses mean effective air-block light divided by 15 as grayscale,
+Nearby color remains light-based grayscale through `V/2`, then uses smoothstep
+to reach Minecraft's full current fog/horizon color at `V`. Coarse volumes in
+the blend region use air-count-weighted base-cell light averages.
+Near detail uses mean effective air-block light divided by 15 as grayscale,
 including sky darkening and block light. Dark air counts; non-air blocks do not.
-Loaded-only sampling is limited to 32 cells per client tick, with 20-tick refresh
+Loaded-only sampling is limited to 32 base cells per client tick, with 20-tick refresh
 requests and neutral 50% gray before sampling. The disposable lighting cache is
-bounded to 8,192 cells and cleared on world changes. Cached spatial back-to-front composition
+bounded to 8,192 volumes and cleared on world changes. Cached spatial back-to-front composition
 handles mixed colors, including near unloaded fallbacks, with bounded GPU batches.
-Opacity, simulation, protocol, and personal cache formats are unchanged.
+The blend preserves opacity, protocol, and personal cache formats.
 
 The client visual cache retains previously seen areas across sessions and
 adds coarse far fog out to four times the client view distance. It is approximate
