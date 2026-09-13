@@ -13,15 +13,16 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Atmosphere
 
-Sickos 0.9.0 uses Dynamic Atmosphere 0.6.0-alpha.1. The same published jar is
-pinned for client and server. This feature release advances minor.
+Sickos 0.10.0 pins Dynamic Atmosphere 0.7.0-alpha.1 for both client and server.
+Persistent client visuals and coarse far fog are new features, so this advances
+the minor version under CONTRIBUTING. It also includes the latest cadence tuning.
 
 **BREAKING behavior: 0.9.0 includes default-enabled destructive pressure, which
 can damage terrain and player builds without claim/protected-area support.
 Back up your world before upgrading. A downgrade does not restore broken blocks;
 restore the backup to undo terrain damage. This is a minor bump under the 0.x
-breaking-change policy. Automated tests pass; in-game pressure verification is
-left to player testing.**
+breaking-change policy. The new feature release retains this terrain-damage risk;
+hosted runtime/client verification is left to user testing.**
 
 Water fog, clouds, rain, and dark exposed ground feed 4x4x4-block cells. The new
 grid equalizes fullness across six face neighbors, with capacity proportional to
@@ -36,13 +37,35 @@ unbreakable blocks are exempt; excess that still cannot escape remains blocked
 and reported, not deleted.
 
 There is no natural decay: daylight stops the dark-ground source but does not
-clear existing fog. Sources are sampled every five seconds; simulation work is
-budgeted across ticks. Sparse amounts save with Minecraft chunks and restore on
+clear existing fog. The new simulation/source cadence is `25 * cellSize / 16`
+ticks: current 4-block cells average 6.25 ticks using 6/7 intervals. Producer
+offsets expand from 12 to 96 blocks, still eight loaded-only samples per pass.
+Live cell visibility follows Minecraft's tracked chunks and effective client render
+distance, loaded chunks, and frustum, without fixed atmospheric radii or
+nearest-cell caps. Protocol 5 requires updating both client and server together;
+large snapshots complete with world identity, scope, and chunk freshness. Delta/full sync
+remain 20/200 ticks; work remains at most 128 source cells per tick. Pressure is
+still limited to four attempts per sampling interval, so it can act more often.
+Sparse amounts save with Minecraft chunks and restore on
 reload/restart, with capacity recomputed. Unload releases the simulation mirror;
 there is no range-based deletion or global 1,024-cell cap. No world reset is
 required, but both atmospheric amounts and terrain damage persist. Update
 client and server together. Operators can use `/dynamicatmosphere status` and
 `/dynamicatmosphere demo` for runtime checks; this remains an alpha simulation.
+
+The new client visual cache retains previously seen areas across sessions and
+adds coarse far fog out to four times the client view distance. It is approximate
+and can be stale, not server simulation or a way to load distant chunks. A stable
+world UUID in server SavedData separates worlds; a newly reset world gets a fresh
+UUID. No reset is required for this upgrade.
+
+Client data lives under `gameDirectory/dynamicatmosphere-cache`, keyed by hashed
+server/world/dimension/layout identity. Changed chunks are written atomically
+every 10 seconds and on disconnect. Disk limits are 64 MiB and 8,192 files;
+RAM restore is limited to 200,000 cells. Fresh server observations supersede
+cached visuals for their scope; cached visuals never restore server material.
+Local runtime tests are intentionally skipped. CI and hosted status verification
+do not replace user-run server/client visual and save/reload checks.
 
 ## HarvestCraft
 
