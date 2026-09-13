@@ -1,0 +1,14 @@
+{
+  "title": "Sickos",
+  "slug": "sickos",
+  "description": "An early, playable Create-focused modpack for Minecraft 1.21.1 on NeoForge.",
+  "categories": [
+    "multiplayer",
+    "technology"
+  ],
+  "client_side": "required",
+  "server_side": "required",
+  "license_id": "MIT",
+  "source_url": "https://github.com/brooswit-minecraft/sickos",
+  "issues_url": "https://github.com/brooswit-minecraft/sickos/issues"
+}

@@ -11,6 +11,18 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 Everything from here down is inherited from the template, kept intact so future
 `git merge template/main` pulls stay cheap.
 
+## Managed Modrinth listing
+
+The public Modrinth listing is repository-owned. Edit structured fields in
+`.modrinth/project.json` and formatted copy in `.modrinth/description.md`.
+After a merge to `main`, `.github/workflows/modrinth-sync.yml` updates the
+Modrinth project and verifies the resulting values by reading them back.
+
+Do not put credentials in either file. CI reads `MODRINTH_PROJECT_ID` from a
+repository variable and `MODRINTH_TOKEN` from a repository secret. Moderation,
+permissions, members, monetization, gallery media, and deletion remain manual
+controls and are intentionally outside the sync schema.
+
 ---
 
 # schematic
