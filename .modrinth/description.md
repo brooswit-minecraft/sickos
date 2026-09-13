@@ -13,7 +13,7 @@ This is an early, playable build. It is a foundation for the Sickos world rather
 - Create Aeronautics
 - Create: Diesel Generators
 - Pam's HarvestCraft 2: Food Core, Crops, Trees, and Food Extended
-- Dynamic Atmosphere (early cloud/fog visual spike)
+- Dynamic Atmosphere (water-depth-driven fog and lightweight clouds)
 - Flowing Fluids
 - Countered's Terrain Slabs
 - Tectonic
@@ -28,7 +28,7 @@ This is an early, playable build. It is a foundation for the Sickos world rather
 - Sable
 - Default Options and Balm (client-side default server list)
 
-Project Atmosphere and Gabou's Libs were removed in 0.2.1 because their published dependency chain could not produce a working 1.21.1 installation. Our Dynamic Atmosphere alpha is intentionally a small visual/runtime spike, not a full weather simulation. It needs no world reset.
+Project Atmosphere and Gabou's Libs were removed in 0.2.1 because their published dependency chain could not produce a working 1.21.1 installation. Our Dynamic Atmosphere alpha adds persistent, water-depth-driven fog patches and lightweight clouds, not a full weather simulation. It needs no world reset.
 
 ## Install
 

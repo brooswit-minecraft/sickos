@@ -11,11 +11,12 @@ template below. Pinned mods live under `mods/`; `Rediculous Ore Generation` and
 stopped indexing both as of 2026-09-10 (see `docs/unknown-files-options.md`), so the pack
 can no longer pin them without triggering the Modrinth App's "Unknown files" warning.
 
-## Dynamic Atmosphere Spike
+## Dynamic Atmosphere
 
-Sickos 0.4.0 adds our first Dynamic Atmosphere alpha from Modrinth. This is a
-small visual delivery spike: bounded vanilla cloud particles near water and
-high terrain, not the planned atmospheric simulation. Operators can run
+Sickos 0.5.0 adds persistent water fog from Dynamic Atmosphere 0.2.0-alpha.1.
+Fog builds over nearby water, with deeper water producing denser patches.
+Work and particle output are bounded; the high-terrain cloud effect remains.
+This is not yet the planned full atmospheric simulation. Operators can run
 `/dynamicatmosphere status` and `/dynamicatmosphere demo` to verify execution.
 The same published jar is pinned on client and server. No world reset is needed.
 
