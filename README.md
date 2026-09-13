@@ -13,16 +13,16 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Atmosphere
 
-Sickos 0.11.0 pins Dynamic Atmosphere 0.8.0-alpha.1 for both client and server.
-Water condensation is a new feature,
-so this advances the minor version under CONTRIBUTING. It retains the slower
-0.7.1 cadence, persistent client visuals, and coarse far fog.
+Sickos 0.11.1 pins Dynamic Atmosphere 0.8.1-alpha.1 for both client and server.
+This compatible tuning patch increases scheduled delays to 40 times the original
+cadence (four times 0.11.0), following CONTRIBUTING. Condensation behavior per
+check, persistent client visuals, and coarse far fog are unchanged.
 
 **BREAKING behavior: 0.9.0 includes default-enabled destructive pressure, which
 can damage terrain and player builds without claim/protected-area support.
 Back up your world before upgrading. A downgrade does not restore broken blocks;
 restore the backup to undo terrain damage. This is a minor bump under the 0.x
-breaking-change policy. This feature release retains this terrain-damage risk;
+breaking-change policy. This patch retains this terrain-damage risk;
 hosted runtime/client verification is left to user testing.**
 
 **New water condensation also changes the world: water sources flow normally
@@ -33,7 +33,7 @@ roll tries one water source at a random air block in the same cell, never solids
 Only successful placement consumes 25% of the current material, rounded down
 with a minimum of 1 unit. No air or failed placement consumes nothing. Ultrawarm
 dimensions, including the Nether, skip both placement and consumption. This uses
-the existing 62.5-tick average scheduled cadence, subject to work budgets; it is
+the 250-tick (12.5-second at 20 TPS) scheduled cadence, subject to work budgets; it is
 not Minecraft rain. No data or world reset is required.
 
 Water fog, clouds, rain, and dark exposed ground feed 4x4x4-block cells. The new
@@ -49,18 +49,18 @@ unbreakable blocks are exempt; excess that still cannot escape remains blocked
 and reported, not deleted.
 
 There is no natural decay: daylight stops the dark-ground source but does not
-clear existing fog. Simulation/source cadence is now `250 * cellSize / 16`
-ticks: current 4-block cells average 62.5 ticks using 62/63 intervals, about
-3.125 seconds at 20 TPS. Check delays are ten times longer than the previous
-6.25 ticks in response to lag. Size 1 averages 15.625 ticks, size 16 uses 250,
-and size 32 uses 500. Cache/render/sync intervals are unchanged. Producer
+clear existing fog. Simulation/source cadence is now `1000 * cellSize / 16`
+ticks: current 4-block cells use 250 ticks, or 12.5 seconds at 20 TPS.
+Check delays are 40 times the original 6.25 ticks, up from the previous tenfold
+delay. Size 1 averages 62.5 ticks, size 16 uses 1000,
+and size 32 uses 2000. Cache/render/sync intervals are unchanged. Producer
 offsets expand from 12 to 96 blocks, still eight loaded-only samples per pass.
 Live cell visibility follows Minecraft's tracked chunks and effective client render
 distance, loaded chunks, and frustum, without fixed atmospheric radii or
 nearest-cell caps. Protocol 5 requires updating both client and server together;
 large snapshots complete with world identity, scope, and chunk freshness. Delta/full sync
 remain 20/200 ticks; work remains at most 128 source cells per tick. Pressure is
-still limited to four attempts per sampling interval, which is now ten times longer.
+still limited to four attempts per sampling interval, now 40 times the original delay.
 Sparse amounts save with Minecraft chunks and restore on
 reload/restart, with capacity recomputed. Unload releases the simulation mirror;
 there is no range-based deletion or global 1,024-cell cap. No world reset is
