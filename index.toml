@@ -40,6 +40,11 @@ hash = "a6967d761dde867ccc1af53dc9f4e530eb9917a9cb21d0fc15708e8cd2c0f2ba"
 metafile = true
 
 [[files]]
+file = "mods/dynamic-atmosphere.pw.toml"
+hash = "9ea74cefff7f227aa1d035ba31208b2ccec67dd8bde481e1641c9aecde982bd7"
+metafile = true
+
+[[files]]
 file = "mods/flowing-fluids.pw.toml"
 hash = "848ba3d5c40903b190d9fc2f92d7369a76e73cf8881b882787d28e7bde3ac637"
 metafile = true

@@ -1,6 +1,6 @@
 ## What this is
 
-Sickos is a Create-focused modpack for Minecraft 1.21.1 on NeoForge. The current release contains 12 mods and required libraries, pinned to exact versions and hashes for repeatable client and server installs.
+Sickos is a Create-focused modpack for Minecraft 1.21.1 on NeoForge. Mods and required libraries are pinned to exact versions and hashes for repeatable client and server installs.
 
 This is an early, playable build. It is a foundation for the Sickos world rather than a finished pack.
 
@@ -11,6 +11,9 @@ This is an early, playable build. It is a foundation for the Sickos world rather
 - Create
 - Create: Power Grid
 - Create Aeronautics
+- Create: Diesel Generators
+- Pam's HarvestCraft 2: Food Core, Crops, Trees, and Food Extended
+- Dynamic Atmosphere (early cloud/fog visual spike)
 - Flowing Fluids
 - Countered's Terrain Slabs
 - Tectonic
@@ -23,8 +26,9 @@ This is an early, playable build. It is a foundation for the Sickos world rather
 - GlitchCore
 - Lithostitched
 - Sable
+- Default Options and Balm (client-side default server list)
 
-Project Atmosphere and Gabou's Libs were removed in 0.2.1 because their published dependency chain could not produce a working 1.21.1 installation. A maintained cloud mod can return once it has a release-ready build.
+Project Atmosphere and Gabou's Libs were removed in 0.2.1 because their published dependency chain could not produce a working 1.21.1 installation. Our Dynamic Atmosphere alpha is intentionally a small visual/runtime spike, not a full weather simulation. It needs no world reset.
 
 ## Install
 

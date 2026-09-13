@@ -1,15 +1,23 @@
-# sickos
+# Sickos
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for version categories and the automated
 release process. Features advance minor; fixes advance patch.
 
 A [Create](https://modrinth.com/mod/create)-focused Minecraft **1.21.1 / NeoForge
-21.1.248** modpack, built from the [schematic](https://github.com/brooswit-minecraft/schematic)
+21.1.250** modpack, built from the [schematic](https://github.com/brooswit-minecraft/schematic)
 template below. Pinned mods live under `mods/`; `Rediculous Ore Generation` and
 `Immersive Weathering` are intentionally omitted — neither has a 1.21.1 release.
 `Project Atmosphere` (and its library dependency, GabouLibs) is also omitted: Modrinth
 stopped indexing both as of 2026-09-10 (see `docs/unknown-files-options.md`), so the pack
 can no longer pin them without triggering the Modrinth App's "Unknown files" warning.
+
+## Dynamic Atmosphere Spike
+
+Sickos 0.4.0 adds our first Dynamic Atmosphere alpha from Modrinth. This is a
+small visual delivery spike: bounded vanilla cloud particles near water and
+high terrain, not the planned atmospheric simulation. Operators can run
+`/dynamicatmosphere status` and `/dynamicatmosphere demo` to verify execution.
+The same published jar is pinned on client and server. No world reset is needed.
 
 ## HarvestCraft
 
