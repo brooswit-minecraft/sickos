@@ -13,9 +13,9 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Atmosphere
 
-Sickos 0.12.0 pins Dynamic Atmosphere 0.9.0-alpha.1 for both client and server.
-Distance-based client rendering LOD is a new feature, so this advances minor
-under CONTRIBUTING. The 250-tick simulation cadence,
+Sickos 0.13.0 pins Dynamic Atmosphere 0.10.0-alpha.1 for both client and server.
+This client-lighting feature advances minor under CONTRIBUTING: coarse fog uses
+Minecraft's current fog/horizon color and near fog follows local light. The 250-tick simulation cadence,
 condensation behavior per check, and persistent client visual cache are retained.
 
 **BREAKING behavior: 0.9.0 includes default-enabled destructive pressure, which
@@ -80,6 +80,14 @@ Aligned boundary volumes can remain finer; selection is spatially bounded and
 cached in 16-block camera regions. New views use temporary 32-block cached
 coverage while refining, and unloaded near chunks retain 16-block cached fog.
 Parents and detailed children never render over each other.
+Coarse LOD and cached fallback volumes use Minecraft's current fog/horizon color;
+nearby 4-block detail uses mean effective air-block light divided by 15 as grayscale,
+including sky darkening and block light. Dark air counts; non-air blocks do not.
+Loaded-only sampling is limited to 32 cells per client tick, with 20-tick refresh
+requests and neutral 50% gray before sampling. The disposable lighting cache is
+bounded to 8,192 cells and cleared on world changes. Cached spatial back-to-front composition
+handles mixed colors, including near unloaded fallbacks, with bounded GPU batches.
+Opacity, simulation, protocol, and personal cache formats are unchanged.
 
 The client visual cache retains previously seen areas across sessions and
 adds coarse far fog out to four times the client view distance. It is approximate
