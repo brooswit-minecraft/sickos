@@ -13,15 +13,15 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Atmosphere
 
-Sickos 0.10.0 pins Dynamic Atmosphere 0.7.0-alpha.1 for both client and server.
-Persistent client visuals and coarse far fog are new features, so this advances
-the minor version under CONTRIBUTING. It also includes the latest cadence tuning.
+Sickos 0.10.1 pins Dynamic Atmosphere 0.7.1-alpha.1 for both client and server.
+This compatible cadence-tuning patch
+retains the persistent client visuals and coarse far fog introduced in 0.10.0.
 
 **BREAKING behavior: 0.9.0 includes default-enabled destructive pressure, which
 can damage terrain and player builds without claim/protected-area support.
 Back up your world before upgrading. A downgrade does not restore broken blocks;
 restore the backup to undo terrain damage. This is a minor bump under the 0.x
-breaking-change policy. The new feature release retains this terrain-damage risk;
+breaking-change policy. This tuning patch retains this terrain-damage risk;
 hosted runtime/client verification is left to user testing.**
 
 Water fog, clouds, rain, and dark exposed ground feed 4x4x4-block cells. The new
@@ -37,15 +37,18 @@ unbreakable blocks are exempt; excess that still cannot escape remains blocked
 and reported, not deleted.
 
 There is no natural decay: daylight stops the dark-ground source but does not
-clear existing fog. The new simulation/source cadence is `25 * cellSize / 16`
-ticks: current 4-block cells average 6.25 ticks using 6/7 intervals. Producer
+clear existing fog. Simulation/source cadence is now `250 * cellSize / 16`
+ticks: current 4-block cells average 62.5 ticks using 62/63 intervals, about
+3.125 seconds at 20 TPS. Check delays are ten times longer than the previous
+6.25 ticks in response to lag. Size 1 averages 15.625 ticks, size 16 uses 250,
+and size 32 uses 500. Cache/render/sync intervals are unchanged. Producer
 offsets expand from 12 to 96 blocks, still eight loaded-only samples per pass.
 Live cell visibility follows Minecraft's tracked chunks and effective client render
 distance, loaded chunks, and frustum, without fixed atmospheric radii or
 nearest-cell caps. Protocol 5 requires updating both client and server together;
 large snapshots complete with world identity, scope, and chunk freshness. Delta/full sync
 remain 20/200 ticks; work remains at most 128 source cells per tick. Pressure is
-still limited to four attempts per sampling interval, so it can act more often.
+still limited to four attempts per sampling interval, which is now ten times longer.
 Sparse amounts save with Minecraft chunks and restore on
 reload/restart, with capacity recomputed. Unload releases the simulation mirror;
 there is no range-based deletion or global 1,024-cell cap. No world reset is
