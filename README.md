@@ -13,16 +13,28 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Atmosphere
 
-Sickos 0.10.1 pins Dynamic Atmosphere 0.7.1-alpha.1 for both client and server.
-This compatible cadence-tuning patch
-retains the persistent client visuals and coarse far fog introduced in 0.10.0.
+Sickos 0.11.0 pins Dynamic Atmosphere 0.8.0-alpha.1 for both client and server.
+Water condensation is a new feature,
+so this advances the minor version under CONTRIBUTING. It retains the slower
+0.7.1 cadence, persistent client visuals, and coarse far fog.
 
 **BREAKING behavior: 0.9.0 includes default-enabled destructive pressure, which
 can damage terrain and player builds without claim/protected-area support.
 Back up your world before upgrading. A downgrade does not restore broken blocks;
 restore the backup to undo terrain damage. This is a minor bump under the 0.x
-breaking-change policy. This tuning patch retains this terrain-damage risk;
+breaking-change policy. This feature release retains this terrain-damage risk;
 hosted runtime/client verification is left to user testing.**
+
+**New water condensation also changes the world: water sources flow normally
+and can wet builds. Back up worlds before upgrading.** On each cell's scheduled
+check, fullness above 50% gives a linear chance: 0% at 50%, 5% at 75%, and a
+maximum of 10% at or above 100%. At or below 50%, no placement occurs. A successful
+roll tries one water source at a random air block in the same cell, never solids.
+Only successful placement consumes 25% of the current material, rounded down
+with a minimum of 1 unit. No air or failed placement consumes nothing. Ultrawarm
+dimensions, including the Nether, skip both placement and consumption. This uses
+the existing 62.5-tick average scheduled cadence, subject to work budgets; it is
+not Minecraft rain. No data or world reset is required.
 
 Water fog, clouds, rain, and dark exposed ground feed 4x4x4-block cells. The new
 grid equalizes fullness across six face neighbors, with capacity proportional to

@@ -1,13 +1,13 @@
 name = "Dynamic Atmosphere"
-filename = "dynamicatmosphere-0.7.1-alpha.1.jar"
+filename = "dynamicatmosphere-0.8.0-alpha.1.jar"
 side = "both"
 
 [download]
-url = "https://cdn.modrinth.com/data/PZV7RorC/versions/GaoDTUPo/dynamicatmosphere-0.7.1-alpha.1.jar"
+url = "https://cdn.modrinth.com/data/PZV7RorC/versions/dteSqRaw/dynamicatmosphere-0.8.0-alpha.1.jar"
 hash-format = "sha512"
-hash = "9abd0aa34c4fa21d0df0ddf743450bad17c232c79b410ce06aa8ef5a10a841af8e1108788fa3201b8b0ae7c2b6e28c03e12015dcceafe7979e9d87921ce91fdd"
+hash = "142e0b73a67c7fdaf9b7d01c7b793fe255e88f7f703e122ae883f9f76e4a1618f7174e5fbba49e0dcc8dbe78333bde3552bc0a47daa0fdf9372ec89e9979145c"
 
 [update]
 [update.modrinth]
 mod-id = "PZV7RorC"
-version = "GaoDTUPo"
+version = "dteSqRaw"
