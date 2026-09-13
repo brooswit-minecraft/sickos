@@ -13,9 +13,12 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Atmosphere
 
-Sickos 0.5.0 adds persistent water fog from Dynamic Atmosphere 0.2.0-alpha.1.
-Fog builds over nearby water, with deeper water producing denser patches.
-Work and particle output are bounded; the high-terrain cloud effect remains.
+Sickos 0.6.0 adds the atmospheric grid from Dynamic Atmosphere 0.3.0-alpha.1.
+Fog and cloud emissions add material to world-aligned 16x16x16-block cells.
+Cells render transparently according to their material, which decays in place.
+Server state and nearby-client synchronization are bounded; no material flows
+between cells yet. This version requires the mod on both sides, so update your
+client before connecting.
 This is not yet the planned full atmospheric simulation. Operators can run
 `/dynamicatmosphere status` and `/dynamicatmosphere demo` to verify execution.
 The same published jar is pinned on client and server. No world reset is needed.
