@@ -13,8 +13,9 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Atmosphere
 
-Sickos 0.7.0 adds rain buildup from Dynamic Atmosphere 0.4.0-alpha.1.
-Water fog, clouds, and rain landing on exposed surfaces add material to world-aligned 16x16x16-block cells.
+Sickos 0.8.0 uses the finer atmospheric grid from Dynamic Atmosphere 0.5.0-alpha.1.
+Water fog, clouds, rain, and dark exposed ground add material to world-aligned 4x4x4-block cells.
+Nighttime ground fog stops building as daylight returns, allowing existing material to decay.
 Cells render transparently according to their material, which decays in place.
 Server state and nearby-client synchronization are bounded; no material flows
 between cells yet. This version requires the mod on both sides, so update your

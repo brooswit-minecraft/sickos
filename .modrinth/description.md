@@ -13,7 +13,7 @@ This is an early, playable build. It is a foundation for the Sickos world rather
 - Create Aeronautics
 - Create: Diesel Generators
 - Pam's HarvestCraft 2: Food Core, Crops, Trees, and Food Extended
-- Dynamic Atmosphere (translucent atmospheric grid with water, cloud, and rain buildup and local decay)
+- Dynamic Atmosphere (4-block atmospheric cells with water, cloud, rain, and nighttime ground buildup and local decay)
 - Flowing Fluids
 - Countered's Terrain Slabs
 - Tectonic
