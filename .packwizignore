@@ -1,5 +1,7 @@
 # Repo tooling and docs — not modpack content.
 README.md
+CONTRIBUTING.md
+AGENTS.md
 LICENSE
 Makefile
 .gitignore

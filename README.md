@@ -1,5 +1,8 @@
 # sickos
 
+See [CONTRIBUTING.md](CONTRIBUTING.md) for version categories and the automated
+release process. Features advance minor; fixes advance patch.
+
 A [Create](https://modrinth.com/mod/create)-focused Minecraft **1.21.1 / NeoForge
 21.1.248** modpack, built from the [schematic](https://github.com/brooswit-minecraft/schematic)
 template below. Pinned mods live under `mods/`; `Rediculous Ore Generation` and
@@ -211,12 +214,13 @@ still finishes green) when it isn't configured.
 
 `.github/workflows/release.yml` cuts a release. To publish a new version:
 
-1. Create a GitHub Release with a tag of the form `vX.Y.Z` (e.g. `v0.2.0`).
-2. On publish, the workflow:
-   - sets the pack version from the tag (in-workflow only — nothing is committed back),
+1. Choose the bump using [CONTRIBUTING.md](CONTRIBUTING.md), update `pack.toml`,
+   refresh and validate the pack, then push the change to `main`.
+2. On the pack-changing push, the workflow:
+   - reads the version from `pack.toml`,
    - builds `build/<name>-<version>.mrpack` with the same `make` targets used locally
      and in CI,
-   - attaches the `.mrpack` to the GitHub Release as a download,
+   - creates the GitHub Release and version tag, attaching the `.mrpack`,
    - publishes the same file to Modrinth, if Modrinth is configured (see
      [Secrets & variables](#secrets--variables) above).
 
@@ -233,7 +237,7 @@ step, the same as any run without Modrinth configured.
 
 ## Deploying to a Modrinth Server
 
-`.github/workflows/server-update.yml` runs on a published GitHub release, or on demand
+`.github/workflows/server-update.yml` runs after the Release workflow succeeds, or on demand
 via `workflow_dispatch` (with an optional `version` input; it otherwise falls back to
 the `version` field in `pack.toml`). Publishing to Modrinth happens on release (see
 [Releasing](#releasing) above); a [Modrinth-hosted server](https://modrinth.com/servers)
