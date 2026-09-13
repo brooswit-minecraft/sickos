@@ -9,3 +9,6 @@ bump major. Documentation/listing/CI-only edits need no pack release.
 Preserve published versions. Use pack.toml and the existing CI release/deployment
 chain. Check client/server dependency sides and report only verification actually
 performed; server readiness alone does not prove the client can launch or join.
+
+Only add mods hosted on Modrinth with native NeoForge builds for Minecraft 1.21.1.
+Do not add CurseForge-only jars or Fabric compatibility bridges.
