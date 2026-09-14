@@ -458,6 +458,9 @@ restart Minecraft.
 0.75). `enderGas.portalBlockEmission` sets the integer amount emitted per portal
 block per producer pass (default 100, zero disables it). These join
 `integrations.createFanTransportPerRpm` in the repository-owned tuning file.
+The independent fan pass uses `integrations.createFanIntervalTicks` (100 ticks,
+five seconds) and `integrations.maxFanChunksPerTick` (32). It never uses the
+ordinary simulation skip setting. These values are also synchronized by CI.
 
 ## Working on the pack
 

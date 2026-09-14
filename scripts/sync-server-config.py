@@ -20,6 +20,8 @@ CONFIG_PATH = "dynamicatmosphere-server.toml"
 MAX_REMOTE_CONFIG_BYTES = 1024 * 1024
 ALLOWED = {
     ("integrations", "createFanTransportPerRpm"): (0.0, 1000.0),
+    ("integrations", "createFanIntervalTicks"): (1, 72000),
+    ("integrations", "maxFanChunksPerTick"): (1, 10000),
     ("runtime", "simulationSkipChance"): (0.0, 1.0),
     ("enderGas", "portalBlockEmission"): (0, 1_000_000),
 }
@@ -42,9 +44,11 @@ def load_tuning(path):
             minimum, maximum = ALLOWED[field]
             if not minimum <= value <= maximum:
                 raise ValueError(f"Server tuning field is outside its supported range: {section}.{key}")
-            if field == ("enderGas", "portalBlockEmission"):
+            if field in {("enderGas", "portalBlockEmission"),
+                         ("integrations", "createFanIntervalTicks"),
+                         ("integrations", "maxFanChunksPerTick")}:
                 if not isinstance(value, int):
-                    raise ValueError("Portal emission must be an integer")
+                    raise ValueError(f"Server tuning field must be an integer: {section}.{key}")
                 flattened[field] = value
             else:
                 flattened[field] = float(value)
