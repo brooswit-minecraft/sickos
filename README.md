@@ -13,13 +13,15 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Atmosphere
 
-Sickos 0.16.1 pins Dynamic Atmosphere 0.13.1-alpha.1 for client and server.
-This compatible optimization patch reduces near-volume rendering from eight
-slices to four while preserving integrated opacity and skips empty geometry.
-Simulation, fog color, LOD reach, and persistent atmosphere are unchanged.
+Sickos 0.16.2 pins Dynamic Atmosphere 0.13.2-alpha.1 for client and server.
+This compatible patch restores rain emission altitude from Y=300 to Y=192,
+retaining 320 units per passed check without moving or clearing existing atmosphere.
+The preceding rendering optimization remains: near-volume rendering uses four
+slices instead of eight while preserving integrated opacity and skips empty geometry.
+All other simulation, fog color, LOD reach, and persistent atmosphere are unchanged.
 The preceding 0.16.0 minor release added snow/ice vapor.
 Sampled surface snow and ice add 40 material without removing blocks, using the
-existing producer gate and WORLD_SURFACE heightmap. Rain emissions move to Y=300.
+existing producer gate and WORLD_SURFACE heightmap. Rain emissions now use Y=192.
 Each due simulation turn has a 50% chance to skip work until its next normal turn;
 the 200-tick base schedule remains. Loaded-chunk capacity caching avoids repeated
 terrain scans until air occupancy changes, and redundant sync sorting/persistence
@@ -69,7 +71,7 @@ schedule passes every 300 ticks (15 seconds at 20 TPS) across all loaded chunks.
 Each chunk has a random 10% default gate and one random X/Z column per pass.
 A bounded fair queue allows backlog, so a scheduled pass need not finish within
 15 seconds. No chunks are force-loaded. Cache/render/sync intervals are unchanged.
-Rain checks emit 320 units at cloud height Y=300, eight times the previous 40,
+Rain checks emit 320 units at cloud height Y=192, eight times the previous 40,
 replacing ground-level rain fog. High-terrain clouds and dark exposed-ground sources remain.
 Sampled water now evaporates: plain water fluid blocks become air; waterlogged
 blocks retain their host with WATERLOGGED cleared. Non-water solids and unsupported
