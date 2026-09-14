@@ -13,7 +13,9 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Atmosphere
 
-Sickos 0.19.2 pins Dynamic Atmosphere 0.16.2-alpha.1 for client and server.
+Sickos 0.20.0 pins Dynamic Atmosphere 0.17.0-alpha.1 for client and server.
+Ender Gas now uses 2x2x2 cells; old one-block cells migrate on load. Random
+full-moon Ender Gas bursts are removed, while portal and other sources remain.
 Lava now produces one tenth as much Smoke (4 units instead of 40), including
 add/remove events. Existing material is preserved.
 This minor gameplay release enables all seven independent materials: Vapor, Smoke,
