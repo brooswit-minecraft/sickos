@@ -1,6 +1,9 @@
 {
-  "vapor": {
-    "skipChance": 0.75
+  "runtime": {
+    "simulationSkipChance": 0.75
+  },
+  "enderGas": {
+    "portalBlockEmission": 100
   },
   "integrations": {
     "createFanTransportPerRpm": 1.0

@@ -48,10 +48,10 @@ class ServerConfigSyncTest(unittest.TestCase):
     def test_tuning_schema_accepts_only_bounded_owned_field(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.json"
-            path.write_text(json.dumps({"integrations": {"createFanTransportPerRpm": 1}, "vapor": {"skipChance": 0.75}}))
+            path.write_text(json.dumps({"integrations": {"createFanTransportPerRpm": 1}, "runtime": {"simulationSkipChance": 0.75}, "enderGas": {"portalBlockEmission": 100}}))
             self.assertEqual(
-                {("integrations", "createFanTransportPerRpm"): 1.0, ("vapor", "skipChance"): 0.75}, sync.load_tuning(path))
-            path.write_text(json.dumps({"integrations": {"createFanTransportPerRpm": 1}, "vapor": {"skipChance": 1.01}}))
+                {("integrations", "createFanTransportPerRpm"): 1.0, ("runtime", "simulationSkipChance"): 0.75, ("enderGas", "portalBlockEmission"): 100}, sync.load_tuning(path))
+            path.write_text(json.dumps({"integrations": {"createFanTransportPerRpm": 1}, "runtime": {"simulationSkipChance": 1.01}, "enderGas": {"portalBlockEmission": 100}}))
             with self.assertRaises(ValueError):
                 sync.load_tuning(path)
             path.write_text(json.dumps({"integrations": {"other": 1}}))
