@@ -13,9 +13,10 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Atmosphere
 
-Sickos 0.20.1 pins Dynamic Atmosphere 0.17.1-alpha.1 for client and server.
-Create fan transfers run before normal distribution on selected simulation steps,
-sharing the same 75% skip decision. Fan movement counters are available in status.
+Sickos 0.21.0 pins Dynamic Atmosphere 0.18.0-alpha.1 for client and server.
+Create fan transfers run independently every five seconds, without a skip roll.
+Destinations with empty space can be overfilled, causing normal pressure handling
+and possible block destruction. Fan cadence and movement counters are in status.
 Ender Gas now uses 2x2x2 cells; old one-block cells migrate on load. Random
 full-moon Ender Gas bursts are removed, while portal and other sources remain.
 Lava now produces one tenth as much Smoke (4 units instead of 40), including
@@ -28,13 +29,14 @@ All materials share configurable 200-tick simulation and 300-tick scheduled prod
 intervals, with independent cell sizes and distance cutoffs. Smoke now uses 4-block
 cells, with automatic mass-preserving migration. Crying Obsidian produces Ender Gas.
 Powered Create fans move material toward their facing neighbor, proportional to RPM
-and limited by capacity. Live tuning raises fan transport 10x to 1.0 material per RPM
-after spread. The mod fixes X/Z and source-order bias in spreading.
+at 1.0 material per RPM per pass. A 256 RPM fan requests 256 units of each material
+present, bounded by source material and the numeric storage ceiling, not spare
+capacity. The mod fixes X/Z and source-order bias in spreading.
 Smoke interaction chances are ten times their old defaults,
 capped at 100%. Gameplay and rendering settings are configurable without rebuilding.
 Pressure can break neighboring blocks with a chance proportional to the source
 cell's empty space. Liquids count as capacity, but liquids and bedrock prevent downward
-transfers. Update both sides together for protocol 9; no world reset is required.
+transfers. Update both sides together for protocol 10; no world reset is required.
 Peaceful Nights is removed: natural surface hostile spawning instead requires
 more than 50% Vapor fullness, without consuming material, and retains other normal
 spawn restrictions. Existing worlds and accumulated material are preserved.
