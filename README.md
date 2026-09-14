@@ -13,7 +13,7 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Atmosphere
 
-Sickos 0.19.0 pins Dynamic Atmosphere 0.16.0-alpha.1 for client and server.
+Sickos 0.19.1 pins Dynamic Atmosphere 0.16.1-alpha.1 for client and server.
 Lava now produces one tenth as much Smoke (4 units instead of 40), including
 add/remove events. Existing material is preserved.
 This minor gameplay release enables all seven independent materials: Vapor, Smoke,
@@ -24,7 +24,9 @@ All materials share configurable 200-tick simulation and 300-tick scheduled prod
 intervals, with independent cell sizes and distance cutoffs. Smoke now uses 4-block
 cells, with automatic mass-preserving migration. Crying Obsidian produces Ender Gas.
 Powered Create fans move material toward their facing neighbor, proportional to RPM
-and limited by capacity. Smoke interaction chances are ten times their old defaults,
+and limited by capacity. Live tuning raises fan transport 10x to 1.0 material per RPM
+after spread. The mod fixes X/Z and source-order bias in spreading.
+Smoke interaction chances are ten times their old defaults,
 capped at 100%. Gameplay and rendering settings are configurable without rebuilding.
 Pressure can break neighboring blocks with a chance proportional to the source
 cell's empty space. Liquids count as capacity, but liquids and bedrock prevent downward
@@ -436,9 +438,10 @@ through `bunx`, so nothing needs installing in your repo.
 Repository-owned settings in `server-config.json` are synchronized by
 `.github/workflows/server-tuning.yml` whenever that file changes, or on manual
 dispatch. The workflow reads `level-name` from the hosted `server.properties`, then
-updates only those listed fields in
-`<level-name>/serverconfig/dynamicatmosphere-server.toml` through strict-host-key
-SFTP and verifies the atomic upload. It uses the same `SERVER_SFTP_*` repository
+requires exactly one existing Dynamic Atmosphere config: the modern
+`config/dynamicatmosphere-server.toml` path or the legacy
+`<level-name>/serverconfig/dynamicatmosphere-server.toml` path. It updates only the
+listed fields through strict-host-key SFTP and verifies the atomic upload. It uses the same `SERVER_SFTP_*` repository
 variables and secrets as the SFTP deployment route and shares that route's
 concurrency lock. NeoForge reloads this server config; the tuning workflow does not
 restart Minecraft.

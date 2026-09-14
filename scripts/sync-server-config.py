@@ -7,6 +7,7 @@ import math
 import os
 from pathlib import Path, PurePosixPath
 import re
+import stat
 import sys
 import tempfile
 import uuid
@@ -59,10 +60,31 @@ def safe_root(value):
     return str(path).rstrip("/") or "/"
 
 
-def remote_path(root, world):
+def joined(root, suffix):
     root = safe_root(root)
-    suffix = f"{world}/serverconfig/{CONFIG_PATH}"
     return "/" + suffix if root == "/" else f"{root}/{suffix}"
+
+
+def config_candidates(root, world):
+    return (
+        joined(root, f"config/{CONFIG_PATH}"),
+        joined(root, f"{world}/serverconfig/{CONFIG_PATH}"),
+    )
+
+
+def resolve_config_path(sftp, root, world):
+    existing = []
+    for candidate in config_candidates(root, world):
+        try:
+            mode = sftp.stat(candidate).st_mode
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISREG(mode):
+            raise ValueError("Dynamic Atmosphere config candidate is not a regular file")
+        existing.append(candidate)
+    if len(existing) != 1:
+        raise ValueError("Expected exactly one Dynamic Atmosphere server config candidate")
+    return existing[0]
 
 
 def patch_toml(original, tuning):
@@ -104,18 +126,8 @@ def synchronize(sftp, root, tuning):
     normalized_root = safe_root(root)
     properties_path = "/server.properties" if normalized_root == "/" else f"{normalized_root}/server.properties"
     properties = read_remote(sftp, properties_path)
-    target = remote_path(root, level_name(properties))
-    try:
-        original = read_remote(sftp, target)
-    except FileNotFoundError:
-        print(f"Expected config missing: {target}")
-        for directory in (normalized_root, str(PurePosixPath(target).parent),
-                          str(PurePosixPath(normalized_root) / "config")):
-            try:
-                print(f"Directory {directory}: {sorted(sftp.listdir(directory))}")
-            except OSError:
-                print(f"Directory unavailable: {directory}")
-        raise
+    target = resolve_config_path(sftp, root, level_name(properties))
+    original = read_remote(sftp, target)
     updated = patch_toml(original, tuning)
     if updated == original:
         return

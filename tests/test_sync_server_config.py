@@ -2,7 +2,9 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import stat
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 
@@ -36,6 +38,11 @@ class MemorySftp:
             raise FileNotFoundError(path)
         del self.files[path]
 
+    def stat(self, path):
+        if path not in self.files:
+            raise FileNotFoundError(path)
+        return SimpleNamespace(st_mode=stat.S_IFREG | 0o600)
+
 
 class ServerConfigSyncTest(unittest.TestCase):
     def test_tuning_schema_accepts_only_bounded_owned_field(self):
@@ -59,7 +66,7 @@ class ServerConfigSyncTest(unittest.TestCase):
         self.assertIn("simulationIntervalTicks = 200 # cadence", updated)
         self.assertIn("createFanTransportPerRpm = 1.0 # old", updated)
 
-    def test_sync_uses_world_name_atomic_rename_and_exact_readback(self):
+    def test_sync_supports_legacy_world_serverconfig_layout(self):
         target = "/srv/minecraft/world-two/serverconfig/dynamicatmosphere-server.toml"
         sftp = MemorySftp({
             "/srv/minecraft/server.properties": b"motd=Sickos\nlevel-name=world-two\n",
@@ -75,6 +82,29 @@ class ServerConfigSyncTest(unittest.TestCase):
             ("integrations", "createFanTransportPerRpm"): 1.0,
         })
         self.assertEqual(1, sftp.renames)
+
+    def test_sync_supports_modern_root_config_layout(self):
+        target = "/srv/minecraft/config/dynamicatmosphere-server.toml"
+        sftp = MemorySftp({
+            "/srv/minecraft/server.properties": b"level-name=world\n",
+            target: b"[integrations]\ncreateFanTransportPerRpm = 0.1\n",
+        })
+        sync.synchronize(sftp, "/srv/minecraft", {
+            ("integrations", "createFanTransportPerRpm"): 1.0,
+        })
+        self.assertIn(b"createFanTransportPerRpm = 1.0", sftp.files[target])
+
+    def test_sync_refuses_ambiguous_modern_and_legacy_layouts(self):
+        sftp = MemorySftp({
+            "/srv/minecraft/server.properties": b"level-name=world\n",
+            "/srv/minecraft/config/dynamicatmosphere-server.toml": b"[integrations]\n",
+            "/srv/minecraft/world/serverconfig/dynamicatmosphere-server.toml": b"[integrations]\n",
+        })
+        with self.assertRaises(ValueError):
+            sync.synchronize(sftp, "/srv/minecraft", {
+                ("integrations", "createFanTransportPerRpm"): 1.0,
+            })
+        self.assertEqual(0, sftp.renames)
 
     def test_rejects_unsafe_world_and_server_root(self):
         with self.assertRaises(ValueError):
