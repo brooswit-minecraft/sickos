@@ -13,8 +13,15 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Atmosphere
 
-Sickos 0.15.1 pins Dynamic Atmosphere 0.12.2-alpha.1 for client and server.
-This compatible patch fixes fluid transport incorrectly emitting atmospheric material.
+Sickos 0.16.0 pins Dynamic Atmosphere 0.13.0-alpha.1 for client and server.
+This minor feature release adds snow/ice vapor under CONTRIBUTING's version policy.
+Sampled surface snow and ice add 40 material without removing blocks, using the
+existing producer gate and WORLD_SURFACE heightmap. Rain emissions move to Y=300.
+Each due simulation turn has a 50% chance to skip work until its next normal turn;
+the 200-tick base schedule remains. Loaded-chunk capacity caching avoids repeated
+terrain scans until air occupancy changes, and redundant sync sorting/persistence
+rewrites are removed. No world reset or accumulated-atmosphere clear is performed.
+The fluid-transport false-emission fix remains enabled.
 Biome-driven evaporation remains; existing accumulated atmosphere is not removed.
 Loaded-chunk producer passes run every 15 seconds with a 10% per-chunk gate.
 All atmosphere volumes now use Minecraft's current fog/horizon color, replacing
@@ -59,7 +66,7 @@ schedule passes every 300 ticks (15 seconds at 20 TPS) across all loaded chunks.
 Each chunk has a random 10% default gate and one random X/Z column per pass.
 A bounded fair queue allows backlog, so a scheduled pass need not finish within
 15 seconds. No chunks are force-loaded. Cache/render/sync intervals are unchanged.
-Rain checks emit 320 units at cloud height Y=192, eight times the previous 40,
+Rain checks emit 320 units at cloud height Y=300, eight times the previous 40,
 replacing ground-level rain fog. High-terrain clouds and dark exposed-ground sources remain.
 Sampled water now evaporates: plain water fluid blocks become air; waterlogged
 blocks retain their host with WATERLOGGED cleared. Non-water solids and unsupported
