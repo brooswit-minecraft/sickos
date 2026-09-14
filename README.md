@@ -13,9 +13,11 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Atmosphere
 
-Sickos 0.14.0 pins Dynamic Atmosphere 0.11.0-alpha.1 for client and server.
-Smooth near-gray to horizon-color blending and
-loaded-chunk producers are new features, advancing minor under CONTRIBUTING.
+Sickos 0.15.0 pins Dynamic Atmosphere 0.12.1-alpha.1 for client and server.
+This minor feature release adds real sampled-water evaporation under CONTRIBUTING.
+Loaded-chunk producer passes run every 15 seconds with a 10% per-chunk gate.
+All atmosphere volumes now use Minecraft's current fog/horizon color, replacing
+local light-based grayscale and distance color blending. Loaded-chunk producers remain.
 Condensation behavior
 per due check and the persistent client visual cache are retained.
 
@@ -23,7 +25,7 @@ per due check and the persistent client visual cache are retained.
 can damage terrain and player builds without claim/protected-area support.
 Back up your world before upgrading. A downgrade does not restore broken blocks;
 restore the backup to undo terrain damage. This is a minor bump under the 0.x
-breaking-change policy. This feature release retains this terrain-damage risk;
+breaking-change policy. This release retains this terrain-damage risk;
 hosted runtime/client verification is left to user testing.**
 
 **New water condensation also changes the world: water sources flow normally
@@ -52,15 +54,33 @@ and reported, not deleted.
 There is no natural decay: daylight stops the dark-ground source but does not
 clear existing fog. Simulation now uses fixed 200-tick checks (10 seconds at
 20 TPS), replacing the old size-based 250-tick cadence. Producers independently
-schedule passes every 50 ticks (2.5 seconds at 20 TPS) across all loaded chunks.
-Each chunk has a random 25% default gate and one random X/Z column per pass.
+schedule passes every 300 ticks (15 seconds at 20 TPS) across all loaded chunks.
+Each chunk has a random 10% default gate and one random X/Z column per pass.
 A bounded fair queue allows backlog, so a scheduled pass need not finish within
-2.5 seconds. No chunks are force-loaded. Cache/render/sync intervals are unchanged.
+15 seconds. No chunks are force-loaded. Cache/render/sync intervals are unchanged.
 Rain checks emit 320 units at cloud height Y=192, eight times the previous 40,
-replacing ground-level rain fog. Water-depth fog, high-terrain clouds, and dark
-exposed-ground sources remain. A water-to-nonwater block transition also emits
-40 material units at that position; ordinary water-level changes and chunk
-unloads do not trigger this source.
+replacing ground-level rain fog. High-terrain clouds and dark exposed-ground sources remain.
+Sampled water now evaporates: plain water fluid blocks become air; waterlogged
+blocks retain their host with WATERLOGGED cleared. Non-water solids and unsupported
+water-containing hosts are preserved. This removes real water, including condensed
+water, and natural fluid updates may refill it. No world reset or migration is required.
+After the outer 10% chunk gate, scheduled water evaporation gets a second chance
+of `clamp(biome temperature / 2, 0, 1)`: temperature 0.8 gives 40%, 2 gives 100%,
+and 0 or below never evaporates. Only the scheduled producer uses this roll.
+Every successful water-to-nonwater mutation, including manual removals, emits
+`round(10 + 70 * clamp(biome downfall, 0, 1))` material units (10 dry to 80 wet).
+Downfall is a biome humidity proxy, not instantaneous rain or weather; climate
+comes from the loaded chunk's biome. Humidity is captured at removal and queued
+amounts are added without a second producer emission. Ordinary water-level
+changes, failed mutations, and chunk unloads do not trigger this source.
+
+After bounded spreading, a selected due cell with at most 10 units can move its
+entire amount into an existing, loaded cell on one of the four horizontal faces or directly below (never above), with strictly more
+material and enough free capacity for the whole amount. Equal amounts never merge.
+Prefer the largest eligible destination with deterministic ties; no new cell,
+chunk load, or pressure overflow is created. The empty source is removed and both
+changes are persisted and synchronized. Solitary or blocked cells retain material.
+
 Live cell visibility follows Minecraft's tracked chunks and effective client render
 distance, loaded chunks, and frustum, without fixed atmospheric radii or
 nearest-cell caps. Protocol 5 requires updating both client and server together;
@@ -86,16 +106,11 @@ Aligned boundary volumes can remain finer; selection is spatially bounded and
 cached in 16-block camera regions. New views use temporary 32-block cached
 coverage while refining, and unloaded near chunks retain 16-block cached fog.
 Parents and detailed children never render over each other.
-Nearby color remains light-based grayscale through `V/2`, then uses smoothstep
-to reach Minecraft's full current fog/horizon color at `V`. Coarse volumes in
-the blend region use air-count-weighted base-cell light averages.
-Near detail uses mean effective air-block light divided by 15 as grayscale,
-including sky darkening and block light. Dark air counts; non-air blocks do not.
-Loaded-only sampling is limited to 32 base cells per client tick, with 20-tick refresh
-requests and neutral 50% gray before sampling. The disposable lighting cache is
-bounded to 8,192 volumes and cleared on world changes. Cached spatial back-to-front composition
-handles mixed colors, including near unloaded fallbacks, with bounded GPU batches.
-The blend preserves opacity, protocol, and personal cache formats.
+All near, far, and fallback atmosphere volumes use Minecraft's current fog/horizon
+color from one snapshot per frame. Local light-based grayscale, distance color
+blending, and client terrain-light sampling are removed. Constant RGB and no depth
+writes allow bounded GPU batches without volume sorting. LOD coverage, opacity,
+protocol, and personal cache formats are unchanged.
 
 The client visual cache retains previously seen areas across sessions and
 adds coarse far fog out to four times the client view distance. It is approximate
