@@ -13,8 +13,11 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Atmosphere
 
-Sickos 0.16.0 pins Dynamic Atmosphere 0.13.0-alpha.1 for client and server.
-This minor feature release adds snow/ice vapor under CONTRIBUTING's version policy.
+Sickos 0.16.1 pins Dynamic Atmosphere 0.13.1-alpha.1 for client and server.
+This compatible optimization patch reduces near-volume rendering from eight
+slices to four while preserving integrated opacity and skips empty geometry.
+Simulation, fog color, LOD reach, and persistent atmosphere are unchanged.
+The preceding 0.16.0 minor release added snow/ice vapor.
 Sampled surface snow and ice add 40 material without removing blocks, using the
 existing producer gate and WORLD_SURFACE heightmap. Rain emissions move to Y=300.
 Each due simulation turn has a 50% chance to skip work until its next normal turn;
