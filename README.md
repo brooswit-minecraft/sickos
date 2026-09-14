@@ -13,15 +13,22 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Atmosphere
 
-Sickos 0.18.0 pins Dynamic Atmosphere 0.15.0-alpha.1 for client and server.
+Sickos 0.19.0 pins Dynamic Atmosphere 0.16.0-alpha.1 for client and server.
+Lava now produces one tenth as much Smoke (4 units instead of 40), including
+add/remove events. Existing material is preserved.
 This minor gameplay release enables all seven independent materials: Vapor, Smoke,
 Dust, Ender Gas, Violence, Exhaust, and Slime. Producers and interactions include
 movement dust, explosion smoke, portal gas, crop growth, suffocation, and mob spawning.
-Smoke, Ender Gas, Violence, and Slime have four times the optical density.
-Each material has its own cell size, simulation interval, and distance cutoff.
+Smoke, Violence, and Slime have four times the optical density; Ender Gas has 40x.
+All materials share configurable 200-tick simulation and 300-tick scheduled production
+intervals, with independent cell sizes and distance cutoffs. Smoke now uses 4-block
+cells, with automatic mass-preserving migration. Crying Obsidian produces Ender Gas.
+Powered Create fans move material toward their facing neighbor, proportional to RPM
+and limited by capacity. Smoke interaction chances are ten times their old defaults,
+capped at 100%. Gameplay and rendering settings are configurable without rebuilding.
 Pressure can break neighboring blocks with a chance proportional to the source
-cell's empty space. Bedrock prevents downward transfers. Update both sides together
-for protocol 8; no world reset or atmosphere clearing is required.
+cell's empty space. Liquids count as capacity, but liquids and bedrock prevent downward
+transfers. Update both sides together for protocol 9; no world reset is required.
 Peaceful Nights is removed: natural surface hostile spawning instead requires
 more than 50% Vapor fullness, without consuming material, and retains other normal
 spawn restrictions. Existing worlds and accumulated material are preserved.
@@ -128,8 +135,9 @@ client and server together. Operators can use `/dynamicatmosphere status` and
 
 Client rendering uses three non-overlapping LOD bands. With Minecraft client
 view distance `V` expressed in blocks, render 4x4x4-block volumes below `V/2`,
-8x8x8 in `[V/2, V)`, and 16x16x16 in `[V, 2V]`. Smoke uses 8-, 16-, and
-32-block volumes in the same bands. Both stop at 2V, including cached fallback.
+8x8x8 in `[V/2, V)`, and 16x16x16 in `[V, 2V]`. Smoke uses the same sizes
+and bands. Both stop at 2V, including cached fallback. Every LOD uses the same
+detailed slice spacing as nearby atmosphere; distant cells are still aggregated.
 Each coarser volume recursively averages eight children, including empty volumes;
 coarse parents are not drawn on top of their finer children. This reduces the
 number of volumes and slices at distance, not server simulation resolution.
