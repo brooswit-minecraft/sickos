@@ -13,8 +13,11 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Atmosphere
 
-Sickos 0.21.1 pins Dynamic Atmosphere 0.18.1-alpha.1 for client and server.
+Sickos 0.22.0 pins Dynamic Atmosphere 0.19.0-alpha.1 for client and server.
 Create fan transfers run independently every five seconds, without a skip roll.
+Positive RPM pulls evenly from the five non-facing neighbors before pushing forward.
+Negative RPM draws from the facing neighbor before distributing evenly to the other
+five. Intake works from an empty fan cell, and blocked output retains intake.
 Fans only affect cells up to 4x4x4: Vapor, Smoke, Dust, Exhaust, and Ender Gas.
 Violence and Slime are unaffected.
 Destinations with empty space can be overfilled, causing normal pressure handling
@@ -30,10 +33,11 @@ Smoke, Violence, and Slime have four times the optical density; Ender Gas has 40
 All materials share configurable 200-tick simulation and 300-tick scheduled production
 intervals, with independent cell sizes and distance cutoffs. Smoke now uses 4-block
 cells, with automatic mass-preserving migration. Crying Obsidian produces Ender Gas.
-Powered Create fans move material toward their facing neighbor, proportional to RPM
-at 1.0 material per RPM per pass. A 256 RPM fan requests 256 units of each material
-present, bounded by source material and the numeric storage ceiling, not spare
-capacity. The mod fixes X/Z and source-order bias in spreading.
+Fan intake and output each share a budget of 1.0 material per absolute RPM per pass.
+A 256 RPM fan requests up to 256 units per stage per supported material, bounded by
+available material and the numeric storage ceiling, not spare capacity. Shortfalls
+redistribute and integer remainders rotate to avoid fixed-axis bias.
+The mod fixes X/Z and source-order bias in spreading.
 Smoke interaction chances are ten times their old defaults,
 capped at 100%. Gameplay and rendering settings are configurable without rebuilding.
 Pressure can break neighboring blocks with a chance proportional to the source
