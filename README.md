@@ -13,7 +13,9 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Atmosphere
 
-Sickos 0.20.0 pins Dynamic Atmosphere 0.17.0-alpha.1 for client and server.
+Sickos 0.20.1 pins Dynamic Atmosphere 0.17.1-alpha.1 for client and server.
+Create fan transfers run before normal distribution on selected simulation steps,
+sharing the same 75% skip decision. Fan movement counters are available in status.
 Ender Gas now uses 2x2x2 cells; old one-block cells migrate on load. Random
 full-moon Ender Gas bursts are removed, while portal and other sources remain.
 Lava now produces one tenth as much Smoke (4 units instead of 40), including
