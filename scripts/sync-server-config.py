@@ -105,7 +105,17 @@ def synchronize(sftp, root, tuning):
     properties_path = "/server.properties" if normalized_root == "/" else f"{normalized_root}/server.properties"
     properties = read_remote(sftp, properties_path)
     target = remote_path(root, level_name(properties))
-    original = read_remote(sftp, target)
+    try:
+        original = read_remote(sftp, target)
+    except FileNotFoundError:
+        print(f"Expected config missing: {target}")
+        for directory in (normalized_root, str(PurePosixPath(target).parent),
+                          str(PurePosixPath(normalized_root) / "config")):
+            try:
+                print(f"Directory {directory}: {sorted(sftp.listdir(directory))}")
+            except OSError:
+                print(f"Directory unavailable: {directory}")
+        raise
     updated = patch_toml(original, tuning)
     if updated == original:
         return
