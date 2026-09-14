@@ -13,15 +13,18 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Atmosphere
 
-Sickos 0.16.2 pins Dynamic Atmosphere 0.13.2-alpha.1 for client and server.
-This compatible patch restores rain emission altitude from Y=300 to Y=192,
-retaining 320 units per passed check without moving or clearing existing atmosphere.
+Sickos 0.17.0 pins Dynamic Atmosphere 0.14.0-alpha.1 for client and server.
+This minor gameplay release adds black Smoke from fire in independent, chunk-persisted
+8-block cells. Vapor remains separate. Both materials stop rendering at twice the
+client view distance; bedrock in a source cell prevents downward transfer.
+Peaceful Nights is removed: natural surface hostile spawning instead requires
+more than 50% Vapor fullness, without consuming material, and retains other normal
+spawn restrictions. Existing worlds and accumulated material are preserved.
 The preceding rendering optimization remains: near-volume rendering uses four
 slices instead of eight while preserving integrated opacity and skips empty geometry.
-All other simulation, fog color, LOD reach, and persistent atmosphere are unchanged.
 The preceding 0.16.0 minor release added snow/ice vapor.
 Sampled surface snow and ice add 40 material without removing blocks, using the
-existing producer gate and WORLD_SURFACE heightmap. Rain emissions now use Y=192.
+existing producer gate and WORLD_SURFACE heightmap.
 Each due simulation turn has a 50% chance to skip work until its next normal turn;
 the 200-tick base schedule remains. Loaded-chunk capacity caching avoids repeated
 terrain scans until air occupancy changes, and redundant sync sorting/persistence
@@ -29,7 +32,7 @@ rewrites are removed. No world reset or accumulated-atmosphere clear is performe
 The fluid-transport false-emission fix remains enabled.
 Biome-driven evaporation remains; existing accumulated atmosphere is not removed.
 Loaded-chunk producer passes run every 15 seconds with a 10% per-chunk gate.
-All atmosphere volumes now use Minecraft's current fog/horizon color, replacing
+Vapor volumes use Minecraft's current fog/horizon color; Smoke is black, replacing
 local light-based grayscale and distance color blending. Loaded-chunk producers remain.
 Condensation behavior
 per due check and the persistent client visual cache are retained.
@@ -71,13 +74,17 @@ schedule passes every 300 ticks (15 seconds at 20 TPS) across all loaded chunks.
 Each chunk has a random 10% default gate and one random X/Z column per pass.
 A bounded fair queue allows backlog, so a scheduled pass need not finish within
 15 seconds. No chunks are force-loaded. Cache/render/sync intervals are unchanged.
-Rain checks emit 320 units at cloud height Y=192, eight times the previous 40,
-replacing ground-level rain fog. High-terrain clouds and dark exposed-ground sources remain.
+Each passed rain check splits 320 units: a random integer 0..320 goes to ground,
+and the remainder to a uniformly random height between ground and Y=192.
+The total is not doubled. High-terrain clouds and dark exposed-ground sources remain.
 Sampled water now evaporates: plain water fluid blocks become air; waterlogged
 blocks retain their host with WATERLOGGED cleared. Non-water solids and unsupported
 water-containing hosts are preserved. This removes real water, including condensed
 water, and natural fluid updates may refill it. No world reset or migration is required.
-After the outer 10% chunk gate, scheduled water evaporation gets a second chance
+Evaporation traces contiguous water down the sampled column and targets its bottom.
+If bottom water is directly above magma, it bypasses the temperature roll and also
+targets the original surface, once if both coincide. The outer 10% chunk gate remains.
+Otherwise, scheduled water evaporation gets a second chance
 of `clamp(biome temperature / 2, 0, 1)`: temperature 0.8 gives 40%, 2 gives 100%,
 and 0 or below never evaporates. Only the scheduled producer uses this roll.
 Every successful non-transport water-to-nonwater mutation, including manual removals, emits
@@ -103,7 +110,7 @@ changes are persisted and synchronized. Solitary or blocked cells retain materia
 
 Live cell visibility follows Minecraft's tracked chunks and effective client render
 distance, loaded chunks, and frustum, without fixed atmospheric radii or
-nearest-cell caps. Protocol 5 requires updating both client and server together;
+nearest-cell caps. Protocol 6 requires updating both client and server together;
 large snapshots complete with world identity, scope, and chunk freshness. Delta/full sync
 remain 20/200 ticks; work remains at most 128 source cells per tick. Pressure is
 still limited to four attempts per sampling interval.
@@ -114,26 +121,25 @@ required, but both atmospheric amounts and terrain damage persist. Update
 client and server together. Operators can use `/dynamicatmosphere status` and
 `/dynamicatmosphere demo` for runtime checks; this remains an alpha simulation.
 
-Client rendering uses four non-overlapping LOD bands. With Minecraft client
+Client rendering uses three non-overlapping LOD bands. With Minecraft client
 view distance `V` expressed in blocks, render 4x4x4-block volumes below `V/2`,
-8x8x8 in `[V/2, V)`, 16x16x16 in `[V, 2V)`, and 32x32x32 in `[2V, 4V]`.
+8x8x8 in `[V/2, V)`, and 16x16x16 in `[V, 2V]`. Smoke uses 8-, 16-, and
+32-block volumes in the same bands. Both stop at 2V, including cached fallback.
 Each coarser volume recursively averages eight children, including empty volumes;
 coarse parents are not drawn on top of their finer children. This reduces the
 number of volumes and slices at distance, not server simulation resolution.
 Actual performance requires user verification; no measured FPS improvement or
 runtime verification is claimed. Cache/render/sync intervals remain unchanged.
 Aligned boundary volumes can remain finer; selection is spatially bounded and
-cached in 16-block camera regions. New views use temporary 32-block cached
+cached in 16-block camera regions. New views use temporary coarse cached
 coverage while refining, and unloaded near chunks retain 16-block cached fog.
 Parents and detailed children never render over each other.
-All near, far, and fallback atmosphere volumes use Minecraft's current fog/horizon
-color from one snapshot per frame. Local light-based grayscale, distance color
-blending, and client terrain-light sampling are removed. Constant RGB and no depth
-writes allow bounded GPU batches without volume sorting. LOD coverage, opacity,
-protocol, and personal cache formats are unchanged.
+Vapor uses Minecraft's current fog/horizon color from one snapshot per frame;
+Smoke is black. Mixed-material slices merge far-to-near across bounded GPU batches.
+The Vapor disk cache format is preserved; Smoke has independent client state.
 
 The client visual cache retains previously seen areas across sessions and
-adds coarse far fog out to four times the client view distance. It is approximate
+adds coarse far Vapor out to twice the client view distance. It is approximate
 and can be stale, not server simulation or a way to load distant chunks. A stable
 world UUID in server SavedData separates worlds; a newly reset world gets a fresh
 UUID. No reset is required for this upgrade.
