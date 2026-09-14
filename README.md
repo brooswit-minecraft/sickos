@@ -13,8 +13,10 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Atmosphere
 
-Sickos 0.21.0 pins Dynamic Atmosphere 0.18.0-alpha.1 for client and server.
+Sickos 0.21.1 pins Dynamic Atmosphere 0.18.1-alpha.1 for client and server.
 Create fan transfers run independently every five seconds, without a skip roll.
+Fans only affect cells up to 4x4x4: Vapor, Smoke, Dust, Exhaust, and Ender Gas.
+Violence and Slime are unaffected.
 Destinations with empty space can be overfilled, causing normal pressure handling
 and possible block destruction. Fan cadence and movement counters are in status.
 Ender Gas now uses 2x2x2 cells; old one-block cells migrate on load. Random
