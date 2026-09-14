@@ -13,7 +13,7 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Atmosphere
 
-Sickos 0.19.1 pins Dynamic Atmosphere 0.16.1-alpha.1 for client and server.
+Sickos 0.19.2 pins Dynamic Atmosphere 0.16.2-alpha.1 for client and server.
 Lava now produces one tenth as much Smoke (4 units instead of 40), including
 add/remove events. Existing material is preserved.
 This minor gameplay release enables all seven independent materials: Vapor, Smoke,
@@ -445,6 +445,11 @@ listed fields through strict-host-key SFTP and verifies the atomic upload. It us
 variables and secrets as the SFTP deployment route and shares that route's
 concurrency lock. NeoForge reloads this server config; the tuning workflow does not
 restart Minecraft.
+
+`runtime.simulationSkipChance` applies to every atmospheric material (default
+0.75). `enderGas.portalBlockEmission` sets the integer amount emitted per portal
+block per producer pass (default 100, zero disables it). These join
+`integrations.createFanTransportPerRpm` in the repository-owned tuning file.
 
 ## Working on the pack
 
