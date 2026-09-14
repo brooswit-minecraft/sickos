@@ -431,6 +431,18 @@ if it's missing. The workflow re-points and restarts the server via the
 [`rinth`](https://github.com/brooswit-minecraft/rinth) CLI, invoked at a pinned version
 through `bunx`, so nothing needs installing in your repo.
 
+### Live server tuning
+
+Repository-owned settings in `server-config.json` are synchronized by
+`.github/workflows/server-tuning.yml` whenever that file changes, or on manual
+dispatch. The workflow reads `level-name` from the hosted `server.properties`, then
+updates only those listed fields in
+`<level-name>/serverconfig/dynamicatmosphere-server.toml` through strict-host-key
+SFTP and verifies the atomic upload. It uses the same `SERVER_SFTP_*` repository
+variables and secrets as the SFTP deployment route and shares that route's
+concurrency lock. NeoForge reloads this server config; the tuning workflow does not
+restart Minecraft.
+
 ## Working on the pack
 
 ```sh

@@ -1,0 +1,5 @@
+{
+  "integrations": {
+    "createFanTransportPerRpm": 1.0
+  }
+}

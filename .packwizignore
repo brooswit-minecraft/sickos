@@ -10,6 +10,8 @@ Makefile
 .modrinth/
 docs/
 scripts/
+tests/
+server-config.json
 build/
 *.mrpack
 *.zip
