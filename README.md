@@ -13,10 +13,15 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Atmosphere
 
-Sickos 0.17.0 pins Dynamic Atmosphere 0.14.0-alpha.1 for client and server.
-This minor gameplay release adds black Smoke from fire in independent, chunk-persisted
-8-block cells. Vapor remains separate. Both materials stop rendering at twice the
-client view distance; bedrock in a source cell prevents downward transfer.
+Sickos 0.18.0 pins Dynamic Atmosphere 0.15.0-alpha.1 for client and server.
+This minor gameplay release enables all seven independent materials: Vapor, Smoke,
+Dust, Ender Gas, Violence, Exhaust, and Slime. Producers and interactions include
+movement dust, explosion smoke, portal gas, crop growth, suffocation, and mob spawning.
+Smoke, Ender Gas, Violence, and Slime have four times the optical density.
+Each material has its own cell size, simulation interval, and distance cutoff.
+Pressure can break neighboring blocks with a chance proportional to the source
+cell's empty space. Bedrock prevents downward transfers. Update both sides together
+for protocol 8; no world reset or atmosphere clearing is required.
 Peaceful Nights is removed: natural surface hostile spawning instead requires
 more than 50% Vapor fullness, without consuming material, and retains other normal
 spawn restrictions. Existing worlds and accumulated material are preserved.
