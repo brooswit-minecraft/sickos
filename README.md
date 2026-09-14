@@ -13,8 +13,9 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Atmosphere
 
-Sickos 0.15.0 pins Dynamic Atmosphere 0.12.1-alpha.1 for client and server.
-This minor feature release adds real sampled-water evaporation under CONTRIBUTING.
+Sickos 0.15.1 pins Dynamic Atmosphere 0.12.2-alpha.1 for client and server.
+This compatible patch fixes fluid transport incorrectly emitting atmospheric material.
+Biome-driven evaporation remains; existing accumulated atmosphere is not removed.
 Loaded-chunk producer passes run every 15 seconds with a 10% per-chunk gate.
 All atmosphere volumes now use Minecraft's current fog/horizon color, replacing
 local light-based grayscale and distance color blending. Loaded-chunk producers remain.
@@ -67,12 +68,19 @@ water, and natural fluid updates may refill it. No world reset or migration is r
 After the outer 10% chunk gate, scheduled water evaporation gets a second chance
 of `clamp(biome temperature / 2, 0, 1)`: temperature 0.8 gives 40%, 2 gives 100%,
 and 0 or below never evaporates. Only the scheduled producer uses this roll.
-Every successful water-to-nonwater mutation, including manual removals, emits
+Every successful non-transport water-to-nonwater mutation, including manual removals, emits
 `round(10 + 70 * clamp(biome downfall, 0, 1))` material units (10 dry to 80 wet).
 Downfall is a biome humidity proxy, not instantaneous rain or weather; climate
 comes from the loaded chunk's biome. Humidity is captured at removal and queued
 amounts are added without a second producer emission. Ordinary water-level
 changes, failed mutations, and chunk unloads do not trigger this source.
+
+Fluid transport during vanilla/Flowing Fluids fluid ticks does not emit removal
+material. The fluid-tick scope includes Flowing Fluids 1.0.6's injected movement
+and always clears on return or exception. Direct bucket/removal, block replacement,
+and scheduled atmospheric evaporation outside transport still emit by humidity.
+This fix does not delete accumulated atmosphere or reset worlds; existing material
+and simulation backlog remain.
 
 After bounded spreading, a selected due cell with at most 10 units can move its
 entire amount into an existing, loaded cell on one of the four horizontal faces or directly below (never above), with strictly more
