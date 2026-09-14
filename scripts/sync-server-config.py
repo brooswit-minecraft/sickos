@@ -18,7 +18,10 @@ import tomlkit
 
 CONFIG_PATH = "dynamicatmosphere-server.toml"
 MAX_REMOTE_CONFIG_BYTES = 1024 * 1024
-ALLOWED = {("integrations", "createFanTransportPerRpm"): (0.0, 1000.0)}
+ALLOWED = {
+    ("integrations", "createFanTransportPerRpm"): (0.0, 1000.0),
+    ("vapor", "skipChance"): (0.0, 1.0),
+}
 
 
 def load_tuning(path):

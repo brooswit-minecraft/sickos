@@ -1,4 +1,7 @@
 {
+  "vapor": {
+    "skipChance": 0.75
+  },
   "integrations": {
     "createFanTransportPerRpm": 1.0
   }
