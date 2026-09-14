@@ -448,6 +448,12 @@ restart Minecraft.
 
 ## Working on the pack
 
+World resets are separate from releases. The manual `Reset world` workflow requires
+the exact current world directory and a new, nonexistent `world-`-prefixed directory.
+It requires an empty server, saves, selects a fresh survival world, restarts, verifies
+the new world was created, then deletes the old world. This deliberately deletes old
+builds, inventories, and progression; normal deployments never invoke it.
+
 ```sh
 packwiz modrinth add <slug>     # e.g. packwiz modrinth add jei
 packwiz remove <name>           # e.g. packwiz remove jei

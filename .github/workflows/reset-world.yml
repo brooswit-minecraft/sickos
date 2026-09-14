@@ -1,9 +1,13 @@
-name: Reset hosted world
+name: Reset world
 on:
   workflow_dispatch:
     inputs:
-      confirm:
-        description: 'Type RESET to permanently replace the world without a backup'
+      expected_world:
+        description: Exact current world directory to DELETE
+        required: true
+        type: string
+      new_world:
+        description: New world directory (must not exist)
         required: true
         type: string
 permissions:
@@ -13,28 +17,28 @@ concurrency:
   cancel-in-progress: false
 jobs:
   reset:
-    if: inputs.confirm == 'RESET'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/checkout@v4
         with:
           repository: brooswit-minecraft/schematic
           ref: v1
-          path: schematic
+          path: .schematic-tools
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - run: python -m pip install 'paramiko==4.0.0'
-      - name: Reset world and grant operator access
-        run: python scripts/reset-world.py
+      - run: python -m pip install 'paramiko==4.0.0' 'tomlkit==0.13.3'
+      - run: python -m unittest discover -s tests -p 'test_reset_server_world.py'
+      - name: Reset explicitly selected world
+        run: python scripts/reset-server-world.py
         env:
-          CONFIRM_RESET: ${{ inputs.confirm }}
-          SERVER_RCON_HOST: ${{ vars.SERVER_RCON_HOST }}
-          SERVER_RCON_PORT: ${{ vars.SERVER_RCON_PORT }}
-          SERVER_RCON_PASSWORD: ${{ secrets.SERVER_RCON_PASSWORD }}
-          SERVER_RCON_SHUTDOWN_TIMEOUT: '300'
+          EXPECTED_WORLD: ${{ inputs.expected_world }}
+          NEW_WORLD: ${{ inputs.new_world }}
           SERVER_SFTP_HOST: ${{ vars.SERVER_SFTP_HOST }}
           SERVER_SFTP_PORT: ${{ vars.SERVER_SFTP_PORT }}
           SERVER_SFTP_PATH: ${{ vars.SERVER_SFTP_PATH }}
@@ -42,3 +46,7 @@ jobs:
           SERVER_SFTP_PASSWORD: ${{ secrets.SERVER_SFTP_PASSWORD }}
           SERVER_SFTP_PRIVATE_KEY: ${{ secrets.SERVER_SFTP_PRIVATE_KEY }}
           SERVER_SFTP_KNOWN_HOSTS: ${{ secrets.SERVER_SFTP_KNOWN_HOSTS }}
+          SERVER_RCON_HOST: ${{ vars.SERVER_RCON_HOST }}
+          SERVER_RCON_PORT: ${{ vars.SERVER_RCON_PORT }}
+          SERVER_RCON_PASSWORD: ${{ secrets.SERVER_RCON_PASSWORD }}
+          SERVER_RCON_SHUTDOWN_TIMEOUT: '600'
