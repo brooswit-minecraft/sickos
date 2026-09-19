@@ -4,14 +4,20 @@ on:
   pull_request:
     paths:
       - scripts/bump-dynamic-atmosphere.py
+      - scripts/apply-da-release-notes.py
       - tests/test_bump_dynamic_atmosphere.py
+      - tests/test_apply_da_release_notes.py
       - .github/workflows/da-auto-bump-tests.yml
+      - .github/workflows/da-auto-bump-notes.yml
   push:
     branches: [main]
     paths:
       - scripts/bump-dynamic-atmosphere.py
+      - scripts/apply-da-release-notes.py
       - tests/test_bump_dynamic_atmosphere.py
+      - tests/test_apply_da_release_notes.py
       - .github/workflows/da-auto-bump-tests.yml
+      - .github/workflows/da-auto-bump-notes.yml
 
 permissions:
   contents: read
@@ -29,3 +35,22 @@ jobs:
           python-version: '3.12'
       - name: Run DA auto-bump engine tests
         run: python -m unittest discover -s tests -p 'test_bump_dynamic_atmosphere.py'
+      - name: Run DA auto-bump release-notes tests (SICKOS-79)
+        run: python -m unittest discover -s tests -p 'test_apply_da_release_notes.py'
+
+  actionlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          # Independent of the Makefile's PACKWIZ_REF toolchain pin below --
+          # actionlint v1.7.12 needs Go >= 1.25, one job, no shared state.
+          go-version: '1.25'
+      - name: Install pinned actionlint
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: Lint da-auto-bump-notes.yml (SICKOS-79)
+        run: "$(go env GOPATH)/bin/actionlint .github/workflows/da-auto-bump-notes.yml"

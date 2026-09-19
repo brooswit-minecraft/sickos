@@ -421,6 +421,11 @@ This builds and uploads the `.mrpack` as a workflow artifact but skips the
 Release-asset step (there is no Release object to attach to) and the Modrinth publish
 step, the same as any run without Modrinth configured.
 
+For an auto-bump push specifically (a commit carrying a `DA-Auto-Bump` trailer),
+`.github/workflows/da-auto-bump-notes.yml` additionally edits that release's GitHub
+body afterward; see [docs/release-notes-plumbing.md](docs/release-notes-plumbing.md)
+for what it does and does not cover.
+
 ## Deploying to a Modrinth Server
 
 `.github/workflows/server-update.yml` runs after the Release workflow succeeds, or on demand
