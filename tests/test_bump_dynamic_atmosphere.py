@@ -303,6 +303,27 @@ class TestDirtyTreeGuard(EngineTestCase):
         summary, exit_code, _ = self.run_engine(payload)
         self.assertEqual(exit_code, bump.EXIT_OK)
 
+    def test_git_status_failure_refuses_without_touching_anything(self):
+        # A non-zero exit from `git status` itself (not a repo, a
+        # safe.directory "dubious ownership" refusal, a corrupt index, ...)
+        # must not be silently read as "clean" just because stdout is empty.
+        def failing_status(args, **kwargs):
+            return subprocess.CompletedProcess(
+                args, returncode=128, stdout="",
+                stderr="fatal: detected dubious ownership in repository\n",
+            )
+
+        before_porcelain = self.porcelain()
+        payload = make_payload()
+        with self.assertRaises(bump.EngineError) as ctx:
+            self.run_engine(payload, run_command=failing_status)
+        self.assertEqual(ctx.exception.exit_code, bump.EXIT_CONFIG_ERROR)
+        self.assertIn("git status", str(ctx.exception))
+        self.assertIn("128", str(ctx.exception))
+        self.assertIn("dubious ownership", str(ctx.exception))
+        self.assertEqual(self.porcelain(), before_porcelain)
+        self.assertFalse((self.repo / "docs" / "releases").exists())
+
 
 class TestCategoryMapping(EngineTestCase):
     def test_patch_bumps_patch(self):

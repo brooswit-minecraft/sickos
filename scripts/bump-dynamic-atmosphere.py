@@ -746,6 +746,13 @@ def assert_restore_targets_clean(repo_root, run_command=subprocess.run):
     section for the full story."""
     result = run_command(["git", "status", "--porcelain", "--", *RESTORE_TARGET_PATHS],
                           cwd=str(repo_root), capture_output=True, text=True)
+    if result.returncode != 0:
+        raise EngineError(
+            EXIT_CONFIG_ERROR, "config_error",
+            f"refusing to run: 'git status --porcelain' failed (exit {result.returncode}) while "
+            "checking whether " + ", ".join(RESTORE_TARGET_PATHS) + " are clean; nothing was "
+            f"touched. stderr: {(result.stderr or '').strip()}",
+        )
     dirty = [line for line in result.stdout.splitlines() if line]
     if dirty:
         raise EngineError(

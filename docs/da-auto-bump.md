@@ -78,9 +78,9 @@ these environment variables to build.
 | 6 | `EXIT_GATE_FAILURE` | `make refresh`, `make check`, or `make build` failed. The repo is restored to its pre-run state (see "Fail-closed restore" below). |
 | 7 | `EXIT_MIGRATION_MISSING` | The category is `breaking` and either the release body could not be fetched, or no `## Migration` section was found in this release's own section of it. No file was touched. |
 | 8 | `EXIT_NOTES_EXISTS` | `docs/releases/<new-version>.md` already exists. The engine never overwrites a published release's notes. No file was touched. |
-| 9 | `EXIT_CONFIG_ERROR` | The repo's own state doesn't match what the engine expects (an unparsable DA pin filename, a `pack.toml` version that isn't a plain `x.y.z`, zero or more than one mechanical README sentence, or an unexpected change under `mods/`). This is a repo-state problem, not a payload problem, and needs a human. If any writes had already happened, the repo is restored (see below). |
+| 9 | `EXIT_CONFIG_ERROR` | The repo's own state doesn't match what the engine expects (an unparsable DA pin filename, a `pack.toml` version that isn't a plain `x.y.z`, zero or more than one mechanical README sentence, an unexpected change under `mods/`, or `git status --porcelain` itself exiting non-zero while the dirty-tree guard below was checking whether the repo is clean -- not a git repo, `safe.directory` "dubious ownership", a corrupt index, etc.). This is a repo-state problem, not a payload problem, and needs a human. If any writes had already happened, the repo is restored (see below); the `git status` failure case fires before anything is touched. |
 | 10 | `EXIT_UNEXPECTED_ERROR` | Any exception the write/gate phase raises that is *not* a designed `EngineError` -- a missing `make`/`packwiz` binary, an `OSError` writing a file, a `CalledProcessError`, anything unforeseen. The repo is still restored to its pre-run state exactly as for a designed failure (see below); this code exists only so `main()` never falls through to a bare Python traceback and exit 1 -- the summary and a non-zero, documented exit code are always produced. |
-| 11 | `EXIT_DIRTY_TREE` | `pack.toml`, `index.toml`, `mods/dynamic-atmosphere.pw.toml`, or `README.md` already had an uncommitted change (staged, unstaged, or untracked) before this run started anything. Checked first, before payload validation. No file was touched. |
+| 11 | `EXIT_DIRTY_TREE` | `pack.toml`, `index.toml`, `mods/dynamic-atmosphere.pw.toml`, or `README.md` already had an uncommitted change (staged, unstaged, or untracked) before this run started anything, per a successful `git status --porcelain` read. Checked first, before payload validation. No file was touched. (If `git status` itself fails rather than reporting cleanly, that is `EXIT_CONFIG_ERROR` (9) instead, not this code -- a failed check is a config problem, not evidence of a dirty tree.) |
 
 ## Fail-closed restore
 
@@ -129,7 +129,8 @@ exit never has to undo more than the fixed set above:
 1. Check that `pack.toml`, `index.toml`, `mods/dynamic-atmosphere.pw.toml`,
    and `README.md` are all clean (`git status --porcelain`) -- read-only,
    and first, before even the payload is looked at. Fail closed
-   (`EXIT_DIRTY_TREE`) if not.
+   (`EXIT_DIRTY_TREE`) if any is dirty; fail closed (`EXIT_CONFIG_ERROR`) if
+   the `git status` call itself fails rather than reporting cleanly.
 2. Validate the payload.
 3. Idempotency check (already-pinned / hash anomaly) -- read-only.
 4. Version-order check (downgrade refusal / same-version anomaly) -- read-only.
