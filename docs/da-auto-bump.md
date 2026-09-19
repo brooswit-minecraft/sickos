@@ -27,7 +27,14 @@ python3 scripts/bump-dynamic-atmosphere.py \
 - `--payload` (required): a JSON file containing the DA release workflow's
   `client_payload` object exactly as documented in SICKOS-72/SICKOS-75:
   `version`, `modrinth_version_id`, `sha1`, `sha512`, `download_url`,
-  `file_name`, `category`, `github_release_url`.
+  `file_name`, `category`, `github_release_url`. The exact shape (and
+  nothing but those 8 keys) is pinned in
+  `tests/fixtures/dynamic-atmosphere-released.example.json`, a byte-stable
+  example payload both repos can build against -- DA's own trigger-payload
+  work (ATMO-15) is expected to copy these same bytes, so this file is the
+  shared source of truth for the contract's shape, not just a test fixture.
+  `tests/test_bump_dynamic_atmosphere.py`'s `TestSharedContractFixture`
+  asserts it has exactly the 8 agreed keys and validates successfully.
 - `--repo-root` (default `.`): the packwiz repo root the engine operates
   on. Must contain `pack.toml`, `mods/dynamic-atmosphere.pw.toml`,
   `mods/create.pw.toml` (used as the vouch-check control), and `README.md`.
@@ -72,18 +79,30 @@ these environment variables to build.
 | 7 | `EXIT_MIGRATION_MISSING` | The category is `breaking` and either the release body could not be fetched, or no `## Migration` section was found in this release's own section of it. No file was touched. |
 | 8 | `EXIT_NOTES_EXISTS` | `docs/releases/<new-version>.md` already exists. The engine never overwrites a published release's notes. No file was touched. |
 | 9 | `EXIT_CONFIG_ERROR` | The repo's own state doesn't match what the engine expects (an unparsable DA pin filename, a `pack.toml` version that isn't a plain `x.y.z`, zero or more than one mechanical README sentence, or an unexpected change under `mods/`). This is a repo-state problem, not a payload problem, and needs a human. If any writes had already happened, the repo is restored (see below). |
+| 10 | `EXIT_UNEXPECTED_ERROR` | Any exception the write/gate phase raises that is *not* a designed `EngineError` -- a missing `make`/`packwiz` binary, an `OSError` writing a file, a `CalledProcessError`, anything unforeseen. The repo is still restored to its pre-run state exactly as for a designed failure (see below); this code exists only so `main()` never falls through to a bare Python traceback and exit 1 -- the summary and a non-zero, documented exit code are always produced. |
 
 ## Fail-closed restore
 
-On any of exit codes 3, 4, 5, 6, 7, 8, 9, the repo's git status is restored
-to exactly what it was before the run: no modified, staged, or untracked
-files. Concretely, `pack.toml`, `index.toml`, `mods/dynamic-atmosphere.pw.toml`,
-and `README.md` are restored (both index and working tree) via
-`git restore --staged --worktree`, and any `docs/releases/<version>.md`
-the run had already created is unstaged and deleted. This can only ever
-discard changes this run itself made -- it never touches unrelated
-pre-existing modifications, because the restore targets exactly these
-four tracked paths plus the one notes path this run computed.
+On any of exit codes 3, 4, 5, 6, 7, 8, 9, 10, the repo's git status is
+restored to exactly what it was before the run: no modified, staged, or
+untracked files. Concretely, `pack.toml`, `index.toml`,
+`mods/dynamic-atmosphere.pw.toml`, and `README.md` are restored (both index
+and working tree) via `git restore --staged --worktree`, and any
+`docs/releases/<version>.md` the run had already created is unstaged and
+deleted. This can only ever discard changes this run itself made -- it
+never touches unrelated pre-existing modifications, because the restore
+targets exactly these four tracked paths plus the one notes path this run
+computed.
+
+This restore runs on **any exception** raised once the write/gate phase has
+started, not only a designed `EngineError` -- a missing `make`/`packwiz`
+binary, an `OSError` writing a file, a `CalledProcessError` from `git add`,
+or anything else unforeseen is caught, the repo is restored the same way,
+and the original exception is re-raised (`main()` then reports it as
+`EXIT_UNEXPECTED_ERROR`, see above, instead of a bare traceback). Before
+that phase starts (payload validation, the idempotency/version-order
+checks, the Migration fetch, the integrity download, the vouch check), no
+repo file has been touched yet, so there is nothing to restore.
 
 Build output under the gitignored `build/` directory is explicitly **not**
 cleaned up on failure; it is harmless there and cleaning it is not required
@@ -246,6 +265,17 @@ is trimmed; nothing else is reformatted). If category is `breaking` and no
 such section is found, the engine fails closed (`EXIT_MIGRATION_MISSING`)
 rather than preparing a breaking release without migration instructions.
 
+Heading detection is **fence-aware**: a line inside a fenced code block
+(opened by a line that starts, after up to 3 leading spaces per CommonMark,
+with 3+ backticks or 3+ tildes, and closed by a later such line using the
+same character with a run at least as long) is never treated as a heading,
+no matter what it starts with. Migration instructions routinely include
+shell blocks with `#`-prefixed comment lines; without fence-awareness, a
+line like `# step 1: back up` inside a ```` ```bash ```` block would be
+misread as the next top-level heading and silently truncate the
+"verbatim" text mid-fence. An unterminated fence runs to the end of the
+body, and nothing inside it is ever treated as a heading boundary.
+
 The release body is fetched from
 `GET https://api.github.com/repos/<owner>/<repo>/releases/tags/<tag>`
 (note: the API path is `/releases/tags/<tag>`, plural, not the web URL's
@@ -279,6 +309,16 @@ run's notes file, before the result):
 This check **never** fails the run or changes the exit code. A descriptive
 `User-Agent` (`brooswit-minecraft/sickos (SICKOS-75 DA auto-bump engine)`)
 is sent on every Modrinth and GitHub API call.
+
+The whole check is wrapped in a catch-all: **any** exception -- a transport
+failure `urllib` does not wrap in `URLError` (e.g.
+`http.client.RemoteDisconnected`), a missing or unreadable
+`mods/create.pw.toml`, or anything else -- is caught and recorded as
+`result = "inconclusive"` with `control_status`/`da_status` both `null` and
+the raw error text in a new `error` field (see the summary table below),
+rather than propagating and aborting an otherwise-successful bump. `error`
+is `null` on every non-exceptional outcome, including the three status-code
+based ones above.
 
 ## Listing and README (`listing_review_required`)
 
@@ -329,7 +369,7 @@ path including failures:
 | `category_received` | string, null, or other JSON scalar | Exactly as received, before the mapping rule was applied. |
 | `mapping_rule` | string or null | See the version-selection table above. |
 | `notes_path` | string or null | Repo-relative path of the committed notes file, only when one was written. |
-| `vouch` | object or null | `{control_status, da_status, result}`, or null if the vouch check never ran (any failure before that step, or the already-pinned no-op path). |
+| `vouch` | object or null | `{control_status, da_status, result, error}`, or null if the vouch check never ran (any failure before that step, or the already-pinned no-op path). `error` is a string (the raw exception, `repr()`'d) when the check itself failed and `result` is `inconclusive`; `null` otherwise. `control_status`/`da_status` are also `null` in that case, never guessed. |
 | `listing_review_required` | bool | See above. |
 | `listing_flagged_lines` | array of `{file, line, text}` | Empty when `listing_review_required` is false. |
 | `error` | string or null | The human-readable failure reason, only set on a non-zero exit. |

@@ -24,6 +24,12 @@ CONTROL_MOD_ID = "LNytGWDc"
 STUB_GATES = {"refresh": ["true"], "check": ["true"], "build": ["true"]}
 FAILING_CHECK_GATES = {"refresh": ["true"], "check": ["false"], "build": ["true"]}
 FAILING_BUILD_GATES = {"refresh": ["true"], "check": ["true"], "build": ["false"]}
+MISSING_BINARY_GATES = {
+    "refresh": ["/no/such/binary-da-bump-test-missing"],
+    "check": ["true"], "build": ["true"],
+}
+
+FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
 def _git(repo, *args, check=True):
@@ -410,6 +416,53 @@ class TestVouchCheck(EngineTestCase):
                     )
                 self.assertEqual(exit_code, bump.EXIT_OK)
 
+    def test_status_function_raising_is_inconclusive_not_propagated(self):
+        def raising(sha512):
+            raise OSError("simulated RemoteDisconnected")
+
+        content = b"status-raises"
+        with mock.patch.object(bump, "_version_file_status", side_effect=raising):
+            summary, exit_code, _ = bump.run_engine(
+                self.repo, make_payload(category="patch", content=content),
+                downloader=make_downloader(content), gate_commands=STUB_GATES,
+            )
+        self.assertEqual(exit_code, bump.EXIT_OK)
+        self.assertTrue(summary["changed"])
+        self.assertEqual(summary["vouch"]["result"], "inconclusive")
+        self.assertIsNotNone(summary["vouch"]["error"])
+
+    def test_missing_control_mod_file_is_inconclusive_not_propagated(self):
+        # Commit the removal so it's part of HEAD: otherwise
+        # assert_only_da_pin_changed_under_mods (an unrelated AC3 check)
+        # would trip on the now-missing control file being a *diff* under
+        # mods/, rather than exercising the vouch check's own catch-all.
+        (self.repo / "mods" / "create.pw.toml").unlink()
+        _git(self.repo, "add", "-A")
+        _git(self.repo, "commit", "-q", "-m", "remove control mod for this test")
+        content = b"no-control-file"
+        summary, exit_code, _ = bump.run_engine(
+            self.repo, make_payload(category="patch", content=content),
+            downloader=make_downloader(content), gate_commands=STUB_GATES,
+        )
+        self.assertEqual(exit_code, bump.EXIT_OK)
+        self.assertEqual(summary["vouch"]["result"], "inconclusive")
+        self.assertIsNotNone(summary["vouch"]["error"])
+
+    def test_vouch_error_reaches_notes(self):
+        def raising(sha512):
+            raise OSError("simulated failure")
+
+        content = b"error-in-notes"
+        with mock.patch.object(bump, "_version_file_status", side_effect=raising):
+            summary, exit_code, _ = bump.run_engine(
+                self.repo, make_payload(category="patch", content=content),
+                downloader=make_downloader(content), gate_commands=STUB_GATES,
+            )
+        self.assertEqual(exit_code, bump.EXIT_OK)
+        notes = (self.repo / summary["notes_path"]).read_text(encoding="utf-8")
+        self.assertIn("inconclusive", notes)
+        self.assertIn("Error:", notes)
+
 
 class TestInvalidPayload(EngineTestCase):
     def assert_rejected(self, payload):
@@ -497,6 +550,16 @@ class TestOnlyDaPinChangesUnderMods(EngineTestCase):
         self.assertEqual(create_pin_after, create_pin_before)
 
 
+class TestUnexpectedExceptionFailsClosed(EngineTestCase):
+    def test_missing_gate_binary_restores_tree_and_reraises(self):
+        payload = make_payload()
+        with self.assertRaises(FileNotFoundError):
+            self.run_engine(payload, gates=MISSING_BINARY_GATES)
+        self.assertEqual(self.porcelain(), "")
+        self.assertFalse((self.repo / "docs" / "releases").exists() and
+                          any((self.repo / "docs" / "releases").iterdir()))
+
+
 class TestSemverCompare(unittest.TestCase):
     def test_prerelease_older_than_release(self):
         self.assertEqual(bump.compare_semver("0.19.0-alpha.1", "0.19.0"), -1)
@@ -523,6 +586,38 @@ class TestMigrationExtraction(unittest.TestCase):
         body = "# 0.20.0\n\n## Changes\n\n- x\n"
         self.assertIsNone(bump.extract_migration_section(body))
 
+    def test_hash_comment_inside_fenced_block_is_not_a_heading(self):
+        body = (
+            "# 0.20.0\n\n## Migration\n\nRun this:\n\n```bash\n"
+            "# step 1: back up\ncp -r world world.bak\n"
+            "# step 2: delete\nrm -rf config/da\n```\n\nThen restart.\n"
+        )
+        extracted = bump.extract_migration_section(body)
+        self.assertIn("# step 1: back up", extracted)
+        self.assertIn("# step 2: delete", extracted)
+        self.assertIn("Then restart.", extracted)
+        self.assertTrue(extracted.rstrip("\n").endswith("Then restart."))
+
+    def test_h2_line_inside_fenced_block_is_not_a_heading(self):
+        body = (
+            "# 0.20.0\n\n## Migration\n\nEdit your config:\n\n~~~toml\n"
+            "## this looks like a heading but is inside a fence\n"
+            "value = 1\n~~~\n\nDone.\n\n## Changes\n\n- x\n"
+        )
+        extracted = bump.extract_migration_section(body)
+        self.assertIn("## this looks like a heading but is inside a fence", extracted)
+        self.assertIn("Done.", extracted)
+        self.assertNotIn("- x", extracted)
+
+    def test_own_section_boundary_ignores_hash_inside_fence(self):
+        body = (
+            "# 0.20.0\n\n```\n# not the next release\n```\n\nSome text.\n\n"
+            "# 0.19.0\n\n## Migration\n\nold, must be ignored\n"
+        )
+        own_section = bump.extract_own_release_section(body)
+        self.assertIn("Some text.", own_section)
+        self.assertNotIn("old, must be ignored", own_section)
+
 
 class TestCliMain(EngineTestCase):
     def test_main_writes_summary_out_and_returns_exit_code(self):
@@ -546,6 +641,50 @@ class TestCliMain(EngineTestCase):
         written = json.loads(summary_out.read_text(encoding="utf-8"))
         self.assertTrue(written["changed"])
         self.assertEqual(written["new_pack_version"], "0.22.1")
+
+    def test_main_reports_unexpected_error_with_nonzero_exit(self):
+        content = b"cli unexpected"
+        payload = make_payload(category="patch", content=content)
+        payload_path = self.repo.parent / "payload-unexpected.json"
+        payload_path.write_text(json.dumps(payload), encoding="utf-8")
+        self.addCleanup(payload_path.unlink, missing_ok=True)
+        summary_out = self.repo.parent / "summary-unexpected.json"
+        self.addCleanup(summary_out.unlink, missing_ok=True)
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("boom")
+
+        with mock.patch.object(bump, "download_and_verify", side_effect=boom), \
+             mock.patch.object(bump, "default_gate_commands", return_value=STUB_GATES), \
+             stub_vouch(200, 404):
+            exit_code = bump.main([
+                "--payload", str(payload_path),
+                "--repo-root", str(self.repo),
+                "--summary-out", str(summary_out),
+            ])
+        self.assertEqual(exit_code, bump.EXIT_UNEXPECTED_ERROR)
+        written = json.loads(summary_out.read_text(encoding="utf-8"))
+        self.assertFalse(written["changed"])
+        self.assertEqual(written["outcome"], "unexpected_error")
+        self.assertIn("boom", written["error"])
+
+
+class TestSharedContractFixture(unittest.TestCase):
+    FIXTURE_PATH = FIXTURES_DIR / "dynamic-atmosphere-released.example.json"
+
+    def load_fixture(self):
+        return json.loads(self.FIXTURE_PATH.read_text(encoding="utf-8"))
+
+    def test_fixture_has_exactly_the_eight_agreed_keys(self):
+        payload = self.load_fixture()
+        self.assertEqual(set(payload.keys()), set(bump.REQUIRED_PAYLOAD_FIELDS))
+
+    def test_fixture_validates_as_a_payload(self):
+        payload = self.load_fixture()
+        validated = bump.validate_payload(payload)
+        self.assertEqual(validated["version"], payload["version"])
+        self.assertEqual(validated["modrinth_version_id"], payload["modrinth_version_id"])
+        self.assertEqual(validated["download_url"], payload["download_url"])
 
 
 if __name__ == "__main__":

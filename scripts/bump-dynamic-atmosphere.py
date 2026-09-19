@@ -29,8 +29,12 @@ DESCRIPTION_PATH = ".modrinth/description.md"
 FILENAME_PREFIX = "dynamicatmosphere-"
 FILENAME_SUFFIX = ".jar"
 
-# Exit codes. 1 is left to Python's own unhandled-exception default and is
-# always a bug in this script, never a designed outcome.
+# Exit codes. 1 is reserved for Python's own unhandled-exception default,
+# used only if something escapes main()'s own catch-all below (which should
+# never happen). Any OTHER exception the engine itself catches -- a missing
+# binary, an OSError writing a file, anything not raised as a designed
+# EngineError -- is still fail-closed (the repo is restored) but reported as
+# EXIT_UNEXPECTED_ERROR with a machine-readable summary, not left to exit 1.
 EXIT_OK = 0
 EXIT_INVALID_PAYLOAD = 2
 EXIT_INTEGRITY_FAILURE = 3
@@ -40,6 +44,7 @@ EXIT_GATE_FAILURE = 6
 EXIT_MIGRATION_MISSING = 7
 EXIT_NOTES_EXISTS = 8
 EXIT_CONFIG_ERROR = 9
+EXIT_UNEXPECTED_ERROR = 10
 
 REQUIRED_PAYLOAD_FIELDS = (
     "version", "modrinth_version_id", "sha1", "sha512",
@@ -401,31 +406,72 @@ def find_description_listing_lines(repo_root):
 # copied byte-for-byte with no reformatting or trimming beyond stripping
 # the single leading/trailing blank line directly adjacent to the heading
 # markers.
+#
+# Heading detection is fence-aware: a line inside a fenced code block
+# (delimited by a line starting, after up to 3 leading spaces per
+# CommonMark, with 3+ backticks or 3+ tildes, closed by a later such line
+# using the same character with a run at least as long) is never treated as
+# a heading, no matter what it starts with. Migration instructions routinely
+# contain shell blocks with "#" comment lines, and without this a fenced
+# "# step 1: ..." line would be misread as the next top-level heading and
+# silently truncate the "verbatim" text mid-fence.
 # --------------------------------------------------------------------------
 
-_H1_RE = re.compile(r"(?m)^#\s+\S")
-_H1_OR_H2_RE = re.compile(r"(?m)^#{1,2}\s+\S")
-_MIGRATION_HEADING_RE = re.compile(r"(?mi)^##\s+Migration\s*$")
+_FENCE_MARKER_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+_H1_LINE_RE = re.compile(r"^#\s+\S")
+_H1_OR_H2_LINE_RE = re.compile(r"^#{1,2}\s+\S")
+_MIGRATION_HEADING_LINE_RE = re.compile(r"(?i)^##\s+Migration\s*$")
+
+
+def _iter_unfenced_lines(body):
+    """Yield (start, end, line) for each line of `body` that is not inside a
+    fenced code block, where start/end are character offsets into `body`
+    and `end` excludes the line's own trailing newline. A fence line is one
+    whose content, after up to 3 leading spaces, starts with 3+ backticks
+    or 3+ tildes; the block it opens closes at the next such line using the
+    same character with a run at least as long (an unterminated fence runs
+    to the end of the body, and nothing inside it is ever yielded)."""
+    in_fence = False
+    fence_char = None
+    fence_len = 0
+    offset = 0
+    for raw_line in body.splitlines(keepends=True):
+        line = raw_line.rstrip("\r\n")
+        line_end = offset + len(line)
+        fence_match = _FENCE_MARKER_RE.match(line)
+        if fence_match:
+            marker = fence_match.group(1)
+            if not in_fence:
+                in_fence, fence_char, fence_len = True, marker[0], len(marker)
+            elif marker[0] == fence_char and len(marker) >= fence_len:
+                in_fence, fence_char, fence_len = False, None, 0
+        elif not in_fence:
+            yield offset, line_end, line
+        offset += len(raw_line)
+
+
+def _find_heading_offsets(body, line_re):
+    return [(start, end) for start, end, line in _iter_unfenced_lines(body) if line_re.match(line)]
 
 
 def extract_own_release_section(body):
-    first = _H1_RE.search(body)
-    if first is None:
+    offsets = _find_heading_offsets(body, _H1_LINE_RE)
+    if not offsets:
         return body
-    rest = body[first.end():]
-    following = _H1_RE.search(rest)
-    end = first.end() + following.start() if following else len(body)
-    return body[first.start():end]
+    start = offsets[0][0]
+    end = offsets[1][0] if len(offsets) > 1 else len(body)
+    return body[start:end]
 
 
 def extract_migration_section(body):
     own_section = extract_own_release_section(body)
-    heading_match = _MIGRATION_HEADING_RE.search(own_section)
-    if heading_match is None:
+    heading_offsets = _find_heading_offsets(own_section, _MIGRATION_HEADING_LINE_RE)
+    if not heading_offsets:
         return None
-    remainder = own_section[heading_match.end():]
-    next_heading = _H1_OR_H2_RE.search(remainder)
-    section_text = remainder[: next_heading.start()] if next_heading else remainder
+    heading_end = heading_offsets[0][1]
+    remainder = own_section[heading_end:]
+    next_headings = _find_heading_offsets(remainder, _H1_OR_H2_LINE_RE)
+    section_text = remainder[: next_headings[0][0]] if next_headings else remainder
     return section_text.strip("\n")
 
 
@@ -449,14 +495,20 @@ def fetch_release_body(github_release_url, override_path):
 
 
 # --------------------------------------------------------------------------
-# AC8: Modrinth vouch check. Never fails the run or changes the exit code.
+# AC8: Modrinth vouch check. Never fails the run or changes the exit code --
+# so the whole check, including reading the control mod's pin file, is
+# wrapped: ANY exception (a transport failure urllib does not wrap in
+# URLError, such as http.client.RemoteDisconnected; a missing or unreadable
+# mods/create.pw.toml; anything else) is recorded as "inconclusive" with the
+# raw error text and never propagates out of this function.
 # Interpretation (also documented in docs/da-auto-bump.md and the notes
 # file written per run):
 #   control=200, da=404  -> "not_vouched"              (expected today; PZV7RorC is private)
 #   control=200, da=200  -> "vouched"
 #   control=404 (any da) -> "inconclusive_control_failed" (query/endpoint itself is wrong)
-#   either status is anything else (429, 5xx, transport error)
-#                         -> "inconclusive" with the raw status recorded, NEVER collapsed into 404
+#   either status is anything else (429, 5xx, transport error, or an
+#   exception caught here)
+#                         -> "inconclusive" with the raw status/error recorded, NEVER collapsed into 404
 # --------------------------------------------------------------------------
 
 def _version_file_status(sha512):
@@ -469,16 +521,24 @@ def _version_file_status(sha512):
         return error.code
     except urllib.error.URLError:
         return None
+    except Exception:  # noqa: BLE001 - e.g. http.client.RemoteDisconnected, never URLError-wrapped
+        return None
 
 
 def run_vouch_check(repo_root, da_sha512):
-    control_path = repo_root / CONTROL_MOD_PATH
-    with control_path.open("rb") as handle:
-        control_data = tomllib.load(handle)
-    control_sha512 = (control_data.get("download", {}).get("hash") or "").lower()
+    try:
+        control_path = repo_root / CONTROL_MOD_PATH
+        with control_path.open("rb") as handle:
+            control_data = tomllib.load(handle)
+        control_sha512 = (control_data.get("download", {}).get("hash") or "").lower()
 
-    control_status = _version_file_status(control_sha512)
-    da_status = _version_file_status(da_sha512)
+        control_status = _version_file_status(control_sha512)
+        da_status = _version_file_status(da_sha512)
+    except Exception as error:  # noqa: BLE001 - vouch check must never fail the bump
+        return {
+            "control_status": None, "da_status": None,
+            "result": "inconclusive", "error": repr(error),
+        }
 
     if control_status != 200:
         result = "inconclusive_control_failed"
@@ -491,7 +551,7 @@ def run_vouch_check(repo_root, da_sha512):
     if control_status not in (200, 404):
         result = "inconclusive"
 
-    return {"control_status": control_status, "da_status": da_status, "result": result}
+    return {"control_status": control_status, "da_status": da_status, "result": result, "error": None}
 
 
 # --------------------------------------------------------------------------
@@ -606,10 +666,13 @@ def render_notes(*, new_pack_version, previous_pack_version, payload, mapping_ru
         "never collapsed into 404."
     )
     lines.append("")
-    lines.append(
+    vouch_line = (
         f"Result: `{vouch['result']}` (control status={vouch['control_status']}, "
         f"DA status={vouch['da_status']})."
     )
+    if vouch.get("error"):
+        vouch_line += f" Error: {vouch['error']}"
+    lines.append(vouch_line)
     lines.append("")
 
     lines.append("## Listing review")
@@ -668,7 +731,7 @@ def restore_repo(repo_root, notes_path=None, run_command=subprocess.run):
         # a staged-but-deleted ("AD") entry once we unlink it below.
         relative_notes_path = str(notes_path.relative_to(repo_root))
         run_command(["git", "restore", "--staged", "--", relative_notes_path],
-                    cwd=str(repo_root), check=False)
+                    cwd=str(repo_root), check=False, capture_output=True, text=True)
         notes_path.unlink()
 
 
@@ -813,7 +876,11 @@ def run_engine(repo_root, payload_raw, *, release_body_override=None,
         stage_intended_files(repo_root, notes_path, run_command=run_command)
         run_gate(repo_root, run_command, commands, "check")
         run_gate(repo_root, run_command, commands, "build")
-    except EngineError:
+    except Exception:
+        # Fail-closed applies to ANY exception here, not only a designed
+        # EngineError: a missing make/packwiz binary, a CalledProcessError
+        # from `git add`, an OSError writing a file, etc. must all leave the
+        # repo exactly as it was before the run, same as a designed failure.
         restore_repo(repo_root, notes_path=notes_path, run_command=run_command)
         if not notes_dir_existed_before and releases_dir.exists() and not any(releases_dir.iterdir()):
             releases_dir.rmdir()
@@ -838,10 +905,10 @@ def run_engine(repo_root, payload_raw, *, release_body_override=None,
     return summary, EXIT_OK, f"Bumped Sickos {previous_pack_version} -> {new_pack_version} (Dynamic Atmosphere {payload['version']})."
 
 
-def build_error_summary(error, payload_raw):
+def build_error_summary(outcome, message, payload_raw):
     return {
         "changed": False,
-        "outcome": error.outcome,
+        "outcome": outcome,
         "previous_pack_version": None,
         "new_pack_version": None,
         "da_version": payload_raw.get("version") if isinstance(payload_raw, dict) else None,
@@ -853,7 +920,7 @@ def build_error_summary(error, payload_raw):
         "vouch": None,
         "listing_review_required": False,
         "listing_flagged_lines": [],
-        "error": error.message,
+        "error": message,
     }
 
 
@@ -874,9 +941,13 @@ def main(argv=None):
             args.repo_root, payload_raw, release_body_override=args.release_body,
         )
     except EngineError as error:
-        summary = build_error_summary(error, payload_raw)
+        summary = build_error_summary(error.outcome, error.message, payload_raw)
         exit_code = error.exit_code
         message = error.message
+    except Exception as error:  # noqa: BLE001 - always machine-readable output, never a bare traceback exit
+        message = f"unexpected error: {error!r}"
+        summary = build_error_summary("unexpected_error", message, payload_raw)
+        exit_code = EXIT_UNEXPECTED_ERROR
 
     print(message, file=sys.stderr)
     summary_text = json.dumps(summary, indent=2, sort_keys=True)
