@@ -1,13 +1,13 @@
 name = "Dynamic Atmosphere"
-filename = "dynamicatmosphere-0.19.0-alpha.1.jar"
+filename = "dynamicatmosphere-0.19.1-alpha.1.jar"
 side = "both"
 
 [download]
-url = "https://cdn.modrinth.com/data/PZV7RorC/versions/6ymcjbjy/dynamicatmosphere-0.19.0-alpha.1.jar"
+url = "https://cdn.modrinth.com/data/PZV7RorC/versions/bhm3d7Cv/dynamicatmosphere-0.19.1-alpha.1.jar"
 hash-format = "sha512"
-hash = "48a59bcda4b087f26a27d94aa8ca1acfc3d2f12e9f4be00294105015f4d048d222b2c4f043213afaf78ef7ef6b16538ea9224f51aeabb15e09145250b6d2240a"
+hash = "ac3834d495afa2b7c93663272c84f5c334d03e559f60bd7d6c470607d47fc926cda725169d16536a7207a71092d345fe2a305e2885b5169cbc9350bd30074c2e"
 
 [update]
 [update.modrinth]
 mod-id = "PZV7RorC"
-version = "6ymcjbjy"
+version = "bhm3d7Cv"

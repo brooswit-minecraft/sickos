@@ -13,7 +13,11 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Atmosphere
 
-Sickos 0.22.0 pins Dynamic Atmosphere 0.19.0-alpha.1 for client and server.
+Sickos 0.22.1 pins Dynamic Atmosphere 0.19.1-alpha.1 for client and server.
+The Vapor spawn gate is scoped to the Overworld only: natural and chunk-generation
+monster spawns in the Nether and End no longer require dense local Vapor and follow
+vanilla rules again. The Overworld rule (qualifying terrain above, or Vapor strictly
+more than half full) is unchanged, and Endermen and Ender Gas are untouched.
 Create fan transfers run independently every five seconds, without a skip roll.
 Positive RPM pulls evenly from the five non-facing neighbors before pushing forward.
 Negative RPM draws from the facing neighbor before distributing evenly to the other
