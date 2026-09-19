@@ -399,3 +399,45 @@ path including failures:
 See the one-line pointer added to CONTRIBUTING.md's "Release process"
 section, next to step 4 (the push-to-main / CI step this engine's output
 feeds).
+
+## CI wiring (SICKOS-78)
+
+`.github/workflows/da-auto-bump.yml` is the CI wiring around this engine:
+it turns a Dynamic Atmosphere `repository_dispatch` into a commit pushed to
+`main`, so the existing `release.yml` -> Modrinth publish ->
+`server-update.yml` chain fires. Logic lives in
+`scripts/da-auto-bump-dispatch.py` (unit-tested in
+`tests/test_da_auto_bump_dispatch.py`); the workflow YAML only wires
+triggers, permissions, and step outputs. Full description, the pause
+switch, the credential fallback, and the fail-closed no-credential path:
+see the "Automated Dynamic Atmosphere updates" section in README.md.
+
+Briefly, in order: a repo variable `SICKOS_AUTOBUMP_PAUSED` pause switch
+(checked before anything is checked out), then a check out of `main`,
+credential selection (a GitHub App token, falling back to a PAT, falling
+back to none), the engine run above, then a decision:
+
+- `outcome == "already_pinned"`: succeed, nothing pushed.
+- a real bump and a credential is configured: commit the staged tree with
+  a `DA-Auto-Bump: <da_version> <modrinth_version_id>` trailer (alone in
+  its own final paragraph -- see "Trailer format" below) and push
+  `HEAD:main` directly (never a stored remote, never a force-push).
+- a real bump and no credential is configured: fail the run, uploading the
+  staged patch, the notes file, and the summary JSON as a workflow
+  artifact for inspection. Nothing is pushed.
+- any other exit code (including one this document does not yet list):
+  fail the run. The exit-code-to-outcome mapping fails closed by
+  construction -- an unrecognised exit code is never treated as success.
+
+### Trailer format
+
+`scripts/apply-da-release-notes.py`'s `has_da_auto_bump_trailer()` (the
+SICKOS-79 release-notes gate) uses git's own trailer parser, which only
+recognises a `DA-Auto-Bump:` line sitting **alone in the commit message's
+final paragraph**, separated from everything above it by a blank line. A
+trailer-shaped line glued directly under prose or a bullet list, with no
+blank line before it, is silently NOT recognised -- the commit message
+constructed by `da-auto-bump-dispatch.py build-commit-message` is
+unit-tested against the real `has_da_auto_bump_trailer()` function (not a
+reimplementation of it) for exactly this, including a multi-line body and
+a bullet list above the trailer.

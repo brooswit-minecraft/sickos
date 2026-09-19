@@ -395,6 +395,18 @@ still finishes green) when it isn't configured.
 | `MODRINTH_TOKEN` | secret | `release.yml`, `server-update.yml` | Auth token for publishing to Modrinth and updating a Modrinth-hosted server |
 | `MODRINTH_PROJECT_ID` | variable | `release.yml`, `server-update.yml` | Identifies which Modrinth project to publish to / follow |
 | `MODRINTH_SERVER_ID` | variable | `server-update.yml` | The Modrinth-hosted server to keep in sync |
+| `SICKOS_DISPATCH_APP_ID` | variable | `da-auto-bump.yml` | GitHub App ID used to mint the push token for an automated DA bump. Not set today. |
+| `SICKOS_DISPATCH_APP_PRIVATE_KEY` | secret | `da-auto-bump.yml` | Private key for the App above. Not set today. |
+| `SICKOS_DISPATCH_TOKEN` | secret | `da-auto-bump.yml` | Fine-grained PAT fallback push credential, used only if the App pair above is not configured. Not set today. |
+| `SICKOS_AUTOBUMP_PAUSED` | variable | `da-auto-bump.yml` | Pause switch for the automated DA bump. Unset today (automation runs). |
+
+None of the three `SICKOS_DISPATCH_*` credential entries above exists in
+this repository yet, so every DA dispatch today takes the fail-closed
+no-credential path described in
+[Automated Dynamic Atmosphere bumps](#automated-dynamic-atmosphere-bumps)
+below. `SICKOS_AUTOBUMP_PAUSED` is a separate switch, unrelated to
+credentials: unset (as it is today) or any value other than exactly
+`true` means the automation runs.
 
 ## Releasing
 
@@ -425,6 +437,90 @@ For an auto-bump push specifically (a commit carrying a `DA-Auto-Bump` trailer),
 `.github/workflows/da-auto-bump-notes.yml` additionally edits that release's GitHub
 body afterward; see [docs/release-notes-plumbing.md](docs/release-notes-plumbing.md)
 for what it does and does not cover.
+
+### Automated Dynamic Atmosphere bumps
+
+`.github/workflows/da-auto-bump.yml` triggers on a `repository_dispatch`
+sent by Dynamic Atmosphere's own release workflow (`event_type:
+dynamic-atmosphere-released`), runs `scripts/bump-dynamic-atmosphere.py`
+(see [docs/da-auto-bump.md](docs/da-auto-bump.md)), and, when it prepares a
+real bump, commits and pushes it to `main` -- which triggers the ordinary
+`release.yml` chain above, exactly as a hand-pushed version bump would.
+Full contract, exit-code mapping, and the CI wiring: see
+[docs/da-auto-bump.md](docs/da-auto-bump.md)'s "CI wiring" section. Logic
+lives in `scripts/da-auto-bump-dispatch.py`
+(`tests/test_da_auto_bump_dispatch.py`); the workflow YAML only wires
+triggers, permissions, and step outputs.
+
+**Pause switch.** The Actions repository variable `SICKOS_AUTOBUMP_PAUSED`
+is checked before anything else -- before a token is minted or anything is
+checked out. Exactly `true` pauses; unset or any other value runs.
+
+```sh
+# Pause: decline every dispatch until unpaused.
+gh variable set SICKOS_AUTOBUMP_PAUSED --repo brooswit-minecraft/sickos --body true
+
+# Resume:
+gh variable delete SICKOS_AUTOBUMP_PAUSED --repo brooswit-minecraft/sickos
+```
+
+A paused run exits successfully and does nothing else, but a paused
+dispatch is **not queued** -- Dynamic Atmosphere fires this dispatch once
+per version. To catch up once unpaused: use "Re-run all jobs" on the
+skipped run (it re-evaluates the pause variable and reuses that dispatch's
+original payload), wait for a re-delivered dispatch, or rely on the
+story-3 scheduled Modrinth poll backstop. Disabling the workflow itself in
+the Actions UI is a harder stop than the pause variable: it silently
+**drops** dispatches sent while disabled, with nothing to re-run and
+nothing queued, so prefer the pause variable.
+
+**Credentials.** A commit pushed with the default `GITHUB_TOKEN` does not
+trigger `release.yml`'s push trigger, so this workflow mints its own push
+token: a GitHub App token (`SICKOS_DISPATCH_APP_ID` +
+`SICKOS_DISPATCH_APP_PRIVATE_KEY`, restricted to `contents: write`),
+falling back to a fine-grained PAT (`SICKOS_DISPATCH_TOKEN`) if the App is
+not configured. If exactly one half of the App pair is set, the run warns
+loudly naming the missing half and falls back to the PAT if there is one.
+
+**Fail-closed.** If the engine prepares a real bump and neither credential
+is configured, the run fails with an error naming the exact missing
+variable/secret(s), and uploads a workflow artifact holding the staged
+patch, the notes file, and the summary JSON for inspection -- nothing is
+pushed, and the artifact never contains a token. This is the path every
+real DA release takes today, since none of the three credential names is
+configured yet.
+
+**Idempotency and concurrency.** A dispatch for an already-pinned version
+exits successfully with no commit and no push. All dispatches share one
+`concurrency` group with `cancel-in-progress: false`, so two dispatches
+can never interleave into competing pushes -- but with
+`cancel-in-progress: false`, only one *pending* run per group is kept: a
+third dispatch arriving while one run is in progress and one is already
+queued **replaces** the queued one. The guard prevents interleaving, not
+loss; the story-3 poll backstop and Dynamic Atmosphere's own re-delivery
+are the mitigation for a dropped dispatch.
+
+**Evidence.** Every run (paused, no-op, bumped and pushed, bumped with no
+credential, or failed) writes a job summary: the DA version, the Modrinth
+version id, whether both hashes were verified, the category received and
+which mapping rule fired, the previous and new pack version, the Modrinth
+vouch-check result, the notes file path, whether `listing_review_required`
+fired, and the pushed commit sha (or why there isn't one).
+
+**Commit trailer.** A pushed bump's commit message ends with a
+`DA-Auto-Bump: <da_version> <modrinth_version_id>` trailer, alone in its
+own final paragraph (a blank line before it) -- this exact shape is what
+`da-auto-bump-notes.yml` above gates on; see
+[docs/da-auto-bump.md](docs/da-auto-bump.md)'s "Trailer format" section
+for why the shape matters.
+
+**Listing review issue.** When the engine sets `listing_review_required`
+(non-mechanical listing text may now be stale -- see
+[docs/da-auto-bump.md](docs/da-auto-bump.md)), the push still happens
+exactly as normal; `listing_review_required` never holds or fails a push.
+After a successful push, the workflow additionally opens one GitHub issue
+listing the exact flagged lines so a human sees it without opening
+Actions. A failure to open that issue only warns; it never fails the run.
 
 ## Deploying to a Modrinth Server
 
