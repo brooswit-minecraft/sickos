@@ -7,6 +7,9 @@ build/
 .packwiz-cache/
 bin/
 
+# Python bytecode cache
+__pycache__/
+
 # editor & OS junk
 .DS_Store
 Thumbs.db

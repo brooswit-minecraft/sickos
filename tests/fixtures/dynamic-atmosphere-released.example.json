@@ -1,0 +1,10 @@
+{
+  "version": "0.20.0-alpha.1",
+  "modrinth_version_id": "abCDefGh12",
+  "sha1": "efa0829991f94305a1c87e021c90da93a489fe59",
+  "sha512": "50e0a59e7dc456e716eaf1b74329c13754ede0cebcd7ce2299c93abe28a5dffb70be23ac91640479456b555061e789b6c987732af782a7a1a2077cedeb5f1e47",
+  "download_url": "https://cdn.modrinth.com/data/PZV7RorC/versions/abCDefGh12/dynamicatmosphere-0.20.0-alpha.1.jar",
+  "file_name": "dynamicatmosphere-0.20.0-alpha.1.jar",
+  "category": "minor",
+  "github_release_url": "https://github.com/brooswit-minecraft/dynamic-atmosphere/releases/tag/v0.20.0-alpha.1"
+}
