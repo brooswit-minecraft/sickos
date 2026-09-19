@@ -5,19 +5,25 @@ on:
     paths:
       - scripts/bump-dynamic-atmosphere.py
       - scripts/apply-da-release-notes.py
+      - scripts/da-auto-bump-dispatch.py
       - tests/test_bump_dynamic_atmosphere.py
       - tests/test_apply_da_release_notes.py
+      - tests/test_da_auto_bump_dispatch.py
       - .github/workflows/da-auto-bump-tests.yml
       - .github/workflows/da-auto-bump-notes.yml
+      - .github/workflows/da-auto-bump.yml
   push:
     branches: [main]
     paths:
       - scripts/bump-dynamic-atmosphere.py
       - scripts/apply-da-release-notes.py
+      - scripts/da-auto-bump-dispatch.py
       - tests/test_bump_dynamic_atmosphere.py
       - tests/test_apply_da_release_notes.py
+      - tests/test_da_auto_bump_dispatch.py
       - .github/workflows/da-auto-bump-tests.yml
       - .github/workflows/da-auto-bump-notes.yml
+      - .github/workflows/da-auto-bump.yml
 
 permissions:
   contents: read
@@ -37,6 +43,8 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_bump_dynamic_atmosphere.py'
       - name: Run DA auto-bump release-notes tests (SICKOS-79)
         run: python -m unittest discover -s tests -p 'test_apply_da_release_notes.py'
+      - name: Run DA auto-bump dispatch-workflow tests (SICKOS-78)
+        run: python -m unittest discover -s tests -p 'test_da_auto_bump_dispatch.py'
 
   actionlint:
     runs-on: ubuntu-latest
@@ -52,5 +60,5 @@ jobs:
           go-version: '1.25'
       - name: Install pinned actionlint
         run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
-      - name: Lint da-auto-bump-notes.yml (SICKOS-79)
-        run: "$(go env GOPATH)/bin/actionlint .github/workflows/da-auto-bump-notes.yml"
+      - name: Lint da-auto-bump-notes.yml (SICKOS-79) and da-auto-bump.yml (SICKOS-78)
+        run: "$(go env GOPATH)/bin/actionlint .github/workflows/da-auto-bump-notes.yml .github/workflows/da-auto-bump.yml"

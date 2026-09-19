@@ -48,10 +48,12 @@ this policy to future releases; do not republish or renumber existing artifacts.
    `make build`. Inspect the exported `.mrpack` for the required files and sides.
 4. Push the reviewed change to `main`. CI creates the GitHub release, publishes to
    Modrinth, and triggers hosted deployment. Do not create releases manually.
-   (For a Dynamic Atmosphere bump specifically, steps 1-3 can be prepared by
-   `scripts/bump-dynamic-atmosphere.py` -- see `docs/da-auto-bump.md`. If that
-   commit carries a `DA-Auto-Bump` trailer, a follow-up workflow also edits the
-   release body -- see `docs/release-notes-plumbing.md`.)
+   (For a Dynamic Atmosphere bump specifically, steps 1-4 can run unattended via
+   `.github/workflows/da-auto-bump.yml`, which prepares the bump with
+   `scripts/bump-dynamic-atmosphere.py` and pushes it -- see
+   `docs/da-auto-bump.md`, including its pause switch and fail-closed behavior.
+   If that commit carries a `DA-Auto-Bump` trailer, a follow-up workflow also
+   edits the release body -- see `docs/release-notes-plumbing.md`.)
 5. Verify release and deployment results, including restart and health. Distinguish
    a successful server start from an actual client launch/join test in reporting.
 

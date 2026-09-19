@@ -1,0 +1,274 @@
+name: DA auto-bump dispatch
+
+# Wired for SICKOS-78 (implements SICKOS-73/SICKOS-70). Turns a
+# `dynamic-atmosphere-released` repository_dispatch into a pushed commit on
+# main via scripts/bump-dynamic-atmosphere.py (contract:
+# docs/da-auto-bump.md), so the existing release.yml -> Modrinth publish ->
+# server-update.yml chain fires exactly as it does for a hand-pushed
+# version bump. See docs/da-auto-bump.md's "CI wiring" section for the full
+# contract, the pause switch, and the fail-closed no-credential path.
+#
+# github.event.client_payload is UNTRUSTED input from the DA repo. It is
+# written to a file via env:/toJSON below and never interpolated into a
+# run: body. The engine (scripts/bump-dynamic-atmosphere.py) does its own
+# strict validation of every field.
+
+on:
+  repository_dispatch:
+    types: [dynamic-atmosphere-released]
+
+# Shared by ALL dispatches (not per DA version), so two dispatches can never
+# interleave into competing pushes. cancel-in-progress: false means a
+# third dispatch arriving while one run is in progress and one is already
+# queued REPLACES the queued one -- this prevents interleaving, it does not
+# guarantee delivery. See docs/da-auto-bump.md's "CI wiring" section.
+concurrency:
+  group: da-auto-bump
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # Mapped to env once, at job scope, so later steps can test emptiness
+      # via the env context (available in steps.*.if) without ever putting
+      # a secret in an `if:` expression directly -- secrets cannot be used
+      # there. Never echoed; GitHub also auto-masks any use of a value that
+      # is a real secrets.* value in logs.
+      SICKOS_DISPATCH_APP_PRIVATE_KEY: ${{ secrets.SICKOS_DISPATCH_APP_PRIVATE_KEY }}
+      SICKOS_DISPATCH_TOKEN: ${{ secrets.SICKOS_DISPATCH_TOKEN }}
+    steps:
+      # --- Item 2: pause switch, checked before anything else -----------
+      - name: Check pause switch
+        id: pause
+        env:
+          PAUSED_VALUE: ${{ vars.SICKOS_AUTOBUMP_PAUSED }}
+        run: |
+          # Deliberately inline, not scripts/da-auto-bump-dispatch.py: this
+          # must run before anything is checked out, minted, or otherwise
+          # touched, so it cannot depend on repo content. Exactly "true"
+          # pauses; unset or any other value (including "TRUE") runs -- the
+          # identical rule is unit-tested as pause_gate() in
+          # tests/test_da_auto_bump_dispatch.py. Keep the two in sync.
+          if [ "$PAUSED_VALUE" = "true" ]; then
+            echo "paused=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "paused=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Report paused run
+        if: steps.pause.outputs.paused == 'true'
+        env:
+          DA_VERSION: ${{ github.event.client_payload.version }}
+        run: |
+          VERSION_TEXT="${DA_VERSION:-<unknown -- payload had no version>}"
+          echo "::warning::DA auto-bump is paused (repo variable SICKOS_AUTOBUMP_PAUSED=true). Declined to pin Dynamic Atmosphere $VERSION_TEXT. This dispatch is NOT queued -- Dynamic Atmosphere fires the repository_dispatch once per version."
+          {
+            echo "## DA auto-bump: paused"
+            echo
+            echo "Declined to pin Dynamic Atmosphere \`$VERSION_TEXT\`. This dispatch is NOT queued -- Dynamic Atmosphere fires the repository_dispatch once per version."
+            echo
+            echo "To catch up once unpaused:"
+            echo '- Use "Re-run all jobs" on this run -- it re-evaluates SICKOS_AUTOBUMP_PAUSED and reuses this dispatch'"'"'s original payload, or'
+            echo "- wait for a re-delivered dispatch, or"
+            echo "- rely on the story-3 scheduled Modrinth poll backstop to catch up."
+            echo
+            echo "Resume with: \`gh variable delete SICKOS_AUTOBUMP_PAUSED --repo ${{ github.repository }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # --- Everything below is skipped while paused ----------------------
+      - uses: actions/checkout@v4
+        if: steps.pause.outputs.paused != 'true'
+        with:
+          persist-credentials: false
+
+      # --- Item 3: credential selection, checked before any push --------
+      - name: Select push credential
+        id: creds
+        if: steps.pause.outputs.paused != 'true'
+        env:
+          APP_ID: ${{ vars.SICKOS_DISPATCH_APP_ID }}
+          # Emptiness only, never the secret value itself.
+          APP_KEY_SET: ${{ env.SICKOS_DISPATCH_APP_PRIVATE_KEY != '' }}
+          PAT_SET: ${{ env.SICKOS_DISPATCH_TOKEN != '' }}
+        run: |
+          python3 scripts/da-auto-bump-dispatch.py select-credential \
+            --app-id "$APP_ID" --app-key-set "$APP_KEY_SET" --pat-set "$PAT_SET" \
+            --github-output "$GITHUB_OUTPUT"
+
+      # --- Item 1: write the untrusted payload to a file -----------------
+      - name: Write dispatch payload to a file
+        if: steps.pause.outputs.paused != 'true'
+        env:
+          PAYLOAD_JSON: ${{ toJSON(github.event.client_payload) }}
+        run: |
+          if [ "$PAYLOAD_JSON" = "null" ]; then
+            printf '{}' > "$RUNNER_TEMP/payload.json"
+          else
+            printf '%s' "$PAYLOAD_JSON" > "$RUNNER_TEMP/payload.json"
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.pause.outputs.paused != 'true'
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-go@v5
+        if: steps.pause.outputs.paused != 'true'
+        with:
+          go-version: '1.23'
+
+      # Same toolchain the engine's own `make refresh/check/build` gates
+      # use locally, in ci.yml, and in release.yml -- see reusable-ci.yml.
+      - name: Install pinned packwiz
+        if: steps.pause.outputs.paused != 'true'
+        run: make tools
+
+      - name: Run the DA auto-bump engine
+        id: engine
+        if: steps.pause.outputs.paused != 'true'
+        run: |
+          set +e
+          python3 scripts/bump-dynamic-atmosphere.py \
+            --payload "$RUNNER_TEMP/payload.json" \
+            --repo-root . \
+            --summary-out "$RUNNER_TEMP/summary.json"
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      # --- Items 4/7: exit code + summary -> decision, evidence summary --
+      - name: Decide outcome and render the evidence summary
+        id: decide
+        if: steps.pause.outputs.paused != 'true'
+        run: |
+          python3 scripts/da-auto-bump-dispatch.py decide \
+            --exit-code "${{ steps.engine.outputs.exit_code }}" \
+            --summary-path "$RUNNER_TEMP/summary.json" \
+            --github-output "$GITHUB_OUTPUT" \
+            --github-step-summary "$GITHUB_STEP_SUMMARY"
+
+      - name: Fail the run on an engine error
+        if: steps.pause.outputs.paused != 'true' && steps.decide.outputs.action == 'failure'
+        run: |
+          echo "::error::${{ steps.decide.outputs.error_message }}"
+          exit 1
+
+      # --- Item 4: fail closed, no credential ----------------------------
+      - name: Prepare fail-closed inspection artifact
+        if: steps.pause.outputs.paused != 'true' && steps.decide.outputs.action == 'bump' && steps.creds.outputs.method == 'none'
+        run: |
+          mkdir -p "$RUNNER_TEMP/da-auto-bump-prepared"
+          git diff --cached > "$RUNNER_TEMP/da-auto-bump-prepared/staged.patch"
+          cp "${{ steps.decide.outputs.notes_path }}" "$RUNNER_TEMP/da-auto-bump-prepared/notes.md"
+          cp "$RUNNER_TEMP/summary.json" "$RUNNER_TEMP/da-auto-bump-prepared/summary.json"
+          {
+            echo
+            echo "### Fail-closed: no push credential configured"
+            echo
+            echo '```'
+            git diff --cached --stat
+            echo '```'
+            echo
+            echo "Notes file (\`${{ steps.decide.outputs.notes_path }}\`):"
+            echo
+            echo '```markdown'
+            cat "${{ steps.decide.outputs.notes_path }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: steps.pause.outputs.paused != 'true' && steps.decide.outputs.action == 'bump' && steps.creds.outputs.method == 'none'
+        with:
+          name: da-auto-bump-prepared-${{ steps.decide.outputs.new_pack_version }}
+          path: ${{ runner.temp }}/da-auto-bump-prepared
+          if-no-files-found: error
+
+      - name: No push credential configured -- fail closed
+        if: steps.pause.outputs.paused != 'true' && steps.decide.outputs.action == 'bump' && steps.creds.outputs.method == 'none'
+        run: |
+          echo "::error::DA auto-bump prepared a real bump (Sickos ${{ steps.decide.outputs.new_pack_version }}) but no push credential is configured. Set one of: SICKOS_DISPATCH_APP_ID (repo variable) + SICKOS_DISPATCH_APP_PRIVATE_KEY (secret), or SICKOS_DISPATCH_TOKEN (secret). The prepared bump was uploaded as a workflow artifact for inspection; nothing was pushed."
+          exit 1
+
+      # --- Item 5: push (credential present) -----------------------------
+      - name: Mint push token (GitHub App)
+        id: mint-app-token
+        if: steps.pause.outputs.paused != 'true' && steps.decide.outputs.action == 'bump' && steps.creds.outputs.method == 'app'
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ vars.SICKOS_DISPATCH_APP_ID }}
+          private-key: ${{ secrets.SICKOS_DISPATCH_APP_PRIVATE_KEY }}
+          permission-contents: write
+
+      - name: Commit and push to main
+        id: push
+        if: steps.pause.outputs.paused != 'true' && steps.decide.outputs.action == 'bump' && steps.creds.outputs.method != 'none'
+        env:
+          APP_TOKEN: ${{ steps.mint-app-token.outputs.token }}
+          PAT_TOKEN: ${{ env.SICKOS_DISPATCH_TOKEN }}
+          METHOD: ${{ steps.creds.outputs.method }}
+          NEW_VERSION: ${{ steps.decide.outputs.new_pack_version }}
+          DA_VERSION: ${{ steps.decide.outputs.da_version }}
+          MODRINTH_VERSION_ID: ${{ steps.decide.outputs.modrinth_version_id }}
+          MAPPING_RULE: ${{ steps.decide.outputs.mapping_rule }}
+        run: |
+          if [ "$METHOD" = "app" ]; then
+            TOKEN="$APP_TOKEN"
+          else
+            TOKEN="$PAT_TOKEN"
+          fi
+
+          MESSAGE_FILE="$RUNNER_TEMP/commit-message.txt"
+          python3 scripts/da-auto-bump-dispatch.py build-commit-message \
+            --mapping-rule "$MAPPING_RULE" --new-pack-version "$NEW_VERSION" \
+            --da-version "$DA_VERSION" --modrinth-version-id "$MODRINTH_VERSION_ID" \
+            > "$MESSAGE_FILE"
+
+          git -c user.name="sickos-da-auto-bump[bot]" \
+              -c user.email="sickos-da-auto-bump[bot]@users.noreply.github.com" \
+              commit -F "$MESSAGE_FILE"
+
+          # Auth passed via a per-invocation `-c http.extraheader`, never
+          # via `git remote set-url` -- the token never enters the
+          # persisted git config, so it can never show up in a later
+          # `git remote -v`. Never echoed; GitHub masks the App-minted
+          # token (a registered secret output) and the PAT (secrets.*)
+          # wherever they appear in logs regardless.
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+          if ! git -c http.https://github.com/.extraheader="$AUTH_HEADER" \
+              push "https://github.com/${{ github.repository }}.git" HEAD:main; then
+            echo "push_failed=true" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "pushed_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Push was rejected -- safe to re-run
+        if: always() && steps.pause.outputs.paused != 'true' && steps.push.outputs.push_failed == 'true'
+        run: |
+          echo "::error::Push to main was rejected (non-fast-forward, or branch protection). This run is safe to re-run: the DA auto-bump engine is idempotent and will recompute a fresh bump against the current tip of main."
+
+      # --- Item 8: listing_review_required is reporting, never gating ---
+      - name: Open listing-review issue
+        if: steps.pause.outputs.paused != 'true' && steps.decide.outputs.action == 'bump' && steps.push.outputs.pushed_sha != '' && steps.decide.outputs.listing_review_required == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/da-auto-bump-dispatch.py open-listing-issue \
+            --summary-path "$RUNNER_TEMP/summary.json" \
+            --new-pack-version "${{ steps.decide.outputs.new_pack_version }}" \
+            --da-version "${{ steps.decide.outputs.da_version }}" \
+            --repo "${{ github.repository }}"
+
+      # --- Item 7: the one summary line `decide` cannot yet know ---------
+      - name: Finalize the evidence summary
+        if: always() && steps.pause.outputs.paused != 'true'
+        run: |
+          python3 scripts/da-auto-bump-dispatch.py finalize-summary \
+            --action "${{ steps.decide.outputs.action || 'failure' }}" \
+            --credential-method "${{ steps.creds.outputs.method || 'none' }}" \
+            --pushed-sha "${{ steps.push.outputs.pushed_sha }}" \
+            --push-failed "${{ steps.push.outputs.push_failed == 'true' && 'true' || 'false' }}" \
+            --github-step-summary "$GITHUB_STEP_SUMMARY"
