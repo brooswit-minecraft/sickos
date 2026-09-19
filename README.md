@@ -25,12 +25,7 @@ its old, saved `smokeOpticalDensity` setting until you open
 to take the new default. This is a client-side visual setting only; it does
 not affect the server or world data.
 
-Known issue: in areas you have already explored, Dust, Ender Gas, Exhaust,
-Void Gas and Slime will not appear, because Dynamic Atmosphere cannot read
-their old saved data. New areas work normally, and Vapor and Smoke are
-unaffected. A fix is expected in the next Dynamic Atmosphere release.
-
-Sickos 0.23.0 pins Dynamic Atmosphere 0.20.0-alpha.1 for client and server.
+Sickos 0.23.1 pins Dynamic Atmosphere 0.20.1-alpha.1 for client and server.
 The Vapor spawn gate is scoped to the Overworld only: natural and chunk-generation
 monster spawns in the Nether and End no longer require dense local Vapor and follow
 vanilla rules again. The Overworld rule (qualifying terrain above, or Vapor strictly

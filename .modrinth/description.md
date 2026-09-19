@@ -3,12 +3,11 @@
 Back up your world first. Dust, Ender Gas, Exhaust, Void Gas and Slime that
 has already built up is cleared when the world loads. Old violence settings
 reset to defaults under a new voidGas section, so set your tuning again. The
-client and the server must run the same version.
-
-Known issue: in areas you have already explored, Dust, Ender Gas, Exhaust,
-Void Gas and Slime will not appear, because Dynamic Atmosphere cannot read
-their old saved data. New areas work normally, and Vapor and Smoke are
-unaffected. A fix is expected in the next Dynamic Atmosphere release.
+client and the server must run the same version. Smoke is lighter in this
+version: your client keeps its old, saved smokeOpticalDensity setting until
+you open config/dynamicatmosphere-client.toml and set it to 2, or delete
+that file to take the new default. This is a client-side visual setting
+only; it does not affect the server or world data.
 
 ## What this is
 
