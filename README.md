@@ -360,28 +360,24 @@ updates, pin a specific tag or commit SHA in place of `@v1` in your stub's `uses
 
 ## Template-only files
 
-Four files under `.github/workflows` are template-only, and safe to leave in place:
+One file under `.github/workflows` is template-only, and safe to leave in place:
 
 `tag-v1.yml` keeps the `v1` tag on **this** repo pointed at its own `main`. It is
 guarded by a `github.repository` check, so it is inert in any repo cloned from this
 template — the job is skipped entirely, so it creates no tag in your repo.
 
-`reusable-ci.yml`, `reusable-release.yml`, and `reusable-server-update.yml` are
-`workflow_call`-only definitions — nothing invokes them by local path. Your stubs
-(`ci.yml`, `release.yml`, `server-update.yml`) call them **upstream**, at
-`brooswit-minecraft/schematic/.github/workflows/reusable-<name>.yml@v1`, so your local
-copies never run.
-
-There's no need to delete any of the four — doing so gains nothing, since they don't
-run locally either way, and deleting one only creates work for you later: a
-`git merge template/main` does not restore a file you deleted (your deletion simply
-persists, merge or no merge) until the template itself changes that file, at which
-point the merge stops with a delete/modify conflict you have to resolve by hand.
-Leaving the four alone avoids that conflict entirely, on every future merge.
+This repo does **not** keep local `reusable-ci.yml`, `reusable-release.yml`, or
+`reusable-server-update.yml` copies. Your stubs (`ci.yml`, `release.yml`,
+`server-update.yml`) call those `workflow_call` definitions **upstream**, at
+`brooswit-minecraft/schematic/.github/workflows/reusable-<name>.yml@v1` — a local copy
+would never run, so none is kept. Unlike `tag-v1.yml` above, these three have no guard
+that makes them harmless to leave in place, so if a future `git merge template/main`
+re-adds one as a delete/modify conflict (the template's own history predates this
+cleanup), resolve it by deleting the file again rather than keeping the template's
+version — a one-time conflict per file, not a recurring one.
 
 `ci.yml`, `release.yml`, and `server-update.yml` are the three stubs you, as a consumer
-of this template, need to care about — the four template-only files above need no
-attention at all.
+of this template, need to care about — `tag-v1.yml` above needs no attention at all.
 
 ## Secrets & variables
 
@@ -521,7 +517,6 @@ mods/                                one *.pw.toml file per mod, pinning a versi
 .github/workflows/release.yml       cuts a release (see Releasing above)
 .github/workflows/server-update.yml keeps a Modrinth-hosted server in sync (see Deploying to a Modrinth Server above)
 .github/workflows/tag-v1.yml        template-only (see Template-only files above)
-.github/workflows/reusable-*.yml    template-only (see Template-only files above)
 Makefile                            the build entry point, shared by humans and CI
 ```
 

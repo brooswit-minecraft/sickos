@@ -3,11 +3,13 @@ name: Server update
 # After a release publishes a version to Modrinth, re-points a
 # Modrinth-hosted server's upstream at that version and restarts it. Skips
 # cleanly (and the run still succeeds) when MODRINTH_SERVER_ID /
-# MODRINTH_TOKEN are not configured — see reusable-server-update.yml.
+# MODRINTH_TOKEN are not configured — see the reusable-server-update.yml
+# workflow this stub calls, upstream in brooswit-minecraft/schematic.
 #
 # Chained on the "Release" workflow's completion (workflow_run) rather than
 # on `release: published` directly, so this only starts once release.yml has
-# actually finished publishing to Modrinth — no race with reusable-release.yml.
+# actually finished publishing to Modrinth — no race with the upstream
+# reusable-release.yml workflow.
 # `workflows: ["Release"]` matches release.yml's `name: Release` (its display
 # name), NOT its filename — renaming that `name:` field would silently break
 # this chain. NOTE: a workflow_run trigger only arms once this file is on the
