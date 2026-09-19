@@ -41,7 +41,7 @@ metafile = true
 
 [[files]]
 file = "mods/dynamic-atmosphere.pw.toml"
-hash = "1c22c708c8e92fd63a57e72f7c41f86488603e51c9c2cc4576757b811ecb3677"
+hash = "725bb8f13cfa198cb382196a3d39b983e2c9f2277a96ac692dc3cb83132cc532"
 metafile = true
 
 [[files]]

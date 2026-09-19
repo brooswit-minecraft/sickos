@@ -13,7 +13,24 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Atmosphere
 
-Sickos 0.22.1 pins Dynamic Atmosphere 0.19.1-alpha.1 for client and server.
+**Sickos 0.23.0 is a breaking update. Back up your world before upgrading.**
+Dust, Ender Gas, Exhaust, Void Gas and Slime atmosphere data saved by earlier
+versions is cleared when the world loads; there is no migration by design.
+The old `violence` server and client config sections reset to their defaults
+under a new `voidGas` section, so re-apply any tuning you had. The client and
+the server must run the same version; the network protocol changed. Smoke is
+lighter in this version: if you played earlier versions, your client keeps
+its old, saved `smokeOpticalDensity` setting until you open
+`config/dynamicatmosphere-client.toml` and set it to `2`, or delete that file
+to take the new default. This is a client-side visual setting only; it does
+not affect the server or world data.
+
+Known issue: in areas you have already explored, Dust, Ender Gas, Exhaust,
+Void Gas and Slime will not appear, because Dynamic Atmosphere cannot read
+their old saved data. New areas work normally, and Vapor and Smoke are
+unaffected. A fix is expected in the next Dynamic Atmosphere release.
+
+Sickos 0.23.0 pins Dynamic Atmosphere 0.20.0-alpha.1 for client and server.
 The Vapor spawn gate is scoped to the Overworld only: natural and chunk-generation
 monster spawns in the Nether and End no longer require dense local Vapor and follow
 vanilla rules again. The Overworld rule (qualifying terrain above, or Vapor strictly
@@ -22,21 +39,21 @@ Create fan transfers run independently every five seconds, without a skip roll.
 Positive RPM pulls evenly from the five non-facing neighbors before pushing forward.
 Negative RPM draws from the facing neighbor before distributing evenly to the other
 five. Intake works from an empty fan cell, and blocked output retains intake.
-Fans only affect cells up to 4x4x4: Vapor, Smoke, Dust, Exhaust, and Ender Gas.
-Violence and Slime are unaffected.
+Fans affect every material's 4x4x4 cells: Vapor, Smoke, Dust, Exhaust, Ender Gas,
+Void Gas, and Slime. Void Gas and Slime became fan-transportable once they moved
+onto the same 4x4x4 cell size as the rest.
 Destinations with empty space can be overfilled, causing normal pressure handling
 and possible block destruction. Fan cadence and movement counters are in status.
-Ender Gas now uses 2x2x2 cells; old one-block cells migrate on load. Random
-full-moon Ender Gas bursts are removed, while portal and other sources remain.
+Ender Gas now uses 4x4x4 cells, the same size as every other atmosphere material.
+Random full-moon Ender Gas bursts are removed, while portal and other sources remain.
 Lava now produces one tenth as much Smoke (4 units instead of 40), including
 add/remove events. Existing material is preserved.
 This minor gameplay release enables all seven independent materials: Vapor, Smoke,
-Dust, Ender Gas, Violence, Exhaust, and Slime. Producers and interactions include
+Dust, Ender Gas, Void Gas, Exhaust, and Slime. Producers and interactions include
 movement dust, explosion smoke, portal gas, crop growth, suffocation, and mob spawning.
-Smoke, Violence, and Slime have four times the optical density; Ender Gas has 40x.
+Smoke has twice the optical density; Void Gas and Slime have four times; Ender Gas has 40x.
 All materials share configurable 200-tick simulation and 300-tick scheduled production
-intervals, with independent cell sizes and distance cutoffs. Smoke now uses 4-block
-cells, with automatic mass-preserving migration. Crying Obsidian produces Ender Gas.
+intervals, and now share the same 4x4x4 cell size. Crying Obsidian produces Ender Gas.
 Fan intake and output each share a budget of 1.0 material per absolute RPM per pass.
 A 256 RPM fan requests up to 256 units per stage per supported material, bounded by
 available material and the numeric storage ceiling, not spare capacity. Shortfalls
