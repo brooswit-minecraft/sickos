@@ -1,0 +1,31 @@
+name: DA auto-bump engine tests
+
+on:
+  pull_request:
+    paths:
+      - scripts/bump-dynamic-atmosphere.py
+      - tests/test_bump_dynamic_atmosphere.py
+      - .github/workflows/da-auto-bump-tests.yml
+  push:
+    branches: [main]
+    paths:
+      - scripts/bump-dynamic-atmosphere.py
+      - tests/test_bump_dynamic_atmosphere.py
+      - .github/workflows/da-auto-bump-tests.yml
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run DA auto-bump engine tests
+        run: python -m unittest discover -s tests -p 'test_bump_dynamic_atmosphere.py'
