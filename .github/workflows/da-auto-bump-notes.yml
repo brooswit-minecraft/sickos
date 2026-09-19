@@ -1,0 +1,81 @@
+name: DA auto-bump release notes
+
+# TEMPORARY workflow (route R1, SICKOS-79, see docs/release-notes-plumbing.md).
+# Edits the BODY of a GitHub release that release.yml already created on a
+# push to main -- it creates, tags, and publishes nothing. Delete this
+# workflow in the same change that adopts R3 (a schematic reusable-release
+# notes input that fills both the GitHub release body and the Modrinth
+# changelog from one release path); do not let it outlive that reason.
+#
+# Chained on the "Release" workflow's completion (workflow_run), the same
+# pattern server-update.yml uses. `workflows: ["Release"]` matches
+# release.yml's `name: Release` (its display name), NOT its filename --
+# renaming that `name:` field would silently break this trigger. A
+# workflow_run trigger only arms once this file is on the repository's
+# default branch, so this cannot be exercised end-to-end before this PR
+# merges (see the PR description).
+#
+# Runs only when ALL of these hold, checked by scripts/apply-da-release-notes.py
+# gate (see docs/release-notes-plumbing.md for the full contract):
+#   1. the Release run concluded successfully;
+#   2. the Release run's own trigger was `push` (never `release`/`workflow_dispatch`);
+#   3. the pushed head commit carries a `DA-Auto-Bump` trailer, whoever wrote
+#      it -- the value is never parsed or validated, only the trailer key;
+#   4. docs/releases/<pack version>.md exists at that head commit, where the
+#      pack version is read from pack.toml at that same commit.
+# Everything from the triggering event is untrusted and reaches the shell
+# only through env: (never interpolated into a run: body), and the job
+# checks out the head sha explicitly rather than the default ref.
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  edit-release-notes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Write head commit message to a file
+        env:
+          HEAD_COMMIT_MESSAGE: ${{ github.event.workflow_run.head_commit.message }}
+        run: printf '%s' "$HEAD_COMMIT_MESSAGE" > "$RUNNER_TEMP/head-commit-message.txt"
+
+      - name: Check gate conditions
+        id: gate
+        env:
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          EVENT_NAME: ${{ github.event.workflow_run.event }}
+        run: |
+          python3 scripts/apply-da-release-notes.py gate \
+            --conclusion "$CONCLUSION" \
+            --event "$EVENT_NAME" \
+            --commit-message-file "$RUNNER_TEMP/head-commit-message.txt" \
+            --repo-root . \
+            --github-output "$GITHUB_OUTPUT" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Edit GitHub release body
+        if: steps.gate.outputs.passed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.gate.outputs.version }}
+        run: |
+          python3 scripts/apply-da-release-notes.py apply \
+            --repo-root . \
+            --version "$VERSION" \
+            --github-step-summary "$GITHUB_STEP_SUMMARY"
