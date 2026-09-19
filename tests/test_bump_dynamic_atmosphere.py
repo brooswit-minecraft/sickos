@@ -261,6 +261,49 @@ class TestGateFailures(EngineTestCase):
         self.assertEqual(self.porcelain(), "")
 
 
+class TestDirtyTreeGuard(EngineTestCase):
+    def _dirty(self, relative_path, extra_text="\nlocal uncommitted note\n"):
+        path = self.repo / relative_path
+        path.write_text(path.read_text(encoding="utf-8") + extra_text, encoding="utf-8")
+
+    def _assert_refused_without_touching_anything(self, relative_path):
+        before_porcelain = self.porcelain()
+        before_content = (self.repo / relative_path).read_text(encoding="utf-8")
+        payload = make_payload()
+        with self.assertRaises(bump.EngineError) as ctx:
+            self.run_engine(payload)
+        self.assertEqual(ctx.exception.exit_code, bump.EXIT_DIRTY_TREE)
+        self.assertIn(relative_path, str(ctx.exception))
+        self.assertEqual(self.porcelain(), before_porcelain)
+        self.assertEqual((self.repo / relative_path).read_text(encoding="utf-8"), before_content)
+        self.assertFalse((self.repo / "docs" / "releases").exists())
+
+    def test_dirty_readme_refuses_before_touching_anything(self):
+        self._dirty("README.md")
+        self._assert_refused_without_touching_anything("README.md")
+
+    def test_dirty_pack_toml_refuses_before_touching_anything(self):
+        self._dirty("pack.toml", '\n# stray local edit\n')
+        self._assert_refused_without_touching_anything("pack.toml")
+
+    def test_dirty_index_toml_refuses_before_touching_anything(self):
+        self._dirty("index.toml", "\n# stray local edit\n")
+        self._assert_refused_without_touching_anything("index.toml")
+
+    def test_dirty_da_pin_refuses_before_touching_anything(self):
+        self._dirty("mods/dynamic-atmosphere.pw.toml", "\n# stray local edit\n")
+        self._assert_refused_without_touching_anything("mods/dynamic-atmosphere.pw.toml")
+
+    def test_unrelated_dirty_file_does_not_trip_the_guard(self):
+        # A pre-existing uncommitted change OUTSIDE the four restore-target
+        # paths must not refuse the run -- the guard is scoped to exactly
+        # the paths restore_repo() can touch.
+        (self.repo / "CONTRIBUTING.md").write_text("unrelated\n", encoding="utf-8")
+        payload = make_payload(category="patch")
+        summary, exit_code, _ = self.run_engine(payload)
+        self.assertEqual(exit_code, bump.EXIT_OK)
+
+
 class TestCategoryMapping(EngineTestCase):
     def test_patch_bumps_patch(self):
         payload = make_payload(category="patch")
@@ -505,6 +548,16 @@ class TestInvalidPayload(EngineTestCase):
     def test_non_alphanumeric_modrinth_id(self):
         payload = make_payload()
         payload["modrinth_version_id"] = "abc def"
+        self.assert_rejected(payload)
+
+    def test_github_release_url_wrong_owner_rejected(self):
+        payload = make_payload()
+        payload["github_release_url"] = "https://github.com/someone-else/dynamic-atmosphere/releases/tag/v1.0.0"
+        self.assert_rejected(payload)
+
+    def test_github_release_url_wrong_repo_rejected(self):
+        payload = make_payload()
+        payload["github_release_url"] = "https://github.com/brooswit-minecraft/some-other-repo/releases/tag/v1.0.0"
         self.assert_rejected(payload)
 
     def test_version_with_quote_rejected(self):

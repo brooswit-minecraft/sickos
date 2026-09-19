@@ -22,12 +22,19 @@ from pathlib import Path
 
 USER_AGENT = "brooswit-minecraft/sickos (SICKOS-75 DA auto-bump engine)"
 DA_MOD_ID = "PZV7RorC"
+DA_RELEASE_OWNER = "brooswit-minecraft"
+DA_RELEASE_REPO = "dynamic-atmosphere"
 CONTROL_MOD_PATH = "mods/create.pw.toml"
 DA_PIN_PATH = "mods/dynamic-atmosphere.pw.toml"
 README_PATH = "README.md"
 DESCRIPTION_PATH = ".modrinth/description.md"
 FILENAME_PREFIX = "dynamicatmosphere-"
 FILENAME_SUFFIX = ".jar"
+
+# The fixed set of tracked paths restore_repo() ever touches. Kept as one
+# constant so the dirty-tree guard below and the restore it guards can never
+# drift apart from each other.
+RESTORE_TARGET_PATHS = ("pack.toml", "index.toml", DA_PIN_PATH, README_PATH)
 
 # Exit codes. 1 is reserved for Python's own unhandled-exception default,
 # used only if something escapes main()'s own catch-all below (which should
@@ -45,6 +52,7 @@ EXIT_MIGRATION_MISSING = 7
 EXIT_NOTES_EXISTS = 8
 EXIT_CONFIG_ERROR = 9
 EXIT_UNEXPECTED_ERROR = 10
+EXIT_DIRTY_TREE = 11
 
 REQUIRED_PAYLOAD_FIELDS = (
     "version", "modrinth_version_id", "sha1", "sha512",
@@ -129,9 +137,16 @@ def validate_payload(payload):
                            "version must contain only letters, digits, '.', '+', '-'")
 
     github_release_url = _require_str(payload, "github_release_url")
-    if not _GITHUB_RELEASE_URL_RE.match(github_release_url):
+    github_match = _GITHUB_RELEASE_URL_RE.match(github_release_url)
+    if not github_match:
         raise EngineError(EXIT_INVALID_PAYLOAD, "invalid_payload",
                            "github_release_url must look like https://github.com/<owner>/<repo>/releases/tag/<tag>")
+    if (github_match.group("owner"), github_match.group("repo")) != (DA_RELEASE_OWNER, DA_RELEASE_REPO):
+        raise EngineError(
+            EXIT_INVALID_PAYLOAD, "invalid_payload",
+            f"github_release_url must point at {DA_RELEASE_OWNER}/{DA_RELEASE_REPO}, got "
+            f"{github_match.group('owner')}/{github_match.group('repo')}",
+        )
 
     category = payload.get("category")
     if category is not None and not isinstance(category, str):
@@ -717,13 +732,33 @@ def git(repo_root, *args, run_command=subprocess.run):
 
 
 def stage_intended_files(repo_root, notes_path, run_command=subprocess.run):
-    paths = ["pack.toml", "index.toml", DA_PIN_PATH, README_PATH, str(notes_path.relative_to(repo_root))]
+    paths = [*RESTORE_TARGET_PATHS, str(notes_path.relative_to(repo_root))]
     run_command(["git", "add", "--", *paths], cwd=str(repo_root), check=True)
 
 
+def assert_restore_targets_clean(repo_root, run_command=subprocess.run):
+    """Refuse to run at all if any of RESTORE_TARGET_PATHS already has an
+    uncommitted change (staged, unstaged, or untracked) before this run
+    touches anything. Without this, restore_repo()'s fixed-path restore on a
+    failed run would discard pre-existing edits to those paths that had
+    nothing to do with this run, and a successful run would silently stage
+    them into the bump -- see docs/da-auto-bump.md's Fail-closed restore
+    section for the full story."""
+    result = run_command(["git", "status", "--porcelain", "--", *RESTORE_TARGET_PATHS],
+                          cwd=str(repo_root), capture_output=True, text=True)
+    dirty = [line for line in result.stdout.splitlines() if line]
+    if dirty:
+        raise EngineError(
+            EXIT_DIRTY_TREE, "dirty_tree",
+            "refusing to run: " + ", ".join(RESTORE_TARGET_PATHS) + " must be clean before "
+            "this engine starts (it restores or stages exactly these paths, so pre-existing "
+            "uncommitted changes to them would be discarded on failure or stolen into the bump "
+            "on success); git status --porcelain reports: " + "; ".join(dirty),
+        )
+
+
 def restore_repo(repo_root, notes_path=None, run_command=subprocess.run):
-    run_command(["git", "restore", "--staged", "--worktree", "--",
-                 "pack.toml", "index.toml", DA_PIN_PATH, README_PATH],
+    run_command(["git", "restore", "--staged", "--worktree", "--", *RESTORE_TARGET_PATHS],
                 cwd=str(repo_root), check=True)
     if notes_path is not None and notes_path.exists():
         # The notes file is untracked until staged; if the failure happened
@@ -753,6 +788,7 @@ def run_engine(repo_root, payload_raw, *, release_body_override=None,
                 downloader=default_downloader, run_command=subprocess.run,
                 gate_commands=None):
     repo_root = Path(repo_root)
+    assert_restore_targets_clean(repo_root, run_command=run_command)
     payload = validate_payload(payload_raw)
     category_received = payload["category"]
     if category_received in KNOWN_CATEGORIES:
