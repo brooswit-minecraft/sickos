@@ -238,7 +238,16 @@ _FEAT_MAPPING_RULES = {
 
 def build_commit_message(*, mapping_rule: str, new_pack_version: str, da_version: str, modrinth_version_id: str) -> str:
     commit_type = "feat" if mapping_rule in _FEAT_MAPPING_RULES else "fix"
-    subject = f"{commit_type}: release Sickos {new_pack_version} pinning Dynamic Atmosphere {da_version}"
+    if mapping_rule == "breaking_as_minor":
+        # CONTRIBUTING.md requires a breaking change to be labelled
+        # explicitly, never hidden inside a normal-looking release: mark
+        # the subject itself, not only the mapping_rule buried in the body.
+        subject = (
+            f"{commit_type}!: release Sickos {new_pack_version} "
+            f"pinning Dynamic Atmosphere {da_version} (BREAKING)"
+        )
+    else:
+        subject = f"{commit_type}: release Sickos {new_pack_version} pinning Dynamic Atmosphere {da_version}"
     body = [
         "Automated Dynamic Atmosphere auto-bump via repository_dispatch.",
         "",

@@ -214,12 +214,27 @@ class TestBuildCommitMessage(unittest.TestCase):
         )
         self.assertTrue(message.startswith("feat: release Sickos 0.23.0"))
 
-    def test_breaking_uses_feat_prefix(self):
+    def test_breaking_uses_feat_bang_prefix_and_says_breaking_in_the_subject(self):
+        # CONTRIBUTING.md requires a breaking change to be labelled
+        # explicitly, not hidden behind a normal-looking subject with the
+        # mapping rule only visible in the body.
         message = build_commit_message(
             mapping_rule="breaking_as_minor", new_pack_version="0.23.0",
             da_version="0.20.0-alpha.1", modrinth_version_id="abc123",
         )
-        self.assertTrue(message.startswith("feat: release Sickos 0.23.0"))
+        subject = message.split("\n", 1)[0]
+        self.assertTrue(subject.startswith("feat!: release Sickos 0.23.0"))
+        self.assertIn("BREAKING", subject)
+
+    def test_non_breaking_minor_does_not_say_breaking(self):
+        message = build_commit_message(
+            mapping_rule="minor", new_pack_version="0.23.0",
+            da_version="0.20.0", modrinth_version_id="abc123",
+        )
+        subject = message.split("\n", 1)[0]
+        self.assertTrue(subject.startswith("feat: release Sickos 0.23.0"))
+        self.assertNotIn("BREAKING", subject)
+        self.assertNotIn("!", subject)
 
     def test_trailer_is_recognised_by_the_real_gate_function(self):
         message = build_commit_message(

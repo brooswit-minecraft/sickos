@@ -153,17 +153,21 @@ jobs:
 
       - name: Fail the run on an engine error
         if: steps.pause.outputs.paused != 'true' && steps.decide.outputs.action == 'failure'
+        env:
+          ERROR_MESSAGE: ${{ steps.decide.outputs.error_message }}
         run: |
-          echo "::error::${{ steps.decide.outputs.error_message }}"
+          echo "::error::$ERROR_MESSAGE"
           exit 1
 
       # --- Item 4: fail closed, no credential ----------------------------
       - name: Prepare fail-closed inspection artifact
         if: steps.pause.outputs.paused != 'true' && steps.decide.outputs.action == 'bump' && steps.creds.outputs.method == 'none'
+        env:
+          NOTES_PATH: ${{ steps.decide.outputs.notes_path }}
         run: |
           mkdir -p "$RUNNER_TEMP/da-auto-bump-prepared"
           git diff --cached > "$RUNNER_TEMP/da-auto-bump-prepared/staged.patch"
-          cp "${{ steps.decide.outputs.notes_path }}" "$RUNNER_TEMP/da-auto-bump-prepared/notes.md"
+          cp "$NOTES_PATH" "$RUNNER_TEMP/da-auto-bump-prepared/notes.md"
           cp "$RUNNER_TEMP/summary.json" "$RUNNER_TEMP/da-auto-bump-prepared/summary.json"
           {
             echo
@@ -173,10 +177,10 @@ jobs:
             git diff --cached --stat
             echo '```'
             echo
-            echo "Notes file (\`${{ steps.decide.outputs.notes_path }}\`):"
+            echo "Notes file (\`$NOTES_PATH\`):"
             echo
             echo '```markdown'
-            cat "${{ steps.decide.outputs.notes_path }}"
+            cat "$NOTES_PATH"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -189,8 +193,10 @@ jobs:
 
       - name: No push credential configured -- fail closed
         if: steps.pause.outputs.paused != 'true' && steps.decide.outputs.action == 'bump' && steps.creds.outputs.method == 'none'
+        env:
+          NEW_VERSION: ${{ steps.decide.outputs.new_pack_version }}
         run: |
-          echo "::error::DA auto-bump prepared a real bump (Sickos ${{ steps.decide.outputs.new_pack_version }}) but no push credential is configured. Set one of: SICKOS_DISPATCH_APP_ID (repo variable) + SICKOS_DISPATCH_APP_PRIVATE_KEY (secret), or SICKOS_DISPATCH_TOKEN (secret). The prepared bump was uploaded as a workflow artifact for inspection; nothing was pushed."
+          echo "::error::DA auto-bump prepared a real bump (Sickos $NEW_VERSION) but no push credential is configured. Set one of: SICKOS_DISPATCH_APP_ID (repo variable) + SICKOS_DISPATCH_APP_PRIVATE_KEY (secret), or SICKOS_DISPATCH_TOKEN (secret). The prepared bump was uploaded as a workflow artifact for inspection; nothing was pushed."
           exit 1
 
       # --- Item 5: push (credential present) -----------------------------
@@ -255,20 +261,28 @@ jobs:
         if: steps.pause.outputs.paused != 'true' && steps.decide.outputs.action == 'bump' && steps.push.outputs.pushed_sha != '' && steps.decide.outputs.listing_review_required == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEW_VERSION: ${{ steps.decide.outputs.new_pack_version }}
+          DA_VERSION: ${{ steps.decide.outputs.da_version }}
+          REPO: ${{ github.repository }}
         run: |
           python3 scripts/da-auto-bump-dispatch.py open-listing-issue \
             --summary-path "$RUNNER_TEMP/summary.json" \
-            --new-pack-version "${{ steps.decide.outputs.new_pack_version }}" \
-            --da-version "${{ steps.decide.outputs.da_version }}" \
-            --repo "${{ github.repository }}"
+            --new-pack-version "$NEW_VERSION" \
+            --da-version "$DA_VERSION" \
+            --repo "$REPO"
 
       # --- Item 7: the one summary line `decide` cannot yet know ---------
       - name: Finalize the evidence summary
         if: always() && steps.pause.outputs.paused != 'true'
+        env:
+          ACTION: ${{ steps.decide.outputs.action || 'failure' }}
+          CREDENTIAL_METHOD: ${{ steps.creds.outputs.method || 'none' }}
+          PUSHED_SHA: ${{ steps.push.outputs.pushed_sha }}
+          PUSH_FAILED: ${{ steps.push.outputs.push_failed == 'true' && 'true' || 'false' }}
         run: |
           python3 scripts/da-auto-bump-dispatch.py finalize-summary \
-            --action "${{ steps.decide.outputs.action || 'failure' }}" \
-            --credential-method "${{ steps.creds.outputs.method || 'none' }}" \
-            --pushed-sha "${{ steps.push.outputs.pushed_sha }}" \
-            --push-failed "${{ steps.push.outputs.push_failed == 'true' && 'true' || 'false' }}" \
+            --action "$ACTION" \
+            --credential-method "$CREDENTIAL_METHOD" \
+            --pushed-sha "$PUSHED_SHA" \
+            --push-failed "$PUSH_FAILED" \
             --github-step-summary "$GITHUB_STEP_SUMMARY"
