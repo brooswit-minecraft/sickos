@@ -78,8 +78,9 @@ these environment variables to build.
 | 6 | `EXIT_GATE_FAILURE` | `make refresh`, `make check`, or `make build` failed. The repo is restored to its pre-run state (see "Fail-closed restore" below). |
 | 7 | `EXIT_MIGRATION_MISSING` | The category is `breaking` and either the release body could not be fetched, or no `## Migration` section was found in this release's own section of it. No file was touched. |
 | 8 | `EXIT_NOTES_EXISTS` | `docs/releases/<new-version>.md` already exists. The engine never overwrites a published release's notes. No file was touched. |
-| 9 | `EXIT_CONFIG_ERROR` | The repo's own state doesn't match what the engine expects (an unparsable DA pin filename, a `pack.toml` version that isn't a plain `x.y.z`, zero or more than one mechanical README sentence, or an unexpected change under `mods/`). This is a repo-state problem, not a payload problem, and needs a human. If any writes had already happened, the repo is restored (see below). |
+| 9 | `EXIT_CONFIG_ERROR` | The repo's own state doesn't match what the engine expects (an unparsable DA pin filename, a `pack.toml` version that isn't a plain `x.y.z`, zero or more than one mechanical README sentence, an unexpected change under `mods/`, or `git status --porcelain` itself exiting non-zero while the dirty-tree guard below was checking whether the repo is clean -- not a git repo, `safe.directory` "dubious ownership", a corrupt index, etc.). This is a repo-state problem, not a payload problem, and needs a human. If any writes had already happened, the repo is restored (see below); the `git status` failure case fires before anything is touched. |
 | 10 | `EXIT_UNEXPECTED_ERROR` | Any exception the write/gate phase raises that is *not* a designed `EngineError` -- a missing `make`/`packwiz` binary, an `OSError` writing a file, a `CalledProcessError`, anything unforeseen. The repo is still restored to its pre-run state exactly as for a designed failure (see below); this code exists only so `main()` never falls through to a bare Python traceback and exit 1 -- the summary and a non-zero, documented exit code are always produced. |
+| 11 | `EXIT_DIRTY_TREE` | `pack.toml`, `index.toml`, `mods/dynamic-atmosphere.pw.toml`, or `README.md` already had an uncommitted change (staged, unstaged, or untracked) before this run started anything, per a successful `git status --porcelain` read. Checked first, before payload validation. No file was touched. (If `git status` itself fails rather than reporting cleanly, that is `EXIT_CONFIG_ERROR` (9) instead, not this code -- a failed check is a config problem, not evidence of a dirty tree.) |
 
 ## Fail-closed restore
 
@@ -89,10 +90,22 @@ untracked files. Concretely, `pack.toml`, `index.toml`,
 `mods/dynamic-atmosphere.pw.toml`, and `README.md` are restored (both index
 and working tree) via `git restore --staged --worktree`, and any
 `docs/releases/<version>.md` the run had already created is unstaged and
-deleted. This can only ever discard changes this run itself made -- it
-never touches unrelated pre-existing modifications, because the restore
-targets exactly these four tracked paths plus the one notes path this run
-computed.
+deleted.
+
+That restore is a blind `git restore` of those four fixed paths -- on its
+own it cannot tell this run's own edits apart from whatever was already
+there when the run started. If any of the four already had an uncommitted
+change before this run began, a restore-triggering failure would have
+discarded that pre-existing change, and a successful run would have staged
+it into the bump right alongside the DA update, silently. **This is why
+`EXIT_DIRTY_TREE` (11) exists**: the engine checks `git status --porcelain`
+against exactly these four paths as its very first act, before payload
+validation or anything else, and refuses to start at all if any of them is
+already dirty. Given that guard, and that nothing outside this process
+modifies the repo while it runs, the restore only ever discards or stages
+changes this run itself made. It does not defend against something else
+writing to one of these paths *after* the guard passes but *while* this run
+is still in flight -- that race is not addressed here.
 
 This restore runs on **any exception** raised once the write/gate phase has
 started, not only a designed `EngineError` -- a missing `make`/`packwiz`
@@ -113,27 +126,32 @@ by the ticket that specified this contract.
 Every fallible check happens before any file is written, so a fail-closed
 exit never has to undo more than the fixed set above:
 
-1. Validate the payload.
-2. Idempotency check (already-pinned / hash anomaly) -- read-only.
-3. Version-order check (downgrade refusal / same-version anomaly) -- read-only.
-4. Compute the new pack version from the category mapping rule, and check
+1. Check that `pack.toml`, `index.toml`, `mods/dynamic-atmosphere.pw.toml`,
+   and `README.md` are all clean (`git status --porcelain`) -- read-only,
+   and first, before even the payload is looked at. Fail closed
+   (`EXIT_DIRTY_TREE`) if any is dirty; fail closed (`EXIT_CONFIG_ERROR`) if
+   the `git status` call itself fails rather than reporting cleanly.
+2. Validate the payload.
+3. Idempotency check (already-pinned / hash anomaly) -- read-only.
+4. Version-order check (downgrade refusal / same-version anomaly) -- read-only.
+5. Compute the new pack version from the category mapping rule, and check
    `docs/releases/<new-version>.md` does not already exist -- read-only.
-5. If category is `breaking`: fetch (or read `--release-body`) and extract
+6. If category is `breaking`: fetch (or read `--release-body`) and extract
    the Migration section; fail closed if missing -- read-only.
-6. Download the jar to a temp directory **outside** the repo and verify
+7. Download the jar to a temp directory **outside** the repo and verify
    both sha1 and sha512 -- no repo file touched; temp file always deleted.
-7. Run the Modrinth vouch check (network, read-only, never fails the run).
-8. Only now: rewrite the DA pin, rewrite `pack.toml`'s version, rewrite the
+8. Run the Modrinth vouch check (network, read-only, never fails the run).
+9. Only now: rewrite the DA pin, rewrite `pack.toml`'s version, rewrite the
    README's mechanical sentence, compute the listing-review flags, write
    the notes file.
-9. Run `make refresh` (this regenerates `index.toml`).
-10. `git add` exactly the five intended paths: `pack.toml`, `index.toml`,
+10. Run `make refresh` (this regenerates `index.toml`).
+11. `git add` exactly the five intended paths: `pack.toml`, `index.toml`,
     `mods/dynamic-atmosphere.pw.toml`, `README.md`, and the new notes file.
     Staging must happen **after** refresh, because `make check`'s own gate
     compares the *unstaged* diff -- staging is what makes it pass, and if
     `index.toml` were staged before refresh regenerated it, the newly
     regenerated content would show up as an unstaged diff and fail `make check`.
-11. Run `make check`, then `make build`.
+12. Run `make check`, then `make build`.
 
 ## Payload validation
 
@@ -154,7 +172,9 @@ read-only):
   ever be a TOML special character).
 - `github_release_url`: must match
   `https://github.com/<owner>/<repo>/releases/tag/<tag>` with each of
-  owner/repo/tag restricted to safe characters.
+  owner/repo/tag restricted to safe characters, **and** `<owner>/<repo>`
+  must be exactly `brooswit-minecraft/dynamic-atmosphere` -- this is the
+  only repository this engine will ever fetch a release body from.
 - `category`: must be a JSON string or absent/`null`. A string that isn't
   `patch`/`minor`/`breaking` is accepted here (validation doesn't reject
   it) but is treated as "unrecognised" downstream -- see the mapping table.
@@ -360,7 +380,7 @@ path including failures:
 | Field | Type | Notes |
 | --- | --- | --- |
 | `changed` | bool | `true` only on a real bump. |
-| `outcome` | string | `already_pinned`, `bumped`, or one of the `EngineError` outcome tags (`invalid_payload`, `integrity_failure`, `downgrade_refused`, `anomaly_hash_mismatch`, `anomaly_same_version_different_id`, `gate_failed`, `migration_missing`, `migration_fetch_failed`, `notes_exists`, `config_error`). |
+| `outcome` | string | `already_pinned`, `bumped`, or one of the `EngineError` outcome tags (`invalid_payload`, `integrity_failure`, `downgrade_refused`, `anomaly_hash_mismatch`, `anomaly_same_version_different_id`, `gate_failed`, `migration_missing`, `migration_fetch_failed`, `notes_exists`, `config_error`, `dirty_tree`). |
 | `previous_pack_version` | string or null | Null on a failure that happened before the pinned state could be read. |
 | `new_pack_version` | string or null | Null unless `outcome == "bumped"`. |
 | `da_version` | string or null | The payload's `version`, when the payload was readable at all. |
