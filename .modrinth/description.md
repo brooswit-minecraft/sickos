@@ -1,3 +1,14 @@
+## Sickos 0.23.0 is a breaking update
+
+Back up your world first. Dust, Ender Gas, Exhaust, Void Gas and Slime that
+has already built up is cleared when the world loads. Old violence settings
+reset to defaults under a new voidGas section, so set your tuning again. The
+client and the server must run the same version. Smoke is lighter in this
+version: your client keeps its old, saved smokeOpticalDensity setting until
+you open config/dynamicatmosphere-client.toml and set it to 2, or delete
+that file to take the new default. This is a client-side visual setting
+only; it does not affect the server or world data.
+
 ## What this is
 
 Sickos is a Create-focused modpack for Minecraft 1.21.1 on NeoForge. Mods and required libraries are pinned to exact versions and hashes for repeatable client and server installs.

@@ -13,7 +13,19 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Atmosphere
 
-Sickos 0.22.1 pins Dynamic Atmosphere 0.19.1-alpha.1 for client and server.
+**Sickos 0.23.0 is a breaking update. Back up your world before upgrading.**
+Dust, Ender Gas, Exhaust, Void Gas and Slime atmosphere data saved by earlier
+versions is cleared when the world loads; there is no migration by design.
+The old `violence` server and client config sections reset to their defaults
+under a new `voidGas` section, so re-apply any tuning you had. The client and
+the server must run the same version; the network protocol changed. Smoke is
+lighter in this version: if you played earlier versions, your client keeps
+its old, saved `smokeOpticalDensity` setting until you open
+`config/dynamicatmosphere-client.toml` and set it to `2`, or delete that file
+to take the new default. This is a client-side visual setting only; it does
+not affect the server or world data.
+
+Sickos 0.23.1 pins Dynamic Atmosphere 0.20.1-alpha.1 for client and server.
 The Vapor spawn gate is scoped to the Overworld only: natural and chunk-generation
 monster spawns in the Nether and End no longer require dense local Vapor and follow
 vanilla rules again. The Overworld rule (qualifying terrain above, or Vapor strictly
@@ -22,21 +34,21 @@ Create fan transfers run independently every five seconds, without a skip roll.
 Positive RPM pulls evenly from the five non-facing neighbors before pushing forward.
 Negative RPM draws from the facing neighbor before distributing evenly to the other
 five. Intake works from an empty fan cell, and blocked output retains intake.
-Fans only affect cells up to 4x4x4: Vapor, Smoke, Dust, Exhaust, and Ender Gas.
-Violence and Slime are unaffected.
+Fans affect every material's 4x4x4 cells: Vapor, Smoke, Dust, Exhaust, Ender Gas,
+Void Gas, and Slime. Void Gas and Slime became fan-transportable once they moved
+onto the same 4x4x4 cell size as the rest.
 Destinations with empty space can be overfilled, causing normal pressure handling
 and possible block destruction. Fan cadence and movement counters are in status.
-Ender Gas now uses 2x2x2 cells; old one-block cells migrate on load. Random
-full-moon Ender Gas bursts are removed, while portal and other sources remain.
+Ender Gas now uses 4x4x4 cells, the same size as every other atmosphere material.
+Random full-moon Ender Gas bursts are removed, while portal and other sources remain.
 Lava now produces one tenth as much Smoke (4 units instead of 40), including
 add/remove events. Existing material is preserved.
 This minor gameplay release enables all seven independent materials: Vapor, Smoke,
-Dust, Ender Gas, Violence, Exhaust, and Slime. Producers and interactions include
+Dust, Ender Gas, Void Gas, Exhaust, and Slime. Producers and interactions include
 movement dust, explosion smoke, portal gas, crop growth, suffocation, and mob spawning.
-Smoke, Violence, and Slime have four times the optical density; Ender Gas has 40x.
+Smoke has twice the optical density; Void Gas and Slime have four times; Ender Gas has 40x.
 All materials share configurable 200-tick simulation and 300-tick scheduled production
-intervals, with independent cell sizes and distance cutoffs. Smoke now uses 4-block
-cells, with automatic mass-preserving migration. Crying Obsidian produces Ender Gas.
+intervals, and now share the same 4x4x4 cell size. Crying Obsidian produces Ender Gas.
 Fan intake and output each share a budget of 1.0 material per absolute RPM per pass.
 A 256 RPM fan requests up to 256 units per stage per supported material, bounded by
 available material and the numeric storage ceiling, not spare capacity. Shortfalls
@@ -360,28 +372,24 @@ updates, pin a specific tag or commit SHA in place of `@v1` in your stub's `uses
 
 ## Template-only files
 
-Four files under `.github/workflows` are template-only, and safe to leave in place:
+One file under `.github/workflows` is template-only, and safe to leave in place:
 
 `tag-v1.yml` keeps the `v1` tag on **this** repo pointed at its own `main`. It is
 guarded by a `github.repository` check, so it is inert in any repo cloned from this
 template — the job is skipped entirely, so it creates no tag in your repo.
 
-`reusable-ci.yml`, `reusable-release.yml`, and `reusable-server-update.yml` are
-`workflow_call`-only definitions — nothing invokes them by local path. Your stubs
-(`ci.yml`, `release.yml`, `server-update.yml`) call them **upstream**, at
-`brooswit-minecraft/schematic/.github/workflows/reusable-<name>.yml@v1`, so your local
-copies never run.
-
-There's no need to delete any of the four — doing so gains nothing, since they don't
-run locally either way, and deleting one only creates work for you later: a
-`git merge template/main` does not restore a file you deleted (your deletion simply
-persists, merge or no merge) until the template itself changes that file, at which
-point the merge stops with a delete/modify conflict you have to resolve by hand.
-Leaving the four alone avoids that conflict entirely, on every future merge.
+This repo does **not** keep local `reusable-ci.yml`, `reusable-release.yml`, or
+`reusable-server-update.yml` copies. Your stubs (`ci.yml`, `release.yml`,
+`server-update.yml`) call those `workflow_call` definitions **upstream**, at
+`brooswit-minecraft/schematic/.github/workflows/reusable-<name>.yml@v1` — a local copy
+would never run, so none is kept. Unlike `tag-v1.yml` above, these three have no guard
+that makes them harmless to leave in place, so if a future `git merge template/main`
+re-adds one as a delete/modify conflict (the template's own history predates this
+cleanup), resolve it by deleting the file again rather than keeping the template's
+version — a one-time conflict per file, not a recurring one.
 
 `ci.yml`, `release.yml`, and `server-update.yml` are the three stubs you, as a consumer
-of this template, need to care about — the four template-only files above need no
-attention at all.
+of this template, need to care about — `tag-v1.yml` above needs no attention at all.
 
 ## Secrets & variables
 
@@ -622,7 +630,6 @@ mods/                                one *.pw.toml file per mod, pinning a versi
 .github/workflows/release.yml       cuts a release (see Releasing above)
 .github/workflows/server-update.yml keeps a Modrinth-hosted server in sync (see Deploying to a Modrinth Server above)
 .github/workflows/tag-v1.yml        template-only (see Template-only files above)
-.github/workflows/reusable-*.yml    template-only (see Template-only files above)
 Makefile                            the build entry point, shared by humans and CI
 ```
 
