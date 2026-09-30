@@ -30,7 +30,12 @@ to `brooswit-minecraft/schematic`'s `reusable-release.yml@v1`, which:
   configured (`has_modrinth`), via `rinth publish` (pinned `#v0.8.0` in
   `reusable-release.yml` today),
 - exits successfully whether or not Modrinth was configured — a green run
-  does not by itself mean anything was published.
+  does not by itself mean anything was published. That generic,
+  any-consumer behavior is unchanged by this policy (the underlying
+  workflow run still concludes green either way); what this policy adds is
+  a repository-specific outcome resolution on top of it — see "Required
+  configuration" in Section 4, because for `sickos` specifically, missing
+  Modrinth configuration is not a legitimate absence.
 
 `CONTRIBUTING.md` already states the semver policy, the pre-1.0 `0.x`
 convention, and that CI (not a human) creates the release. This document
@@ -301,8 +306,12 @@ case only.
    already be gone), re-checks Modrinth configuration exactly as
    `reusable-release.yml`'s own "Check Modrinth configuration" step does
    (duplicated deliberately, since this job never calls that file), and:
-   - **not configured**: resolve `skipped` (release already exists; nothing
-     new to publish to).
+   - **not configured**: resolve `failed` (Modrinth configuration is
+     required for this repository — see Section 4's "Required
+     configuration" — so a release existing with no way to publish is
+     itself the failure, not a benign skip), naming the exact missing
+     variable(s) and pointing at `README.md#secrets--variables`, the same
+     actionable text Section 4 specifies for this cause.
    - **configured**: call `rinth publish` directly with the same arguments
      `reusable-release.yml`'s "Publish to Modrinth" step would use. If it
      succeeds, proceed to `verify-publication` (Section 3) as normal.
@@ -349,8 +358,8 @@ accepted merge (not held)
  reusable-release.yml (schematic@v1)                                 |  --(exit 5, duplicate)--> verify-existing
    - build .mrpack, create GitHub Release                            |        |
      (target_commitish = source sha)                                 |        v
-   - has_modrinth? --(no)--> [outcome: skipped]                      |   match -> [published: continues below]
-        | (yes)              (release still created)                 |   mismatch -> [failed]
+   - has_modrinth? --(no)--> [outcome: failed]                       |   match -> [published: continues below]
+        | (yes)   (required config missing for sickos; Section 4)    |   mismatch -> [failed]
         v                                                             v (success)
    rinth publish  --(exit 5, duplicate)--> verify-existing  <---------+
         |                                        |
@@ -432,6 +441,15 @@ bunx --bun github:brooswit-minecraft/rinth#v0.9.1 versions latest \
 
 (pin the same tag `reusable-server-update.yml` already pins at the time
 `MINECRAFT-42` implements this, verified live rather than assumed current).
+This `#v0.9.1` pin and `recover-publish`'s/`reusable-release.yml`'s
+`#v0.8.0` pin (see "What already exists" above) are two different `rinth`
+tags used deliberately, not an inconsistency to reconcile into one: each
+matches the tag its own upstream precedent already pins
+(`reusable-server-update.yml` for `#v0.9.1`, `reusable-release.yml` for
+`#v0.8.0`). `MINECRAFT-42` must verify each against its own live source at
+implementation time rather than assuming today's values, per this
+document's own re-verification convention — do not "fix" them into a
+single shared pin.
 Asserts, from the returned JSON:
 
 - `.version_number == $VERSION` (exact match, not a prefix),
@@ -451,16 +469,39 @@ exit code named in the failure message — never a silent partial success.
 
 ## 4. Outcome states (Gap 6)
 
+**Required configuration (decision).** MINECRAFT-12 requires both a
+distinct `skipped` outcome (this section, Gap 6) and that missing required
+configuration fail actionably. For `sickos` specifically,
+`MODRINTH_TOKEN`/`MODRINTH_PROJECT_ID` are **required** — this repository
+always publishes to Modrinth when a release is eligible, and they are
+configured today (`MODRINTH_PROJECT_ID=RuhnnPqO`).
+If either is ever missing on a release-eligible, non-held push, that is a
+misconfiguration of a repo that is supposed to publish, and this policy
+resolves it to `failed` (commit status `failure`, run red) with an
+actionable message naming the exact missing variable(s) and pointing at
+`README.md#secrets--variables` — never to `skipped`. `sickos` never
+resolves a push that would otherwise publish to `skipped` on missing
+configuration.
+
+`skipped` remains a real outcome in the shared six-outcome taxonomy below
+(matching the epic's own naming exactly) and stays available for a
+consumer of this same contract where the absence of Modrinth configuration
+is legitimate — for example, a consumer repo with no Modrinth target at
+all (`schematic-example`, per MINECRAFT-35). `sickos` is not that consumer;
+its `skipped` row below documents the taxonomy meaning and the boundary,
+not a resting state this repo's own outcome job can reach via missing
+configuration.
+
 Six distinct outcomes, matching the epic's own naming exactly:
 
 | Outcome | Meaning | Where it's decided |
 | --- | --- | --- |
 | `build-only` | Not a release-eligible path (or not a push to `main`); `ci.yml` built/validated it. | Unchanged — `ci.yml`'s existing scope. |
 | `held` | Release-eligible, but the landing commit carries `Release-Hold: true`. | `check-hold` job; downstream release job shows `skipped` in the Actions UI. |
-| `skipped` | Release created, but Modrinth is not configured (`MODRINTH_TOKEN`/`MODRINTH_PROJECT_ID` missing). | `has_modrinth` check, already present in `reusable-release.yml`, echoed into this repo's own outcome job. |
+| `skipped` | Shared-taxonomy outcome for a consumer where Modrinth is legitimately not a target. **Does not apply to `sickos`**: here Modrinth configuration is required (see "Required configuration" above), so a release-eligible push with missing `MODRINTH_TOKEN`/`MODRINTH_PROJECT_ID` resolves to `failed`, not `skipped`. | N/A for this repository's own outcome job — never produced by `sickos`'s `record-outcome` on missing configuration. |
 | `publishing` | Transient: the publish attempt has started but `verify-publication` has not yet resolved. Never a resting state a human should observe after the run completes. | Set at the start of the publish attempt; superseded by `published` or `failed`. |
 | `published` | `verify-publication` (Section 3) positively confirmed project, version, filename (and, once `MINECRAFT-44` lands, source revision) on Modrinth. | `verify-publication` job, success path only. |
-| `failed` | Build failure, a real version/sha conflict (Section 2.2), a publish error that verify-existing could not reconcile, or a `verify-publication` mismatch/timeout. | Any job's failure path. |
+| `failed` | Build failure, a real version/sha conflict (Section 2.2), missing required Modrinth configuration on a release-eligible push (see "Required configuration" above), a publish error that verify-existing could not reconcile, or a `verify-publication` mismatch/timeout. | Any job's failure path. |
 
 **Machine-readable surface**: a final job, `record-outcome`
 (`if: always()`, `needs:` every job above that can run within `release.yml`
@@ -481,17 +522,20 @@ this is the exact, fixed mapping (not an implementation detail left to
 | --- | --- | --- | --- |
 | `build-only` | *(no status set)* | — | Out of scope for `release.yml`/`record-outcome` entirely — `ci.yml` runs on these pushes, not this workflow, and sets no `sickos/release-outcome` status. Not a gap: nothing under this context should exist for a push that was never release-eligible. |
 | `held` | `error` | `HELD: <Release-Hold-Reason, if any>` | Deliberately not `failure` (nothing broke) and never `success`. |
-| `skipped` | `error` | `SKIPPED (Modrinth not configured): <missing var(s)>` | Same `error` state as `held` — both mean "intentionally, correctly, not published," distinguishable from `held`/`skipped` only by reading the description text. |
+| `skipped` | `error` | `SKIPPED (Modrinth not configured): <missing var(s)>` | Shared-taxonomy row, kept for consumers of this same contract where Modrinth absence is legitimate. `sickos`'s own `record-outcome` never emits this row on missing configuration — see "Required configuration" above; here that case emits the `failed` row instead. |
 | `publishing` | `pending` | `PUBLISHING: attempt in progress` | Transient; always superseded by `published` or `failed` within the same run — a status left at `pending` after the run's own conclusion is itself a bug to file. |
-| `published` | `success` | `PUBLISHED: v<version> == <sha[0:8]>` | The **only** outcome using `success` — this is the concrete fix for "a green Actions badge must never imply publication if it skipped": a consumer must treat *this exact context reading `success`* as "published," and nothing else (not the workflow run's own conclusion, which is `success` for `held`/`skipped` too). |
-| `failed` | `failure` | `FAILED: <exact cause — conflict / build / publish / read-back mismatch>` | Every hard error (Section 2.2 conflict, build failure, unreconciled publish error, `verify-publication` mismatch or timeout). |
+| `published` | `success` | `PUBLISHED: v<version> == <sha[0:8]>` | The **only** outcome using `success` — this is the concrete fix for "a green Actions badge must never imply publication if it skipped": a consumer must treat *this exact context reading `success`* as "published," and nothing else (not the workflow run's own conclusion, which is `success` for `held` too, and would be for `skipped` on a consumer where that row applies). |
+| `failed` | `failure` | `FAILED: <exact cause — conflict / build / missing required Modrinth configuration / publish / read-back mismatch>` | Every hard error (Section 2.2 conflict, build failure, missing `MODRINTH_TOKEN`/`MODRINTH_PROJECT_ID` on a release-eligible push — see "Required configuration" above — unreconciled publish error, `verify-publication` mismatch or timeout). For the missing-configuration cause, the description names the exact missing variable(s) and points at `README.md#secrets--variables`, the same actionable text the `skipped` row's shared taxonomy already specifies. |
 
 A consumer of this contract should therefore branch on
 `context == "sickos/release-outcome" && state == "success"` for "published,"
 full stop — never on the workflow run's own conclusion, which reads
-`success` for three of these six rows (`held`, `skipped`, and — since it
-runs no `release.yml` job at all — every `build-only` push already reads as
-an unrelated, absent context rather than a false `success` on this one).
+`success` for `held` (and, since it runs no `release.yml` job at all, every
+`build-only` push already reads as an unrelated, absent context rather than
+a false `success` on this one). `sickos`'s own context never reads `error`
+for a missing-configuration cause — that resolves to `failure` here (see
+"Required configuration" above); a consumer where `skipped` legitimately
+applies would still read `error` for it.
 
 **Known gap this table does not close**: a run **dropped by the
 concurrency group** (Section 2, "Overlap" correction) never reaches
@@ -506,11 +550,11 @@ commit-status contract above only covers runs that actually execute.
 **Actionable missing-configuration text**: reuse `reusable-release.yml`'s
 existing `Check Modrinth configuration` step, which already names exactly
 which of `MODRINTH_TOKEN`/`MODRINTH_PROJECT_ID` is missing — carry that
-exact string into the `skipped` outcome's commit-status description rather
-than re-deriving it, and additionally point at this repo's own
-`README.md#secrets--variables` table (already documents both names, their
-kind, and what consumes them) so the message tells an operator exactly what
-to set and where.
+exact string into the `failed` outcome's commit-status description (see
+"Required configuration" above) rather than re-deriving it, and
+additionally point at this repo's own `README.md#secrets--variables` table
+(already documents both names, their kind, and what consumes them) so the
+message tells an operator exactly what to set and where.
 
 ---
 
@@ -585,7 +629,8 @@ writing — read it before promising coverage beyond what's listed here as
 | Skipped-intermediate-version detection (a `pack.toml` version present in git history with no matching GitHub Release tag) | Pure unit test of the Section 2 detection function against a fabricated version list and tag list — no network call needed. |
 | Conflict resolution: same version + same sha vs. same version + different sha vs. no existing release | Pure unit test of the Section 2.2 decision function, fed fabricated `(targetCommitish, sha)` pairs — no network call needed. |
 | Identity match/mismatch for the duplicate-then-verify fallback | Pure unit test of the Section 2.2 identity-compare function against fabricated Modrinth JSON responses. |
-| Missing-configuration message content | Unit test that the `skipped`-outcome description names the exact missing variable(s), against fabricated env. |
+| Missing-configuration message content | Unit test that the `failed`-outcome description names the exact missing variable(s) and points at `README.md#secrets--variables`, against fabricated env. |
+| Missing required Modrinth configuration resolves to `failed`, never `skipped`, for `sickos` | Unit test of the Section 4 outcome-mapping function: given a release-eligible, non-held push with `has_modrinth=false`, assert the resolved outcome is `failed` (commit status `failure`) and never `skipped`, for both the `reusable-release.yml` path and the `recover-publish` "not configured" branch (Section 2.2). |
 | `release.yml`'s new `concurrency:` block and job wiring | `actionlint`, mirroring `da-auto-bump-tests.yml`'s existing `actionlint` job for its own workflow files. |
 | Build failure produces `failed`, never a partial GitHub Release | `workflow_dispatch` dry run against a deliberately broken pack state on a disposable branch — a dry run never creates a Release, so this is safe today. |
 | Existing-release conflict check against **real, already-published** history | Run the Section 2.2 check function against `sickos`'s own real `v0.23.2` release (`target_commitish` already known and public) with a fabricated *different* sha — confirms the conflict path fires correctly, without publishing anything. |
