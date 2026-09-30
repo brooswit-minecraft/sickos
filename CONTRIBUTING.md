@@ -53,7 +53,11 @@ this policy to future releases; do not republish or renumber existing artifacts.
    `scripts/bump-dynamic-atmosphere.py` and pushes it -- see
    `docs/da-auto-bump.md`, including its pause switch and fail-closed behavior.
    If that commit carries a `DA-Auto-Bump` trailer, a follow-up workflow also
-   edits the release body -- see `docs/release-notes-plumbing.md`.)
+   edits the release body -- see `docs/release-notes-plumbing.md`.) For the
+   accepted-change release policy -- which changes are release-eligible,
+   how to deliberately hold one (`Release-Hold: true`), version-concurrency
+   and retry/idempotency handling, the outcome-state contract, and recovery
+   after a partial failure -- see `docs/release-policy.md`.
 5. Verify release and deployment results, including restart and health. Distinguish
    a successful server start from an actual client launch/join test in reporting.
 
