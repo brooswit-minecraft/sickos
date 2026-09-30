@@ -55,9 +55,23 @@ this policy to future releases; do not republish or renumber existing artifacts.
    If that commit carries a `DA-Auto-Bump` trailer, a follow-up workflow also
    edits the release body -- see `docs/release-notes-plumbing.md`.) For the
    accepted-change release policy -- which changes are release-eligible,
-   how to deliberately hold one (`Release-Hold: true`), version-concurrency
-   and retry/idempotency handling, the outcome-state contract, and recovery
-   after a partial failure -- see `docs/release-policy.md`.
+   version-concurrency and retry/idempotency handling, the outcome-state
+   contract, and recovery after a partial failure -- see
+   `docs/release-policy.md`.
+
+   To defer *this specific push's* release without merging to an unmerged
+   branch, add `Release-Hold: true` (alone in the merge/squash commit
+   message's final paragraph, git-trailer style) to the commit landing on
+   `main`. This only skips a release for that one push -- it does not keep
+   the content out of a *later* release; a subsequent pack-path push, even
+   an unrelated one, will release whatever is on `main` at that point,
+   held content included. For durable exclusion of specific content, keep
+   it on an unmerged branch/PR instead, as `#28`/`#24` did historically.
+   The trailer is only read from the push's `head_commit`, so it must be in
+   the commit GitHub reports as that push's head -- reliable for "Create a
+   merge commit" and "Squash and merge," not for "Rebase and merge" unless
+   placed in that rebase's last commit. See `docs/release-policy.md` for
+   the full contract.
 5. Verify release and deployment results, including restart and health. Distinguish
    a successful server start from an actual client launch/join test in reporting.
 

@@ -52,15 +52,25 @@ paragraph.
 Sickos (this document) owns: eligibility, hold representation, the version
 source, consumer-side orchestration (concurrency, conflict/retry handling,
 read-back verification), and end-to-end evidence. `schematic` owns shared
-reusable workflow steps (`reusable-release.yml`, `reusable-server-update.yml`).
-`rinth` owns the Modrinth CLI surface (`publish`, `versions latest`,
-`servers upstream`). Nothing below asks this repo to fork any of that shared
-logic locally; where a requirement needs a change to shared code, it is
-named as an assumption on `MINECRAFT-44` (SCHEM) or `MINECRAFT-45` (RINTH)
-instead, per "Dependencies" below.
+reusable workflow steps (`reusable-release.yml`, `reusable-server-update.yml`)
+— specifically, the ONE thing this repo cannot reuse for recovery is
+guard-free release-then-publish behaviour against a version whose GitHub
+Release already exists; `reusable-release.yml@v1` has no such mode. `rinth`
+owns the Modrinth CLI surface (`publish`, `versions latest`, `servers
+upstream`) — a public, versioned command line any consumer is meant to call
+directly, not exclusively through `schematic`'s wrapper. Section 2.2 below
+therefore calls `rinth publish` directly from a new `sickos`-owned recovery
+job for exactly the one case `reusable-release.yml` cannot serve: this is a
+deliberate, named exception, stated plainly here rather than silently
+duplicated, and it is a thin, one-command wrapper around a primitive `rinth`
+already exposes publicly — not a fork of `schematic`'s build/release
+orchestration, none of which is reimplemented. Where a requirement instead
+needs a change to shared *code* (as opposed to calling an existing public
+command directly), it is named as an assumption on `MINECRAFT-44` (SCHEM) or
+`MINECRAFT-45` (RINTH) instead, per "Dependencies" below.
 
-Everything else specified below is achievable entirely within `sickos`'s own
-`release.yml` and a small new consumer-side script, wrapping the existing
+Every other requirement below is achievable entirely within `sickos`'s own
+`release.yml` and a small new consumer-side script, composing the existing
 shared primitives (`ref`, `notes-file`, `rinth publish`, `rinth versions
 latest`) rather than waiting on either dependency — called out explicitly
 per gap.
@@ -105,6 +115,39 @@ apply-da-release-notes.py`'s `has_da_auto_bump_trailer()` already
 implements generically (extend it, or extract a shared `has_trailer(name,
 message)` helper — MINECRAFT-42's implementation choice), and outputs
 `held: true|false`.
+
+**What HOLD actually guarantees — read this before relying on it.** A
+`Release-Hold: true` trailer defers only the release triggered by *that one
+push*. It does **not** durably keep the held content out of a release: the
+change still lands on `main`, and the very next pack-path push — even one
+completely unrelated to the held change — reads `pack.toml` at **its own**
+HEAD and releases whatever is there, held content included, since nothing
+about that later push carries or inherits the earlier trailer. If durable
+exclusion of specific content (never auto-release this, full stop, until
+someone decides otherwise) is what's actually needed, the correct mechanism
+remains what the prior epic actually used for `#28`/`#24`: keep the change
+on an **unmerged** branch/PR, not on `main` at all. `Release-Hold:` is for a
+narrower, real case this repo does need — deferring the specific release
+event for one accepted push (for example, batching several small merges
+before cutting one release, or declining to auto-release during a fragile
+window) — not for holding specific content out of every future release
+indefinitely. State this distinction in `CONTRIBUTING.md` alongside the
+trailer syntax so a contributor does not reach for it expecting the
+stronger guarantee.
+
+**Merge-strategy scope.** `github.event.head_commit.message` on a `push`
+event is the message of the single commit GitHub reports as the push's
+head — for a PR merged via "Create a merge commit" or "Squash and merge"
+(the two strategies where the entire PR collapses into exactly that one
+landing commit), a trailer placed in that commit's message is seen
+correctly. For "**Rebase and merge**," multiple individual commits land
+and `head_commit` is only the **last** of them — a trailer on any earlier
+commit in that rebase is silently invisible to this check, and the push
+releases as if it were never held. This repo's convention should therefore
+be: a hold trailer must be placed in the **final** commit of a multi-commit
+merge, or the PR should be merged via "Create a merge commit"/"Squash and
+merge" when a hold is intended. Document this in `CONTRIBUTING.md`, and see
+Section 6 for the corresponding test-matrix row.
 
 **Unhold**: there is no separate "unhold" action — the hold applies to one
 specific commit's message on `main`, which is immutable once pushed.
@@ -158,20 +201,47 @@ concurrency:
 
 This serializes every run of this workflow — push-triggered releases, the
 legacy `release: published` path, and `workflow_dispatch` dry runs all
-share one queue, `cancel-in-progress: false` so a queued run is never
-silently dropped (mirroring `da-auto-bump.yml`'s own precedent for the same
-tradeoff). Two pack-changing merges landing seconds apart can therefore
+share one queue — so two pack-changing merges landing seconds apart can
 never have two `reusable-release.yml` jobs racing the GitHub-Release-create
-step or the Modrinth-publish step against each other. The cost is that a
-`workflow_dispatch` dry run queues behind an in-flight real release for up
-to a few minutes; that is an acceptable latency cost for closing a real
-correctness gap, and is worth stating explicitly since it is a deliberate
-tradeoff, not an oversight.
+step or the Modrinth-publish step against each other.
+
+**Correction: `cancel-in-progress: false` does not mean "no run is ever
+dropped."** GitHub keeps at most one *pending* run per concurrency group.
+With one run in progress and one already pending, a **third** run arriving
+for the same group **replaces (cancels) the pending one**, which never
+executes at all — `da-auto-bump.yml`'s own precedent already states this
+exact property in this repo's README ("a third dispatch arriving while one
+run is in progress and one is already queued **replaces** the queued one").
+`release.yml` inherits the identical, already-accepted tradeoff, not a
+stronger guarantee: with three (or more) pack-changing pushes landing within
+one release run's duration, the **middle** push's own release run is
+dropped entirely — its `pack.toml` version is never built, tagged, or
+published as its own release, and (Section 4) no `record-outcome` job ever
+runs for it, so it leaves **no commit status at all**, not even `failed`.
+
+This is an accepted consequence, not a silent data-loss bug: the dropped
+push's *content* is not lost — it is still on `main`, and the next
+surviving run (the one that replaced it, or the next push after that)
+checks out the then-current `main` and releases whatever is there,
+including the dropped push's changes. What is genuinely lost is a
+standalone release/tag/Modrinth-version for that one intermediate version
+number, plus its outcome record.
+
+**Detection**: `check-existing` (Section 2.2) additionally compares the
+sequence of `version = "..."` values `git log -p -- pack.toml` shows since
+the most recent existing GitHub Release tag against that same tag list. A
+version that appears in that git history but has no matching `vX.Y.Z`
+GitHub Release is a **skipped intermediate version** — logged as a
+non-fatal finding (not `failed`; the current run's own outcome is
+unaffected) so a human can decide whether that version needs a standalone
+release after the fact. This is the safety net Section 4's per-run commit
+status cannot provide on its own, precisely because a dropped run posts no
+status of any kind.
 
 Concurrency alone does not stop two merges that were reviewed and approved
 with the **same** `pack.toml` version number (a review-process error, not a
 workflow bug) from reaching the guard one after another — the second run's
-own conflict check (Section 3) is what turns that case into an explicit,
+own conflict check (Section 2.2) is what turns that case into an explicit,
 actionable failure instead of a race.
 
 ### Retry (Gap 4): a replay must resolve to the SAME outcome, not fail
@@ -191,11 +261,20 @@ mismatch (same version number, different source) must fail loudly, since
 that is a real conflict, not a replay.
 
 This is implemented as consumer-side orchestration in `sickos`'s own
-`release.yml`, wrapping existing primitives — it does not require a new
-`schematic`/`rinth` capability, though `MINECRAFT-45`'s filed
-publish-or-verify-existing primitive (see "Dependencies") would let this
-logic move upstream for every consumer at once, and is the better long-term
-home for it:
+`release.yml`. It needs exactly one deliberate, named exception to "no
+shared-code change and no direct-to-`rinth` calls" (see "Ownership
+boundary" above): `reusable-release.yml@v1` has no way to publish to
+Modrinth **without** also running its overwrite guard first, and that guard
+unconditionally fails when a GitHub Release for the target version already
+exists (true on `push` and on `inputs.publish: true` alike — both set its
+P2 predicate). So when a release already exists for this exact source
+revision, re-invoking `reusable-release.yml` is not an option — it would
+always fail the guard, whether or not Modrinth publication ever completed.
+`MINECRAFT-45`'s filed publish-or-verify-existing primitive (see
+"Dependencies") is the better long-term home for this; until it exists,
+`sickos` runs a **local, direct wrapper around `rinth publish` itself** —
+the same public command `reusable-release.yml` already wraps — for this one
+case only.
 
 1. **Before** invoking `reusable-release.yml`, a `check-existing` job (see
    Section 3's `git rev-parse HEAD` note on why this must read the
@@ -203,35 +282,54 @@ home for it:
    runs `gh release view "v$VERSION" --json targetCommitish,tagName` against
    this repository (verify the exact `gh` JSON field names in your own
    checkout — this document specifies the check, not `gh`'s CLI surface).
-   - **No release exists**: proceed normally (this is a first attempt).
-   - **Release exists, `targetCommitish` == this run's resolved sha**: this
-     is a replay of the exact same source revision. Skip invoking
-     `reusable-release.yml` again (it would only fail the overwrite guard);
-     proceed straight to the read-back-or-verify step (Section 3) to
-     determine whether Modrinth publication also already completed.
+   - **No release exists**: proceed normally — invoke `reusable-release.yml`
+     exactly as today (this is a first attempt).
+   - **Release exists, `targetCommitish` == this run's resolved sha**: a
+     replay of the exact same source revision. Do **not** invoke
+     `reusable-release.yml` (its guard would fail unconditionally). Instead
+     run the new `recover-publish` job below — the only thing capable of
+     completing or safely replaying the publish leg once the GitHub Release
+     already exists.
    - **Release exists, `targetCommitish` != this run's resolved sha**: a
      real conflict — the version number was reused for different content.
      Fail this job with an actionable message naming both shas and
      instructing the operator to bump `pack.toml`'s version; never call
-     `reusable-release.yml`.
-2. **If** `reusable-release.yml` (or the skip-and-verify path above) reaches
-   the Modrinth publish attempt and `rinth publish` exits `5` (ApiError,
-   duplicate `version_number`): this is exactly the "already published"
-   shape, not necessarily a conflict. Fall back to `rinth versions latest
-   <project> --version-number <version> --json` (the same command
-   `reusable-server-update.yml` already uses — pin a version, per that
-   file's own precedent for why a tag rather than a branch) and compare the
-   returned version's identity (Section 3) against what this run intended
-   to publish.
-   - **Identity matches**: benign replay — resolve as `published`.
-   - **Identity does not match**: a genuine conflict — resolve as `failed`,
-     with the exact mismatched fields logged.
+     `reusable-release.yml` or `recover-publish`.
+2. **`recover-publish`** (needs: `check-existing`; runs only on the
+   "replay" branch above): checks out the confirmed sha, runs `make build`
+   again (this repo's own Makefile — the original run's build artifact may
+   already be gone), re-checks Modrinth configuration exactly as
+   `reusable-release.yml`'s own "Check Modrinth configuration" step does
+   (duplicated deliberately, since this job never calls that file), and:
+   - **not configured**: resolve `skipped` (release already exists; nothing
+     new to publish to).
+   - **configured**: call `rinth publish` directly with the same arguments
+     `reusable-release.yml`'s "Publish to Modrinth" step would use. If it
+     succeeds, proceed to `verify-publication` (Section 3) as normal.
+     If it exits `5` (ApiError, duplicate `version_number` — this is
+     exactly the "already published" shape, not necessarily a conflict),
+     fall back to `rinth versions latest <project> --version-number
+     <version> --json` (the same command `reusable-server-update.yml`
+     already uses — pin a version, per that file's own precedent for why a
+     tag rather than a branch) and compare the returned version's identity
+     (Section 3) against what this run intended to publish.
+     - **Identity matches**: benign replay — resolve as `published`.
+     - **Identity does not match**: a genuine conflict — resolve as
+       `failed`, with the exact mismatched fields logged.
 
-Every one of these branches is a pure decision function of
-(`existing_target_commitish`, `this_run_sha`, `existing identity`,
-`intended identity`) and should be written as testable Python (see the Test
-Matrix, Section 6) rather than inline shell, mirroring
-`scripts/bump-dynamic-atmosphere.py`'s existing precedent in this repo.
+**Operator retry** (Section 5) reduces to the same mechanism: `gh run rerun
+<run-id> --failed` re-fires the SAME triggering event and sha, so
+`check-existing` deterministically takes the "replay" branch and routes
+through `recover-publish` — there is exactly one recovery code path, not a
+separate one for automatic replay versus manual retry.
+
+Every one of these branches (existing-release conflict, publish-identity
+match/mismatch) is a pure decision function of (`existing_target_commitish`,
+`this_run_sha`, `existing identity`, `intended identity`) and should be
+written as testable Python (see the Test Matrix, Section 6) rather than
+inline shell, mirroring `scripts/bump-dynamic-atmosphere.py`'s existing
+precedent in this repo. Only the `rinth publish`/`gh release view` calls
+themselves are shell.
 
 ---
 
@@ -245,14 +343,16 @@ accepted merge (not held)
         |                  ci.yml still builds separately)
         v (not held)
  check-existing  --(conflict: same version, different sha)-->  [outcome: failed]
-        |
-        v (no release yet, or replay of the same sha)
- reusable-release.yml (schematic@v1)
-   - build .mrpack, create GitHub Release (target_commitish = source sha)
-   - has_modrinth? --(no)--> [outcome: skipped]  (release still created)
-        | (yes)
-        v
-   rinth publish  --(exit 5, duplicate)-->  verify-existing (Section 2.2)
+        |                    |
+        |                    +--(replay: same version, same sha)--> recover-publish (2.2)
+        v (no release yet)                                           |  make build; rinth publish direct
+ reusable-release.yml (schematic@v1)                                 |  --(exit 5, duplicate)--> verify-existing
+   - build .mrpack, create GitHub Release                            |        |
+     (target_commitish = source sha)                                 |        v
+   - has_modrinth? --(no)--> [outcome: skipped]                      |   match -> [published: continues below]
+        | (yes)              (release still created)                 |   mismatch -> [failed]
+        v                                                             v (success)
+   rinth publish  --(exit 5, duplicate)--> verify-existing  <---------+
         |                                        |
         v (success)                              v
    [outcome: publishing, transient]      match -> [published] / mismatch -> [failed]
@@ -363,27 +463,45 @@ Six distinct outcomes, matching the epic's own naming exactly:
 | `failed` | Build failure, a real version/sha conflict (Section 2.2), a publish error that verify-existing could not reconcile, or a `verify-publication` mismatch/timeout. | Any job's failure path. |
 
 **Machine-readable surface**: a final job, `record-outcome`
-(`if: always()`, `needs:` every job above), sets a **GitHub commit status**
-on the triggering sha —
+(`if: always()`, `needs:` every job above that can run within `release.yml`
+— `build-only` is out of scope for this job entirely, see below), sets a
+**GitHub commit status** on the triggering sha:
 
 ```sh
-gh api "repos/${GITHUB_REPOSITORY}/statuses/${SHA}" -f state=<success|failure> \
-  -f context=sickos/release-outcome -f description="<one of the six outcomes>: <detail>"
+gh api "repos/${GITHUB_REPOSITORY}/statuses/${SHA}" -f state="<state>" \
+  -f context=sickos/release-outcome -f description="<OUTCOME>: <detail>"
 ```
 
-— rather than relying on the workflow run's own pass/fail badge. This is
-the concrete fix for "a green result must never imply publication if it
-skipped": a run that hit `skipped` or `held` reports GitHub Actions
-`success` (nothing errored) but sets `state=failure`-or-a-distinct
-`description` on `sickos/release-outcome` that a human or a consuming
-workflow can check independently of the run's own conclusion. Use
-`state=success` only for `published`; every other outcome (including
-`held`, `skipped`, and `build-only`, which are not errors) sets a state
-other than a bare `success` paired with an unqualified description, so
-nothing reads as "release complete" by accident. Exact state/description
-mapping is `MINECRAFT-42`'s implementation detail; the requirement this
-document fixes is that the six outcomes are queryable independent of the
-workflow run's own conclusion, in one place, with no ambiguity.
+The GitHub commit-status API supports exactly four `state` values
+(`error`, `failure`, `pending`, `success`) — fewer than six outcomes, so
+this is the exact, fixed mapping (not an implementation detail left to
+`MINECRAFT-42`):
+
+| Outcome | `state` | `description` prefix | Notes |
+| --- | --- | --- | --- |
+| `build-only` | *(no status set)* | — | Out of scope for `release.yml`/`record-outcome` entirely — `ci.yml` runs on these pushes, not this workflow, and sets no `sickos/release-outcome` status. Not a gap: nothing under this context should exist for a push that was never release-eligible. |
+| `held` | `error` | `HELD: <Release-Hold-Reason, if any>` | Deliberately not `failure` (nothing broke) and never `success`. |
+| `skipped` | `error` | `SKIPPED (Modrinth not configured): <missing var(s)>` | Same `error` state as `held` — both mean "intentionally, correctly, not published," distinguishable from `held`/`skipped` only by reading the description text. |
+| `publishing` | `pending` | `PUBLISHING: attempt in progress` | Transient; always superseded by `published` or `failed` within the same run — a status left at `pending` after the run's own conclusion is itself a bug to file. |
+| `published` | `success` | `PUBLISHED: v<version> == <sha[0:8]>` | The **only** outcome using `success` — this is the concrete fix for "a green Actions badge must never imply publication if it skipped": a consumer must treat *this exact context reading `success`* as "published," and nothing else (not the workflow run's own conclusion, which is `success` for `held`/`skipped` too). |
+| `failed` | `failure` | `FAILED: <exact cause — conflict / build / publish / read-back mismatch>` | Every hard error (Section 2.2 conflict, build failure, unreconciled publish error, `verify-publication` mismatch or timeout). |
+
+A consumer of this contract should therefore branch on
+`context == "sickos/release-outcome" && state == "success"` for "published,"
+full stop — never on the workflow run's own conclusion, which reads
+`success` for three of these six rows (`held`, `skipped`, and — since it
+runs no `release.yml` job at all — every `build-only` push already reads as
+an unrelated, absent context rather than a false `success` on this one).
+
+**Known gap this table does not close**: a run **dropped by the
+concurrency group** (Section 2, "Overlap" correction) never reaches
+`record-outcome` — `if: always()` only covers jobs within a run that
+actually starts; a cancelled/replaced pending run executes zero jobs. That
+push therefore gets **no** `sickos/release-outcome` status at all, not even
+`error`/`failure` — indistinguishable, from this context alone, from a push
+that was never release-eligible. This is exactly why Section 2's
+version-history detection check exists as an independent safety net; the
+commit-status contract above only covers runs that actually execute.
 
 **Actionable missing-configuration text**: reuse `reusable-release.yml`'s
 existing `Check Modrinth configuration` step, which already names exactly
@@ -398,7 +516,10 @@ to set and where.
 
 ## 5. Recovery after partial failure and safe operator retry
 
-Recovery is a direct consequence of Sections 2.2 and 3, not new machinery:
+Recovery is a direct consequence of Section 2.2's `check-existing` /
+`recover-publish` mechanism, not separate machinery — there is exactly one
+recovery code path, reached automatically by a replayed event and manually
+by an operator retry alike:
 
 - **Build failed**: nothing was created (GitHub Release or Modrinth
   version). Fix the cause, push a new commit (or amend and force-push a PR
@@ -406,22 +527,24 @@ Recovery is a direct consequence of Sections 2.2 and 3, not new machinery:
   path `ci.yml` already exercises.
 - **GitHub Release created, Modrinth publish never attempted or failed
   before any Modrinth-side write** (e.g. `has_modrinth` was false, or the
-  job crashed before the `Publish to Modrinth` step): re-run the **same**
-  workflow run (`gh run rerun <run-id> --failed`) or push a no-op
-  workflow_dispatch is not appropriate here (dispatch never creates a
-  release) — a rerun re-enters `check-existing`, finds the release already
-  matches this sha, and (Section 2.2) proceeds straight to the publish
-  attempt without trying to recreate the GitHub Release. No duplicate
-  GitHub Release is possible: the conflict check in Section 2.2 is what
-  prevents it.
+  job crashed before the `Publish to Modrinth` step): `gh run rerun
+  <run-id> --failed` re-fires the same triggering sha. `check-existing`
+  sees the release already matches this sha (the "replay" branch, Section
+  2.2) and routes to `recover-publish`, which rebuilds the `.mrpack` and
+  calls `rinth publish` **directly** — never back through
+  `reusable-release.yml`, whose guard would fail unconditionally against
+  the now-existing release. No duplicate GitHub Release is possible:
+  `recover-publish` never attempts to create one.
 - **GitHub Release created, Modrinth publish partially attempted (network
-  failure, transient 5xx, or the run was killed mid-upload)**: re-run the
-  same run. `rinth publish` either succeeds cleanly (Modrinth never
-  actually received the earlier attempt) or fails with the duplicate-version
-  `ApiError`, which Section 2.2's verify-existing fallback resolves to
-  `published` (confirmed match) or `failed` (confirmed conflict) — never a
-  second live upload attempt against an already-correct version. No
-  duplicate Modrinth version is possible for the same reason.
+  failure, transient 5xx, or the run was killed mid-upload)**: the same
+  `gh run rerun` reaches `recover-publish`, which calls `rinth publish`
+  again. It either succeeds cleanly (Modrinth never actually received the
+  earlier attempt) or fails with the duplicate-version `ApiError`, which
+  `recover-publish`'s own verify-existing fallback (Section 2.2 step 2)
+  resolves to `published` (confirmed match) or `failed` (confirmed
+  conflict) — never a second live upload attempt against an
+  already-correct version. No duplicate Modrinth version is possible for
+  the same reason.
 - **`verify-publication` itself times out or fails** (Modrinth accepted the
   upload but read-back could not confirm it within the wait budget): this
   is the one case where a human should check Modrinth directly
@@ -430,6 +553,12 @@ Recovery is a direct consequence of Sections 2.2 and 3, not new machinery:
   whether to re-run — if Modrinth already shows the correct version,
   re-running `verify-publication` alone (not the whole workflow) is
   sufficient and does not touch Modrinth again.
+- **A run was dropped by the concurrency group** (Section 2): this is not a
+  "partial failure" with a release or a publish to recover — nothing was
+  attempted for that push at all. Recovery is the version-history detection
+  check (Section 2) surfacing the skipped version, followed by an operator
+  decision on whether it needs a standalone release; there is no run to
+  rerun, since none happened.
 
 **Authorization wall.** None of the above authorizes an agent to push to
 `main`, merge a PR, re-run a workflow, or dispatch a release against this
@@ -452,6 +581,8 @@ writing — read it before promising coverage beyond what's listed here as
 | Case | How |
 | --- | --- |
 | Hold-trailer detection (present, absent, malformed, glued to prose with no blank line) | Pure unit test against the trailer-parsing function, mirroring `tests/test_da_auto_bump_dispatch.py`'s style for `DA-Auto-Bump:`. |
+| Hold trailer on a non-head commit of a multi-commit ("Rebase and merge") push is correctly NOT detected (documented limitation, Section 1) | Unit test feeding the trailer-parsing function only `head_commit.message`, confirming it never inspects other commits in the push — proves the documented scope, doesn't just assert it in prose. |
+| Skipped-intermediate-version detection (a `pack.toml` version present in git history with no matching GitHub Release tag) | Pure unit test of the Section 2 detection function against a fabricated version list and tag list — no network call needed. |
 | Conflict resolution: same version + same sha vs. same version + different sha vs. no existing release | Pure unit test of the Section 2.2 decision function, fed fabricated `(targetCommitish, sha)` pairs — no network call needed. |
 | Identity match/mismatch for the duplicate-then-verify fallback | Pure unit test of the Section 2.2 identity-compare function against fabricated Modrinth JSON responses. |
 | Missing-configuration message content | Unit test that the `skipped`-outcome description names the exact missing variable(s), against fabricated env. |
@@ -491,11 +622,13 @@ story or by `sickos`'s implementation story (`MINECRAFT-42`):
   to be implementable now.
 - **`MINECRAFT-45`** (RINTH, unowned orphan): a native
   publish-or-verify-existing primitive in `rinth` itself would let Section
-  2.2's duplicate-then-verify fallback move out of `sickos`'s own shell
-  script and into a single `rinth` command, and is the better long-term
-  home for it. Until it exists, `sickos` implements the equivalent logic by
-  composing `rinth publish` and `rinth versions latest`, both of which
-  already exist and are already used elsewhere in this pipeline
+  2.2's `recover-publish` job (which calls `rinth publish` directly, since
+  `reusable-release.yml@v1` has no guard-free publish mode — see "Ownership
+  boundary") move out of `sickos`'s own shell script and into a single
+  `rinth` command, and is the better long-term home for it. Until it
+  exists, `sickos` implements the equivalent logic by composing
+  `rinth publish` and `rinth versions latest`, both of which already exist
+  and are already used elsewhere in this pipeline
   (`reusable-server-update.yml`).
 - **`MINECRAFT-35`** (SCHEM, unowned orphan): bounds the test matrix
   (Section 6) exactly as listed there. Read it before promising coverage
