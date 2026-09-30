@@ -287,8 +287,9 @@ case only.
    runs `gh release view "v$VERSION" --json targetCommitish,tagName` against
    this repository (verify the exact `gh` JSON field names in your own
    checkout — this document specifies the check, not `gh`'s CLI surface).
-   - **No release exists**: proceed normally — invoke `reusable-release.yml`
-     exactly as today (this is a first attempt).
+   - **No release exists**: proceed to `check-config` below (this is a
+     first attempt) — do **not** invoke `reusable-release.yml` directly;
+     `check-config` gates it.
    - **Release exists, `targetCommitish` == this run's resolved sha**: a
      replay of the exact same source revision. Do **not** invoke
      `reusable-release.yml` (its guard would fail unconditionally). Instead
@@ -300,7 +301,36 @@ case only.
      Fail this job with an actionable message naming both shas and
      instructing the operator to bump `pack.toml`'s version; never call
      `reusable-release.yml` or `recover-publish`.
-2. **`recover-publish`** (needs: `check-existing`; runs only on the
+2. **`check-config`** (needs: `check-existing`; runs only on the "no
+   release exists" branch above, immediately before `reusable-release.yml`
+   would otherwise run): the mechanism that actually makes a sickos run go
+   `failed` on missing Modrinth configuration. It exists because
+   `reusable-release.yml@v1` declares no `workflow_call` outputs (checked
+   at the `v1` ref) and, per "What already exists" above, exits
+   successfully whether or not Modrinth is configured — nothing downstream
+   of invoking it can read `has_modrinth`, so the check must run
+   consumer-side, before the reusable call, not after it. `check-config`
+   performs the same missing-variable check `recover-publish` (below)
+   duplicates — `reusable-release.yml`'s own "Check Modrinth configuration"
+   step, re-implemented here — and:
+   - **not configured**: fail this job (commit status `failure`; see
+     Section 4's "Required configuration") with the exact missing
+     variable(s) and the `README.md#secrets--variables` pointer, and never
+     invoke `reusable-release.yml` — no GitHub Release is created for a
+     version that cannot be published.
+   - **configured**: invoke `reusable-release.yml` exactly as today (this
+     repo's existing behavior, unchanged).
+
+   This is why `check-config`'s not-configured branch and
+   `recover-publish`'s not-configured branch (below) agree on the same
+   `failed` outcome without duplicating one job into the other: they cover
+   disjoint cases on the same `check-existing` fork — `check-config` runs
+   only on a first attempt (no release exists yet, so failing here creates
+   no GitHub Release at all), while `recover-publish`'s check covers only
+   the replay branch, where a GitHub Release from an earlier run — possibly
+   configured differently than the current one — already exists. Both
+   apply the identical actionable message.
+3. **`recover-publish`** (needs: `check-existing`; runs only on the
    "replay" branch above): checks out the confirmed sha, runs `make build`
    again (this repo's own Makefile — the original run's build artifact may
    already be gone), re-checks Modrinth configuration exactly as
@@ -354,13 +384,18 @@ accepted merge (not held)
  check-existing  --(conflict: same version, different sha)-->  [outcome: failed]
         |                    |
         |                    +--(replay: same version, same sha)--> recover-publish (2.2)
-        v (no release yet)                                           |  make build; rinth publish direct
- reusable-release.yml (schematic@v1)                                 |  --(exit 5, duplicate)--> verify-existing
-   - build .mrpack, create GitHub Release                            |        |
-     (target_commitish = source sha)                                 |        v
-   - has_modrinth? --(no)--> [outcome: failed]                       |   match -> [published: continues below]
-        | (yes)   (required config missing for sickos; Section 4)    |   mismatch -> [failed]
-        v                                                             v (success)
+        v (no release yet)                                           |  make build; re-checks config
+ check-config  --(not configured)--> [outcome: failed]                |    --(not configured)--> [outcome: failed]
+        | (configured)         (consumer-side gate, Section 2.2;      |    --(configured)--> rinth publish direct
+        v                       reusable-release.yml@v1 has no        |         --(exit 5, duplicate)--> verify-existing
+ reusable-release.yml (schematic@v1)  workflow_call output to key off) |              |
+   - build .mrpack, create GitHub Release                             |              v
+     (target_commitish = source sha)                                  |         match -> [published: continues below]
+   - has_modrinth? always yes here — check-config already gated it;   |         mismatch -> [failed]
+     this branch is reusable-release.yml's own, unreachable in        |
+     practice for sickos, kept as its existing defense-in-depth       |
+        | (yes)                                                       v (success)
+        v
    rinth publish  --(exit 5, duplicate)--> verify-existing  <---------+
         |                                        |
         v (success)                              v
@@ -483,6 +518,20 @@ actionable message naming the exact missing variable(s) and pointing at
 resolves a push that would otherwise publish to `skipped` on missing
 configuration.
 
+**What actually makes the run go red.** `reusable-release.yml@v1` declares
+no `workflow_call` outputs (checked at the `v1` ref) and, per "What already
+exists" above, exits successfully whether or not Modrinth is configured —
+nothing downstream of invoking it can read `has_modrinth`, so this policy
+cannot simply "echo" that check into an outcome job that runs after the
+reusable call. The mechanism is the consumer-side `check-config` job
+(Section 2.2), which runs before `reusable-release.yml` is ever invoked on
+a first attempt and fails the run itself — with the actionable
+message above — when configuration is missing, so no GitHub Release is
+created for a version that cannot be published. `recover-publish`'s own
+not-configured branch (Section 2.2) covers the separate replay case, where
+a GitHub Release already exists from an earlier run; both branches emit
+the identical `failed` outcome and message.
+
 `skipped` remains a real outcome in the shared six-outcome taxonomy below
 (matching the epic's own naming exactly) and stays available for a
 consumer of this same contract where the absence of Modrinth configuration
@@ -584,7 +633,7 @@ by an operator retry alike:
   `gh run rerun` reaches `recover-publish`, which calls `rinth publish`
   again. It either succeeds cleanly (Modrinth never actually received the
   earlier attempt) or fails with the duplicate-version `ApiError`, which
-  `recover-publish`'s own verify-existing fallback (Section 2.2 step 2)
+  `recover-publish`'s own verify-existing fallback (Section 2.2 step 3)
   resolves to `published` (confirmed match) or `failed` (confirmed
   conflict) — never a second live upload attempt against an
   already-correct version. No duplicate Modrinth version is possible for
@@ -630,7 +679,7 @@ writing — read it before promising coverage beyond what's listed here as
 | Conflict resolution: same version + same sha vs. same version + different sha vs. no existing release | Pure unit test of the Section 2.2 decision function, fed fabricated `(targetCommitish, sha)` pairs — no network call needed. |
 | Identity match/mismatch for the duplicate-then-verify fallback | Pure unit test of the Section 2.2 identity-compare function against fabricated Modrinth JSON responses. |
 | Missing-configuration message content | Unit test that the `failed`-outcome description names the exact missing variable(s) and points at `README.md#secrets--variables`, against fabricated env. |
-| Missing required Modrinth configuration resolves to `failed`, never `skipped`, for `sickos` | Unit test of the Section 4 outcome-mapping function: given a release-eligible, non-held push with `has_modrinth=false`, assert the resolved outcome is `failed` (commit status `failure`) and never `skipped`, for both the `reusable-release.yml` path and the `recover-publish` "not configured" branch (Section 2.2). |
+| Missing required Modrinth configuration resolves to `failed`, never `skipped`, for `sickos` — both paths | Pure unit test of the Section 2.2 decision functions: (1) `check-config`'s not-configured branch (first-attempt path, before `reusable-release.yml` is ever invoked) and (2) `recover-publish`'s not-configured branch (replay path, release already exists) — for both, given `has_modrinth=false`, assert the resolved outcome is `failed` (commit status `failure`) with the actionable message, and never `skipped`. |
 | `release.yml`'s new `concurrency:` block and job wiring | `actionlint`, mirroring `da-auto-bump-tests.yml`'s existing `actionlint` job for its own workflow files. |
 | Build failure produces `failed`, never a partial GitHub Release | `workflow_dispatch` dry run against a deliberately broken pack state on a disposable branch — a dry run never creates a Release, so this is safe today. |
 | Existing-release conflict check against **real, already-published** history | Run the Section 2.2 check function against `sickos`'s own real `v0.23.2` release (`target_commitish` already known and public) with a fabricated *different* sha — confirms the conflict path fires correctly, without publishing anything. |
