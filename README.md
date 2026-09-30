@@ -446,6 +446,12 @@ For an auto-bump push specifically (a commit carrying a `DA-Auto-Bump` trailer),
 body afterward; see [docs/release-notes-plumbing.md](docs/release-notes-plumbing.md)
 for what it does and does not cover.
 
+The accepted-change release policy -- eligibility, the durable hold
+mechanism, version-concurrency and retry/idempotency handling, the
+machine-readable outcome-state contract, source-revision/artifact identity,
+and recovery after a partial failure -- is documented in
+[docs/release-policy.md](docs/release-policy.md).
+
 ### Automated Dynamic Atmosphere bumps
 
 `.github/workflows/da-auto-bump.yml` triggers on a `repository_dispatch`
