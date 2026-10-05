@@ -46,10 +46,12 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
        (github.event.workflow_run.event == 'release' || github.event.workflow_run.event == 'push'))
-    # TEMPORARY: pinned to the schematic commit that added `allow-stopped` (PR #55)
-    # until the moving `v1` tag is approved to move. Switch back to @v1 then.
-    uses: brooswit-minecraft/schematic/.github/workflows/reusable-server-update.yml@30caf88e2d13c16e37640eb5c2a88a6251985820
+    # TEMPORARY: pinned to a schematic commit (branch MINECRAFT-54-tools-ref, NOT on main) that adds
+    # `allow-stopped` and `tools-ref`, until the moving `v1` tag is approved to move. Switch back to @v1 then.
+    uses: brooswit-minecraft/schematic/.github/workflows/reusable-server-update.yml@ee37f3182c012eca78558e4429b1f75d1028399a
     with:
       version: ${{ inputs.version }}
       allow-stopped: true
+      # TEMPORARY, same reason: take the deploy scripts from the pinned commit, not the v1 tag.
+      tools-ref: ee37f3182c012eca78558e4429b1f75d1028399a
     secrets: inherit
