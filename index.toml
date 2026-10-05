@@ -45,6 +45,11 @@ hash = "ebcfe072e96879e32119c250e37ffa1502a88af85d21591b763ec4cfbe2d4425"
 metafile = true
 
 [[files]]
+file = "mods/dynamic-terrain.pw.toml"
+hash = "409ab844d48efef10c0f2e69976a8beef006f6c1ed92b16737bf2752d8c08586"
+metafile = true
+
+[[files]]
 file = "mods/flowing-fluids.pw.toml"
 hash = "848ba3d5c40903b190d9fc2f92d7369a76e73cf8881b882787d28e7bde3ac637"
 metafile = true
