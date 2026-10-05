@@ -1,6 +1,18 @@
 hash-format = "sha256"
 
 [[files]]
+file = ".claude/bakr-disabled-mcp.json"
+hash = "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570"
+
+[[files]]
+file = ".claude/settings.local.json"
+hash = "c6d98e756a7bf3b602b0aa2f21cb6a9c5b85f5b0f84ef94af32223fe4d5f4b39"
+
+[[files]]
+file = ".mcp.json"
+hash = "c655f55516ee52d7940ce668e2dc98dde8f703121107f623be7955f2a7782faa"
+
+[[files]]
 file = "config/defaultoptions/servers.dat"
 hash = "cbe1f6166b49efb1493edef5b1d356bc879c9da61abddc6f3ef9932a6d2dee6f"
 
@@ -42,6 +54,11 @@ metafile = true
 [[files]]
 file = "mods/dynamic-atmosphere.pw.toml"
 hash = "ebcfe072e96879e32119c250e37ffa1502a88af85d21591b763ec4cfbe2d4425"
+metafile = true
+
+[[files]]
+file = "mods/dynamic-terrain.pw.toml"
+hash = "409ab844d48efef10c0f2e69976a8beef006f6c1ed92b16737bf2752d8c08586"
 metafile = true
 
 [[files]]

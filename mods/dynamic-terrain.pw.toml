@@ -1,0 +1,13 @@
+name = "Dynamic Terrain"
+filename = "dynamicterrain-0.5.0.jar"
+side = "both"
+
+[download]
+url = "https://cdn.modrinth.com/data/BCtj6RgM/versions/fIFg99SR/dynamicterrain-0.5.0.jar"
+hash-format = "sha512"
+hash = "45a59bd1fab4e929ae3f7684f5c64f88cd1c7c986c6e28a0c0aebf806afc54d88206a50f829f561e39bf827e7f53410425cd24bba67ac7abefeb778dac65b61f"
+
+[update]
+[update.modrinth]
+mod-id = "BCtj6RgM"
+version = "fIFg99SR"

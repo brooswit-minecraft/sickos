@@ -11,6 +11,15 @@ template below. Pinned mods live under `mods/`; `Rediculous Ore Generation` and
 stopped indexing both as of 2026-09-10 (see `docs/unknown-files-options.md`), so the pack
 can no longer pin them without triggering the Modrinth App's "Unknown files" warning.
 
+## Dynamic Terrain
+
+Sickos 0.24.0 adds Dynamic Terrain 0.5.0 (alpha) for client and server: Layered
+Dirt, Sand and Gravel blocks in 1/16 layers (creative, Natural Blocks tab) and shovel
+grading (right-click a block with a shovel to pull one sixteenth toward you). Layers do
+not fall or erode yet. Adding it is compatible with existing worlds, but removing it
+later would delete the placed layered blocks. The client and the server must run the same
+Sickos version.
+
 ## Dynamic Atmosphere
 
 **Sickos 0.23.0 is a breaking update. Back up your world before upgrading.**
