@@ -49,4 +49,5 @@ jobs:
     uses: brooswit-minecraft/schematic/.github/workflows/reusable-server-update.yml@v1
     with:
       version: ${{ inputs.version }}
+      allow-stopped: true
     secrets: inherit
