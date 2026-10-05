@@ -1,14 +1,6 @@
 hash-format = "sha256"
 
 [[files]]
-file = ".claude/bakr-disabled-mcp.json"
-hash = "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570"
-
-[[files]]
-file = ".claude/settings.local.json"
-hash = "c6d98e756a7bf3b602b0aa2f21cb6a9c5b85f5b0f84ef94af32223fe4d5f4b39"
-
-[[files]]
 file = ".mcp.json"
 hash = "c655f55516ee52d7940ce668e2dc98dde8f703121107f623be7955f2a7782faa"
 
