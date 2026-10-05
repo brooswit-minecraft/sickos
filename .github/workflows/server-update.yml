@@ -52,4 +52,7 @@ jobs:
     with:
       version: ${{ inputs.version }}
       allow-stopped: true
+      # TEMPORARY, same reason as the pinned `uses:` SHA: the reusable workflow checks out its
+      # scripts from this ref (default v1), which does not have the new commands yet.
+      ref: 30caf88e2d13c16e37640eb5c2a88a6251985820
     secrets: inherit
