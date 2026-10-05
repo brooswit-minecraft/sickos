@@ -46,7 +46,9 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
        (github.event.workflow_run.event == 'release' || github.event.workflow_run.event == 'push'))
-    uses: brooswit-minecraft/schematic/.github/workflows/reusable-server-update.yml@v1
+    # TEMPORARY: pinned to the schematic commit that added `allow-stopped` (PR #55)
+    # until the moving `v1` tag is approved to move. Switch back to @v1 then.
+    uses: brooswit-minecraft/schematic/.github/workflows/reusable-server-update.yml@30caf88e2d13c16e37640eb5c2a88a6251985820
     with:
       version: ${{ inputs.version }}
       allow-stopped: true
