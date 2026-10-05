@@ -16,3 +16,5 @@ build/
 *.mrpack
 *.zip
 mods/.gitkeep
+.claude/
+.mcp.json
