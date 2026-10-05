@@ -13,12 +13,14 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Terrain
 
-Sickos 0.24.0 adds Dynamic Terrain 0.5.0 (alpha) for client and server: Layered
-Dirt, Sand and Gravel blocks in 1/16 layers (creative, Natural Blocks tab) and shovel
-grading (right-click a block with a shovel to pull one sixteenth toward you). Layers do
-not fall or erode yet. Adding it is compatible with existing worlds, but removing it
-later would delete the placed layered blocks. The client and the server must run the same
-Sickos version.
+Sickos 0.25.0 pins Dynamic Terrain 0.7.0 (alpha) for client and server: Layered
+Dirt, Sand and Gravel blocks in 1/16 layers (creative, Natural Blocks tab), shovel
+grading (right-click a block with a shovel to pull one sixteenth toward you), and an
+erosion engine that is **off by default**. To try erosion, set `erosionEnabled = true`
+in the world's `serverconfig/dynamicterrain-server.toml` and restart; ops can then use
+`/dterode <x y z> <amount>`. Layers do not fall or erode on their own yet. Adding it is
+compatible with existing worlds, but removing it later would delete the placed layered
+blocks. The client and the server must run the same Sickos version.
 
 ## Dynamic Atmosphere
 
