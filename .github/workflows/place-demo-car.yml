@@ -1,0 +1,51 @@
+name: Place demo car
+
+# Places one Dynamic Vehicles car on flat grass near a chosen spot in the live world
+# (read the printed coordinates from the log). Runs a fixed set of RCON commands built
+# by scripts/place-demo-car.py; it takes no free-form command input and changes no blocks.
+on:
+  workflow_dispatch:
+    inputs:
+      center_x:
+        description: Search centre X
+        required: false
+        default: "0"
+        type: string
+      center_z:
+        description: Search centre Z
+        required: false
+        default: "0"
+        type: string
+      radius:
+        description: Search radius in blocks (0-160)
+        required: false
+        default: "96"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: place-demo-car
+  cancel-in-progress: false
+
+jobs:
+  place:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Place the car
+        run: python scripts/place-demo-car.py
+        env:
+          CENTER_X: ${{ inputs.center_x }}
+          CENTER_Z: ${{ inputs.center_z }}
+          RADIUS: ${{ inputs.radius }}
+          SERVER_RCON_HOST: ${{ vars.SERVER_RCON_HOST }}
+          SERVER_RCON_PORT: ${{ vars.SERVER_RCON_PORT }}
+          SERVER_RCON_PASSWORD: ${{ secrets.SERVER_RCON_PASSWORD }}
