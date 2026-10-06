@@ -53,7 +53,7 @@ def flat_grass_probe(x, z):
         "if block ~ ~ ~2 minecraft:air", "if block ~ ~ ~-2 minecraft:air",
         "if block ~ ~1 ~ minecraft:air", "if block ~ ~2 ~ minecraft:air",
     ]
-    return base + " " + " ".join(checks) + " run say probe"
+    return base + " " + " ".join(checks)  # a terminal condition reports "Test passed" or "Test failed"
 
 
 def main():
@@ -76,7 +76,7 @@ def main():
                         continue
                     x, z = cx + dx * 8, cz + dz * 8
                     run(f"forceload add {x} {z}")
-                    if run(flat_grass_probe(x, z)).strip() not in ("", "Test failed"):
+                    if "passed" in run(flat_grass_probe(x, z)):
                         spot = (x, z)
                         break
                 if spot:
