@@ -13,7 +13,7 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Terrain and Dynamic Vehicles
 
-Sickos 0.33.0 pins Dynamic Terrain 0.20.0 and Dynamic Vehicles 0.9.1 (car sounds and a horn on space: engine, tires, skids and impacts; the car now rides on Sable physics with per-wheel suspension; set `useSablePhysics = false` in `dynamicvehicles-server.toml` for the old simple model) (both alpha, client and
+Sickos 0.34.0 pins Dynamic Terrain 0.20.0 and Dynamic Vehicles 0.10.0 (adds a truck that climbs a half slab; car sounds and a horn on space: engine, tires, skids and impacts; the car now rides on Sable physics with per-wheel suspension; set `useSablePhysics = false` in `dynamicvehicles-server.toml` for the old simple model) (both alpha, client and
 server). Terrain: Layered Dirt, Grass, Sand, Gravel, Stone, Cobblestone, Smooth Stone, Deepslate
 and Cobbled Deepslate in 1/16 layers (creative, Natural Blocks tab); **right-click with a pickaxe**
 to pull one sixteenth of a block, slab or grass block toward you. Newly generated terrain is
