@@ -13,7 +13,7 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Terrain
 
-Sickos 0.27.0 pins Dynamic Terrain 0.14.0 (alpha) for client and server: Layered
+Sickos 0.28.0 pins Dynamic Terrain 0.20.0 (alpha) for client and server: Layered
 Dirt, Sand and Gravel blocks in 1/16 layers (creative, Natural Blocks tab), shovel
 grading (right-click a block with a shovel to pull one sixteenth toward you), and an
 erosion engine that is **off by default**. To try erosion, set `erosionEnabled = true`

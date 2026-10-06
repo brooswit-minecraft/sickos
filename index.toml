@@ -46,7 +46,7 @@ metafile = true
 
 [[files]]
 file = "mods/dynamic-terrain.pw.toml"
-hash = "07737cd68505161d92ded4d850a952722c0f4f068d575862a409677866fd6dda"
+hash = "e6d76fb98d2b1ed428d61a6a821fb169972dbbdcaf88cdd9ab49c2d4693507b7"
 metafile = true
 
 [[files]]
