@@ -41,19 +41,27 @@ def _read(sock, count):
     return data
 
 
-def flat_grass_probe(x, z):
-    """A command that passes only if (x, z) is grass at the surface with flat grass 2 blocks out each way."""
-    base = f"execute positioned {x} 0 {z} positioned over world_surface"
-    checks = [
-        "if block ~ ~ ~ minecraft:air",
-        "if block ~ ~-1 ~ minecraft:grass_block",
-        "if block ~2 ~-1 ~ minecraft:grass_block", "if block ~-2 ~-1 ~ minecraft:grass_block",
-        "if block ~ ~-1 ~2 minecraft:grass_block", "if block ~ ~-1 ~-2 minecraft:grass_block",
-        "if block ~2 ~ ~ minecraft:air", "if block ~-2 ~ ~ minecraft:air",
-        "if block ~ ~ ~2 minecraft:air", "if block ~ ~ ~-2 minecraft:air",
-        "if block ~ ~1 ~ minecraft:air", "if block ~ ~2 ~ minecraft:air",
-    ]
-    return base + " " + " ".join(checks)  # a terminal condition reports "Test passed" or "Test failed"
+def probe(x, z, level):
+    """A terminal condition (reports "Test passed" or "Test failed") for a drivable spot at (x, z).
+
+    level 0: grass with flat grass and open air 2 blocks out each way (best);
+    level 1: grass with open air 1 block out each way;
+    level 2: any dirt-like or sand surface with open air above.
+    """
+    base = f"execute positioned {x} 0 {z} positioned over motion_blocking_no_leaves"
+    if level == 0:
+        checks = ["if block ~ ~ ~ minecraft:air", "if block ~ ~-1 ~ minecraft:grass_block",
+                  "if block ~2 ~-1 ~ minecraft:grass_block", "if block ~-2 ~-1 ~ minecraft:grass_block",
+                  "if block ~ ~-1 ~2 minecraft:grass_block", "if block ~ ~-1 ~-2 minecraft:grass_block",
+                  "if block ~2 ~ ~ minecraft:air", "if block ~-2 ~ ~ minecraft:air",
+                  "if block ~ ~ ~2 minecraft:air", "if block ~ ~ ~-2 minecraft:air"]
+    elif level == 1:
+        checks = ["if block ~ ~ ~ minecraft:air", "if block ~ ~-1 ~ minecraft:grass_block",
+                  "if block ~1 ~ ~ minecraft:air", "if block ~-1 ~ ~ minecraft:air",
+                  "if block ~ ~ ~1 minecraft:air", "if block ~ ~ ~-1 minecraft:air"]
+    else:
+        checks = ["if block ~ ~ ~ minecraft:air", "if block ~ ~-1 ~ #minecraft:dirt"]
+    return base + " " + " ".join(checks + ["if block ~ ~1 ~ minecraft:air", "if block ~ ~2 ~ minecraft:air"])
 
 
 def main():
@@ -67,27 +75,31 @@ def main():
     if "passed" in existing:
         print("A car already exists; not placing another.")
     else:
-        # Spiral outward in 8-block steps until a flat grass spot passes the probe.
+        # Spiral outward in 8-block steps; try the strictest spot quality first, then relax.
         spot = None
-        for ring in range(0, radius // 8 + 1):
-            for dx in range(-ring, ring + 1):
-                for dz in range(-ring, ring + 1):
-                    if max(abs(dx), abs(dz)) != ring:
-                        continue
-                    x, z = cx + dx * 8, cz + dz * 8
-                    run(f"forceload add {x} {z}")
-                    if "passed" in run(flat_grass_probe(x, z)):
-                        spot = (x, z)
+        for level in (0, 1, 2):
+            for ring in range(0, radius // 8 + 1):
+                for dx in range(-ring, ring + 1):
+                    for dz in range(-ring, ring + 1):
+                        if max(abs(dx), abs(dz)) != ring:
+                            continue
+                        x, z = cx + dx * 8, cz + dz * 8
+                        run(f"forceload add {x} {z}")
+                        if "passed" in run(probe(x, z, level)):
+                            spot = (x, z)
+                            break
+                    if spot:
                         break
                 if spot:
                     break
             if spot:
+                print(f"Spot quality level {level} (0 = flat grass, best)")
                 break
         if not spot:
             raise SystemExit("no flat grass spot found within the radius; try another centre or a larger radius")
         x, z = spot
         print(f"Flat grass found at x={x} z={z}; summoning the car")
-        print(run(f"execute positioned {x} 0 {z} positioned over world_surface run summon {CAR} ~ ~ ~ {{Rotation:[0f,0f]}}"))
+        print(run(f"execute positioned {x} 0 {z} positioned over motion_blocking_no_leaves run summon {CAR} ~ ~ ~ {{Rotation:[0f,0f]}}"))
 
     for query in ("Pos", "UUID", "Rotation"):
         print(query, run(f"data get entity @e[type={CAR},limit=1,sort=nearest] {query}"))
