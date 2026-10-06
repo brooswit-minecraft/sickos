@@ -50,6 +50,11 @@ hash = "e6d76fb98d2b1ed428d61a6a821fb169972dbbdcaf88cdd9ab49c2d4693507b7"
 metafile = true
 
 [[files]]
+file = "mods/dynamic-vehicles.pw.toml"
+hash = "8df9091baea2b436a4a0f759d236e2f0569be7b3c25162eacb917b4b51cc1e5b"
+metafile = true
+
+[[files]]
 file = "mods/flowing-fluids.pw.toml"
 hash = "848ba3d5c40903b190d9fc2f92d7369a76e73cf8881b882787d28e7bde3ac637"
 metafile = true

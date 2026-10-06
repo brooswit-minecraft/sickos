@@ -11,16 +11,19 @@ template below. Pinned mods live under `mods/`; `Rediculous Ore Generation` and
 stopped indexing both as of 2026-09-10 (see `docs/unknown-files-options.md`), so the pack
 can no longer pin them without triggering the Modrinth App's "Unknown files" warning.
 
-## Dynamic Terrain
+## Dynamic Terrain and Dynamic Vehicles
 
-Sickos 0.28.0 pins Dynamic Terrain 0.20.0 (alpha) for client and server: Layered
-Dirt, Sand and Gravel blocks in 1/16 layers (creative, Natural Blocks tab), shovel
-grading (right-click a block with a shovel to pull one sixteenth toward you), and an
-erosion engine that is **off by default**. To try erosion, set `erosionEnabled = true`
-in the world's `serverconfig/dynamicterrain-server.toml` and restart; ops can then use
-`/dterode <x y z> <amount>`. Layers do not fall or erode on their own yet. Adding it is
-compatible with existing worlds, but removing it later would delete the placed layered
-blocks. The client and the server must run the same Sickos version.
+Sickos 0.28.0 pins Dynamic Terrain 0.20.0 and adds Dynamic Vehicles 0.2.0 (both alpha, client and
+server). Terrain: Layered Dirt, Grass, Sand, Gravel, Stone, Cobblestone, Smooth Stone, Deepslate
+and Cobbled Deepslate in 1/16 layers (creative, Natural Blocks tab); **right-click with a pickaxe**
+to pull one sixteenth of a block, slab or grass block toward you. Newly generated terrain is
+smoothed with layered blocks (`worldgenSmoothing`, on by default; chunks that already exist keep
+their steps, so the border between old and new terrain can show a step). Erosion and cave-ins are
+**off by default**: set `erosionEnabled = true` / `caveInsEnabled = true` in
+`dynamicterrain-server.toml` and restart to try them. Vehicles: a placeholder-looking 4-wheel Car
+(creative, Tools & Utilities) that reports tire slip to Dynamic Terrain. Adding either is
+compatible with existing worlds; removing them later would delete the placed blocks and cars.
+The client and the server must run the same Sickos version.
 
 ## Dynamic Atmosphere
 
