@@ -13,7 +13,7 @@ can no longer pin them without triggering the Modrinth App's "Unknown files" war
 
 ## Dynamic Terrain and Dynamic Vehicles
 
-Sickos 0.28.0 pins Dynamic Terrain 0.20.0 and adds Dynamic Vehicles 0.2.0 (both alpha, client and
+Sickos 0.29.0 pins Dynamic Terrain 0.20.0 and Dynamic Vehicles 0.2.1 (both alpha, client and
 server). Terrain: Layered Dirt, Grass, Sand, Gravel, Stone, Cobblestone, Smooth Stone, Deepslate
 and Cobbled Deepslate in 1/16 layers (creative, Natural Blocks tab); **right-click with a pickaxe**
 to pull one sixteenth of a block, slab or grass block toward you. Newly generated terrain is
