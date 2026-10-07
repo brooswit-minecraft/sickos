@@ -1,13 +1,13 @@
 name = "Dynamic Vehicles"
-filename = "dynamicvehicles-0.12.0.jar"
+filename = "dynamicvehicles-0.13.0.jar"
 side = "both"
 
 [download]
-url = "https://cdn.modrinth.com/data/srLLPzF8/versions/enTnVH0t/dynamicvehicles-0.12.0.jar"
+url = "https://cdn.modrinth.com/data/srLLPzF8/versions/YbX9dbYQ/dynamicvehicles-0.13.0.jar"
 hash-format = "sha512"
-hash = "a34adfb91dc7289b99bc491b9badba06bd837529bddc15f340589bcd4d6e62f75bedc74870d2a2c18b58bd74b3ad06a7857153fb69efb14562611e752d5b2f74"
+hash = "fdce04f3dd349eebb7fe757134ce0cc4427f4e162e00aa8dfeeb033bd4e8f614d063cd1d9b28527e5f5b89ef2ea488a49caf869839c9bad65592ccb098ba59d8"
 
 [update]
 [update.modrinth]
 mod-id = "srLLPzF8"
-version = "enTnVH0t"
+version = "YbX9dbYQ"
