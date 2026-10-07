@@ -57,10 +57,12 @@ def main():
                 print("\n=== first error lines in logs/latest.log ===")
                 with sftp.open(f"{root}/logs/latest.log", "rb") as h:
                     allv = h.read().decode("utf-8", "replace").splitlines()
-                hits = [i for i, l in enumerate(allv) if "ERROR" in l or "Exception" in l]
+                hits = [i for i, l in enumerate(allv) if ("ERROR" in l or "Exception" in l) and "ChunkSerializer" not in l and "LootDataType" not in l and "mixin/" not in l and "Unknown registry key" not in l]
                 print(f"total lines {len(allv)}, error hits {len(hits)}")
                 if hits:
-                    print("\n".join(clean(l) for l in allv[max(0, hits[0] - 3):hits[0] + 40]))
+                    for h in hits[:12]:
+                        print("\n".join(clean(l)[:400] for l in allv[max(0, h - 1):h + 6]))
+                        print("-----")
                 print("\n=== tail logs/latest.log (200 lines) ===")
                 print("\n".join(clean(l) for l in tail(sftp, f"{root}/logs/latest.log", 200)))
                 try:
