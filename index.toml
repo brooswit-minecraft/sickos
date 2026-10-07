@@ -15,11 +15,6 @@ hash = "2aa745e51506af80a6a2bb7dcfc4e27fc2c2323b35dbfa9e52eb290acd1ff7b4"
 metafile = true
 
 [[files]]
-file = "mods/countereds-terrain-slabs.pw.toml"
-hash = "ac459cbd85b4ac9c5db308b2cd0fc57c1e98b22aff0af60a166b2f51abce9bce"
-metafile = true
-
-[[files]]
 file = "mods/create-aeronautics.pw.toml"
 hash = "d438d05c61167c95de2b282bb3839a290f819f70c9d313c5e61177d69a29c704"
 metafile = true
@@ -46,12 +41,12 @@ metafile = true
 
 [[files]]
 file = "mods/dynamic-terrain.pw.toml"
-hash = "e6d76fb98d2b1ed428d61a6a821fb169972dbbdcaf88cdd9ab49c2d4693507b7"
+hash = "9657f8c79e66a8df26b289ae892f97834488a7f4eb8aa2017f424b99f4a3feba"
 metafile = true
 
 [[files]]
 file = "mods/dynamic-vehicles.pw.toml"
-hash = "37891ebc802b4c53f6cd75fe10ee9e032a5b15c237405a12d346f4ef0e24841e"
+hash = "7261cf7b8e6a360e2d83cf9235420d7637efbdcc8cb89ba7f6a895b9c71197bb"
 metafile = true
 
 [[files]]
