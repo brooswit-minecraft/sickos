@@ -1,13 +1,13 @@
 name = "Dynamic Terrain"
-filename = "dynamicterrain-0.22.1.jar"
+filename = "dynamicterrain-0.22.2.jar"
 side = "both"
 
 [download]
-url = "https://cdn.modrinth.com/data/BCtj6RgM/versions/GprJtu9C/dynamicterrain-0.22.1.jar"
+url = "https://cdn.modrinth.com/data/BCtj6RgM/versions/Hr467Hqx/dynamicterrain-0.22.2.jar"
 hash-format = "sha512"
-hash = "66792a7bde99502ae4a419532c22743d549c2acd72bd880dde3a4289383883644fd3f8598b0844e0ff9f28803ae88bc7e5645114da56f771cd79e1b98e1ab701"
+hash = "9bb7219985164fc16ba59dfe51fcf13cef1b1387cc8a5e5546cb969e56cfc0621c8d2fca5d2572eff671c43bfa18b4f7dd1ff85b7e8ce654c9dc1214ed69cb3b"
 
 [update]
 [update.modrinth]
 mod-id = "BCtj6RgM"
-version = "GprJtu9C"
+version = "Hr467Hqx"
