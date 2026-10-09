@@ -1,0 +1,8 @@
+name = "Dynamic Despawn"
+filename = "dynamicdespawn-0.2.0.jar"
+side = "both"
+
+[download]
+url = "https://github.com/brooswit-minecraft/dynamic-despawn/releases/download/v0.2.0/dynamicdespawn-0.2.0.jar"
+hash-format = "sha512"
+hash = "6aa54dd0f11e6dc7790fc3880bbf201c238a4068c8135655c8ea32b36a8d6856360d1dd872abf07cb12ffd86a3092acddbca086b0992e0d6710110117941d8aa"
