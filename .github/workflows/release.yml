@@ -266,9 +266,9 @@ jobs:
         if: steps.config.outputs.exit_code == '0'
         id: targets
         run: |
-          echo "pack_name=$(sed -n 's/^name = "\(.*\)"/\1/p' pack.toml)" >> "$GITHUB_OUTPUT"
-          echo "minecraft=$(sed -n 's/^minecraft = "\(.*\)"/\1/p' pack.toml)" >> "$GITHUB_OUTPUT"
           {
+            echo "pack_name=$(sed -n 's/^name = "\(.*\)"/\1/p' pack.toml)"
+            echo "minecraft=$(sed -n 's/^minecraft = "\(.*\)"/\1/p' pack.toml)"
             echo "loaders<<TARGETS_EOF"
             sed -n -E 's/^(forge|fabric|neoforge|quilt) = ".*"/\1/p' pack.toml
             echo "TARGETS_EOF"
