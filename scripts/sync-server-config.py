@@ -18,12 +18,46 @@ import tomlkit
 
 CONFIG_PATH = "dynamicatmosphere-server.toml"
 MAX_REMOTE_CONFIG_BYTES = 1024 * 1024
+
+# (minimum, maximum, type, DA default). Ranges, types and defaults are taken from
+# DA's own ModConfigSpec (DynamicAtmosphereServerConfig.java) at the version pinned
+# in mods/dynamic-atmosphere.pw.toml — re-verify against that source on every DA
+# bump that changes these fields' bounds, rather than trusting this comment.
+# Client-side-only fields (e.g. smokeOpticalDensity, reach) live in
+# config/dynamicatmosphere-client.toml on the player's machine: a server sync
+# structurally cannot reach them, so they are deliberately absent here.
 ALLOWED = {
-    ("integrations", "createFanTransportPerRpm"): (0.0, 1000.0),
-    ("integrations", "createFanIntervalTicks"): (1, 72000),
-    ("integrations", "maxFanChunksPerTick"): (1, 10000),
-    ("runtime", "simulationSkipChance"): (0.0, 1.0),
-    ("enderGas", "portalBlockEmission"): (0, 1_000_000),
+    ("runtime", "simulationSkipChance"): (0.0, 1.0, float, 0.75),
+    ("runtime", "simulationIntervalTicks"): (1, 72000, int, 200),
+    ("runtime", "producerIntervalTicks"): (1, 72000, int, 300),
+    ("vapor", "rainCloudHeight"): (-2048, 2048, int, 192),
+    ("heavyGas", "dissipationFactor"): (0.001, 1000.0, float, 3.0),
+    ("enderGas", "portalBlockEmission"): (0, 1_000_000, int, 100),
+    ("enderGas", "mobEmission"): (0, 1_000_000, int, 1),
+    ("enderGas", "portalOccupantEmission"): (0, 1_000_000, int, 2),
+    ("enderGas", "passiveBlockEmission"): (0, 1_000_000, int, 1),
+    ("enderGas", "pearlUseEmission"): (0, 1_000_000, int, 24),
+    ("enderGas", "pearlImpactEmission"): (0, 1_000_000, int, 48),
+    ("voidGas", "hostileDeathEmission"): (0, 1_000_000, int, 40),
+    ("voidGas", "netherrackEmission"): (0, 1_000_000, int, 2),
+    ("voidGas", "bottomEmission"): (0, 1_000_000, int, 8),
+    ("dust", "walkEmission"): (0, 1_000_000, int, 1),
+    ("dust", "runEmission"): (0, 1_000_000, int, 3),
+    ("dust", "jumpEmission"): (0, 1_000_000, int, 8),
+    ("dust", "landEmission"): (0, 1_000_000, int, 6),
+    ("dust", "fallDamageBaseEmission"): (0, 1_000_000, int, 16),
+    ("dust", "fallDamageEmissionPerPoint"): (0, 1_000_000, int, 2),
+    ("dust", "maxFallDamageEmission"): (0, 1_000_000, int, 64),
+    ("dust", "blockBreakEmission"): (0, 1_000_000, int, 16),
+    ("dust", "blockPlaceEmission"): (0, 1_000_000, int, 12),
+    ("dust", "fallingBlockEmission"): (0, 1_000_000, int, 24),
+    ("exhaust", "passiveEmission"): (0, 1_000_000, int, 1),
+    ("exhaust", "damageEmissionPerPoint"): (0, 1_000_000, int, 4),
+    ("exhaust", "maxDamageEmission"): (0, 1_000_000, int, 64),
+    ("slime", "undergroundEmission"): (0, 1_000_000, int, 8),
+    ("integrations", "createFanTransportPerRpm"): (0.0, 1000.0, float, 1.0),
+    ("integrations", "createFanIntervalTicks"): (1, 72000, int, 100),
+    ("integrations", "maxFanChunksPerTick"): (1, 10000, int, 32),
 }
 
 
@@ -41,12 +75,10 @@ def load_tuning(path):
                 raise ValueError(f"Unsupported server tuning field: {section}.{key}")
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
                 raise ValueError(f"Server tuning field must be a finite number: {section}.{key}")
-            minimum, maximum = ALLOWED[field]
+            minimum, maximum, kind, _default = ALLOWED[field]
             if not minimum <= value <= maximum:
                 raise ValueError(f"Server tuning field is outside its supported range: {section}.{key}")
-            if field in {("enderGas", "portalBlockEmission"),
-                         ("integrations", "createFanIntervalTicks"),
-                         ("integrations", "maxFanChunksPerTick")}:
+            if kind is int:
                 if not isinstance(value, int):
                     raise ValueError(f"Server tuning field must be an integer: {section}.{key}")
                 flattened[field] = value
@@ -135,15 +167,37 @@ def read_remote(sftp, path):
     return content.decode("utf-8")
 
 
+def regenerated_fields(original, tuning):
+    """Fields whose pre-patch remote value is DA's default rather than our tuning.
+
+    DA's rename-aside config versioning regenerates the whole file at defaults on
+    a configVersion mismatch, silently discarding every key this sync manages. A
+    field found sitting at its DA default right before we patch it (when the
+    repository asks for something else) is exactly that signature, so surface it
+    instead of letting the next successful patch paper over the evidence.
+    """
+    before = tomlkit.parse(original).unwrap()
+    found = []
+    for (section, key), desired in tuning.items():
+        _minimum, _maximum, _kind, default = ALLOWED[(section, key)]
+        section_values = before.get(section)
+        current = section_values.get(key) if isinstance(section_values, dict) else None
+        current = default if current is None else current
+        if current == default and desired != default:
+            found.append((section, key, default, desired))
+    return found
+
+
 def synchronize(sftp, root, tuning):
     normalized_root = safe_root(root)
     properties_path = "/server.properties" if normalized_root == "/" else f"{normalized_root}/server.properties"
     properties = read_remote(sftp, properties_path)
     target = resolve_config_path(sftp, root, level_name(properties))
     original = read_remote(sftp, target)
+    regenerated = regenerated_fields(original, tuning)
     updated = patch_toml(original, tuning)
     if updated == original:
-        return
+        return regenerated
     temporary = f"{target}.tmp-{uuid.uuid4().hex}"
     try:
         with sftp.open(temporary, "wb") as output:
@@ -161,6 +215,7 @@ def synchronize(sftp, root, tuning):
             raise ValueError("Remote config readback did not match repository tuning")
     if readback != updated:
         raise ValueError("Remote config readback differed from the atomic upload")
+    return regenerated
 
 
 def schematic_deploy():
@@ -197,8 +252,32 @@ def main():
                 allow_agent=False, look_for_keys=False, timeout=30, auth_timeout=30, banner_timeout=30)
             with client.open_sftp() as sftp:
                 sftp.get_channel().settimeout(60)
-                synchronize(sftp, env["SERVER_SFTP_PATH"], tuning)
+                regenerated = synchronize(sftp, env["SERVER_SFTP_PATH"], tuning)
+    report_regeneration(regenerated, env)
     print("Server tuning synchronized and verified")
+
+
+def report_regeneration(regenerated, env):
+    if not regenerated:
+        return
+    lines = [
+        f"- `{section}.{key}` was at DA's default ({default}) instead of the "
+        f"repository's tuned value ({desired}) before this run patched it"
+        for section, key, default, desired in regenerated
+    ]
+    for line in lines:
+        print(f"::warning::Possible DA config regeneration detected: {line}")
+    summary_path = env.get("GITHUB_STEP_SUMMARY")
+    if not summary_path:
+        return
+    with open(summary_path, "a", encoding="utf-8") as summary:
+        summary.write("\n## Possible DA config regeneration detected\n\n")
+        summary.write(
+            "The following fields were found at DA's default immediately before "
+            "this run patched them, rather than at the value this repository last "
+            "wrote — the signature of DA renaming the live config aside and "
+            "regenerating it at defaults (e.g. after a configVersion bump):\n\n")
+        summary.writelines(f"{line}\n" for line in lines)
 
 
 if __name__ == "__main__":
