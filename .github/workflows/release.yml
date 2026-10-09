@@ -1,5 +1,31 @@
 name: Release
 
+# Implements docs/release-policy.md (MINECRAFT-42/MINECRAFT-57). Two flows
+# share this file:
+#
+# - `legacy-release`: the `release: published` event and `workflow_dispatch`
+#   dry runs. Unchanged from this repo's pre-policy behavior -- a direct,
+#   thin call into schematic's reusable-release.yml@v1. Hold, replay
+#   detection, required-configuration enforcement, read-back verification,
+#   and the sickos/release-outcome commit status are all policy additions
+#   scoped to the push-triggered automatic-release path (the "accepted
+#   merge" flow the policy document's own Section 3 diagram describes);
+#   the legacy path already made its own eligibility/publish decision by
+#   definition (a human publishing a release, or an explicit dry run) and
+#   is untouched here.
+# - Every other job below: the push-triggered pipeline, gated on
+#   `github.event_name == 'push'` throughout, implementing
+#   docs/release-policy.md Sections 1-4 exactly as that document's Section 3
+#   flow diagram lays them out: check-hold -> check-existing ->
+#   (check-config -> release) | recover-publish -> verify-publication ->
+#   record-outcome.
+#
+# All decision logic (hold-trailer parsing, conflict/replay resolution,
+# required-configuration checks, identity matching, outcome-to-commit-status
+# mapping) lives in scripts/release_decisions.py as pure, independently
+# unit-tested functions (tests/test_release_decisions.py) -- every job below
+# calls that script rather than re-implementing any branch inline.
+
 on:
   push:
     branches: [main]
@@ -20,13 +46,425 @@ on:
         required: true
         type: string
 
+# docs/release-policy.md Section 2 ("Overlap"): serializes every run of this
+# workflow -- push-triggered releases, the legacy release-event path, and
+# workflow_dispatch dry runs all share one queue, so two pack-changing
+# merges landing seconds apart can never race the GitHub-Release-create or
+# Modrinth-publish steps against each other. See that section's own
+# "Correction" for what this does NOT guarantee (a third run arriving while
+# one is in-progress and one is pending replaces the pending one, dropping
+# it entirely) -- that gap is covered by check-existing's own skipped-
+# intermediate-version detection below, not by this concurrency group.
+concurrency:
+  group: sickos-release
+  cancel-in-progress: false
+
 jobs:
-  release:
-    # Creates a release on pack pushes and supports legacy manual releases.
-    # ci.yml only reads the repo, so keep that workflow's permissions untouched.
+  legacy-release:
+    if: github.event_name != 'push'
     permissions:
       contents: write
     uses: brooswit-minecraft/schematic/.github/workflows/reusable-release.yml@v1
     with:
       version: ${{ inputs.version }}
     secrets: inherit
+
+  # Section 1. Only meaningful on push -- a human publishing a release
+  # directly, or an explicit workflow_dispatch dry run, has already made
+  # the eligibility decision HOLD exists to gate, so this job (and every
+  # job below it) does not run for those events at all; `needs.check-hold`
+  # reads as empty/unset for them, which is why every downstream `if:`
+  # below also re-states `github.event_name == 'push'` explicitly rather
+  # than relying on that emptiness alone.
+  check-hold:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      held: ${{ steps.hold.outputs.held }}
+      reason: ${{ steps.hold.outputs.reason }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Parse Release-Hold trailer
+        id: hold
+        env:
+          HEAD_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          printf '%s' "$HEAD_COMMIT_MESSAGE" > "$RUNNER_TEMP/head_commit_message.txt"
+          python3 scripts/release_decisions.py check-hold \
+            --message-file "$RUNNER_TEMP/head_commit_message.txt" \
+            --github-output "$GITHUB_OUTPUT"
+
+  # Section 2.2 / 2 (Overlap "Detection"). Resolves whether this run is a
+  # first attempt, a benign replay, or a real version/sha conflict, and
+  # separately (non-fatally) flags any pack.toml version in git history
+  # with no matching GitHub Release tag.
+  check-existing:
+    needs: [check-hold]
+    if: github.event_name == 'push' && needs.check-hold.outputs.held != 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      branch: ${{ steps.resolve.outputs.branch }}
+      version: ${{ steps.version.outputs.version }}
+      sha: ${{ github.sha }}
+      message: ${{ steps.resolve.outputs.message }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Resolve pack version
+        id: version
+        run: echo "version=$(sed -n 's/^version = "\(.*\)"/\1/p' pack.toml)" >> "$GITHUB_OUTPUT"
+      - name: Look up existing GitHub Release for this version
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if json="$(gh release view "v$VERSION" --json targetCommitish,tagName 2>/dev/null)"; then
+            echo "target_commitish=$(echo "$json" | jq -r '.targetCommitish')" >> "$GITHUB_OUTPUT"
+          else
+            echo "target_commitish=" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Resolve replay/conflict/first-attempt branch
+        id: resolve
+        env:
+          EXISTING_TARGET_COMMITISH: ${{ steps.existing.outputs.target_commitish }}
+          SHA: ${{ github.sha }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python3 scripts/release_decisions.py check-existing \
+            --existing-target-commitish "$EXISTING_TARGET_COMMITISH" \
+            --sha "$SHA" \
+            --version "$VERSION" \
+            --github-output "$GITHUB_OUTPUT"
+      - name: Fail on real version/sha conflict
+        if: steps.resolve.outputs.branch == 'conflict'
+        env:
+          MESSAGE: ${{ steps.resolve.outputs.message }}
+        run: |
+          echo "::error::$MESSAGE"
+          exit 1
+      # Non-fatal: never affects this run's own outcome (Section 2's
+      # "Overlap" correction) -- the sickos-release concurrency group can
+      # drop an entire intermediate run, which posts no commit status at
+      # all, so this is the independent safety net that surfaces it.
+      - name: Detect skipped intermediate versions (non-fatal)
+        if: steps.resolve.outputs.branch != 'conflict'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git log -p -- pack.toml \
+            | sed -n 's/^+version = "\(.*\)"/\1/p' \
+            > "$RUNNER_TEMP/version_history.txt"
+          gh release list --limit 1000 --json tagName -q '.[].tagName' \
+            | sed 's/^v//' \
+            > "$RUNNER_TEMP/released_versions.txt"
+          python3 scripts/release_decisions.py find-skipped \
+            --history-file "$RUNNER_TEMP/version_history.txt" \
+            --released-file "$RUNNER_TEMP/released_versions.txt" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+  # Section 2.2 item 2 / Section 4 "Required configuration": the mechanism
+  # that actually makes a sickos run go `failed` on missing Modrinth
+  # configuration, since reusable-release.yml@v1 has no workflow_call
+  # outputs and exits green either way. Runs only on a first attempt,
+  # strictly before reusable-release.yml is ever invoked.
+  check-config:
+    needs: [check-existing]
+    if: github.event_name == 'push' && needs.check-existing.outputs.branch == 'no_release'
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+      message: ${{ steps.check.outputs.message }}
+      missing: ${{ steps.check.outputs.missing }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check required Modrinth configuration
+        id: check
+        env:
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+          MODRINTH_PROJECT_ID: ${{ vars.MODRINTH_PROJECT_ID }}
+        run: |
+          token_set=false; [ -n "$MODRINTH_TOKEN" ] && token_set=true
+          project_set=false; [ -n "$MODRINTH_PROJECT_ID" ] && project_set=true
+          set +e
+          python3 scripts/release_decisions.py check-config \
+            --token-set "$token_set" --project-id-set "$project_set" \
+            --github-output "$GITHUB_OUTPUT"
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            message="$(sed -n 's/^message=//p' "$GITHUB_OUTPUT" | tail -n1)"
+            echo "::error::$message"
+          fi
+          exit "$status"
+
+  # Section 2.2 item 2, "configured" branch: invoke reusable-release.yml
+  # exactly as this repo did before this policy -- this job's trigger is
+  # still the SAME push event (github.event_name stays 'push' inside a
+  # called reusable workflow; verified against reusable-release.yml's own
+  # header comment), so its internal P1/P2 predicates already resolve the
+  # same way a plain push always has, with no extra inputs needed here.
+  release:
+    needs: [check-config]
+    if: github.event_name == 'push' && needs.check-config.outputs.configured == 'true'
+    permissions:
+      contents: write
+    uses: brooswit-minecraft/schematic/.github/workflows/reusable-release.yml@v1
+    secrets: inherit
+
+  # Section 2.2 item 3: the "replay" branch -- a GitHub Release for this
+  # exact source revision already exists, so reusable-release.yml's
+  # overwrite guard would fail unconditionally. This job never creates a
+  # GitHub Release; it only ever calls `rinth publish` directly (the one
+  # named exception in docs/release-policy.md's "Ownership boundary") or
+  # falls back to a read-only `rinth versions latest` comparison.
+  recover-publish:
+    needs: [check-existing]
+    if: github.event_name == 'push' && needs.check-existing.outputs.branch == 'replay'
+    runs-on: ubuntu-latest
+    outputs:
+      outcome: ${{ steps.publish.outputs.outcome || steps.duplicate.outputs.outcome || steps.not_configured.outputs.outcome }}
+      detail: ${{ steps.publish.outputs.detail || steps.duplicate.outputs.detail || steps.not_configured.outputs.detail }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.check-existing.outputs.sha }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+      - name: Install pinned packwiz
+        run: make tools
+      - name: Rebuild .mrpack (the original run's artifact may be gone)
+        run: make build
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Re-check required Modrinth configuration
+        id: config
+        env:
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+          MODRINTH_PROJECT_ID: ${{ vars.MODRINTH_PROJECT_ID }}
+        run: |
+          token_set=false; [ -n "$MODRINTH_TOKEN" ] && token_set=true
+          project_set=false; [ -n "$MODRINTH_PROJECT_ID" ] && project_set=true
+          set +e
+          python3 scripts/release_decisions.py check-config \
+            --token-set "$token_set" --project-id-set "$project_set" \
+            --github-output "$GITHUB_OUTPUT"
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+      - name: Resolve Modrinth targets
+        if: steps.config.outputs.exit_code == '0'
+        id: targets
+        run: |
+          {
+            echo "pack_name=$(sed -n 's/^name = "\(.*\)"/\1/p' pack.toml)"
+            echo "minecraft=$(sed -n 's/^minecraft = "\(.*\)"/\1/p' pack.toml)"
+            echo "loaders<<TARGETS_EOF"
+            sed -n -E 's/^(forge|fabric|neoforge|quilt) = ".*"/\1/p' pack.toml
+            echo "TARGETS_EOF"
+          } >> "$GITHUB_OUTPUT"
+      - name: Resolve not-configured outcome
+        if: steps.config.outputs.exit_code != '0'
+        id: not_configured
+        env:
+          MESSAGE: ${{ steps.config.outputs.message }}
+        run: |
+          {
+            echo "outcome=failed"
+            echo "detail=$MESSAGE"
+          } >> "$GITHUB_OUTPUT"
+      - name: Publish to Modrinth directly
+        if: steps.config.outputs.exit_code == '0'
+        id: publish
+        env:
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+          PROJECT_ID: ${{ vars.MODRINTH_PROJECT_ID }}
+          VERSION: ${{ needs.check-existing.outputs.version }}
+          MINECRAFT: ${{ steps.targets.outputs.minecraft }}
+          LOADERS: ${{ steps.targets.outputs.loaders }}
+          CHANNEL: ${{ contains(needs.check-existing.outputs.version, '-') && 'beta' || 'release' }}
+        run: |
+          shopt -s nullglob
+          mrpacks=(build/*.mrpack)
+          if [ "${#mrpacks[@]}" -ne 1 ]; then
+            echo "::error::expected exactly one .mrpack in build/, found ${#mrpacks[@]}"
+            exit 1
+          fi
+          mrpack_file="${mrpacks[0]}"
+          changelog_file="$RUNNER_TEMP/modrinth-changelog.txt"
+          printf '' > "$changelog_file"
+
+          loader_flags=()
+          while IFS= read -r loader; do
+            [ -n "$loader" ] && loader_flags+=(--loader "$loader")
+          done <<< "$LOADERS"
+
+          set +e
+          bunx --bun github:brooswit-minecraft/rinth#v0.8.0 publish "$PROJECT_ID" \
+            --file "$mrpack_file" \
+            --version "$VERSION" \
+            --changelog-file "$changelog_file" \
+            --game-version "$MINECRAFT" \
+            "${loader_flags[@]}" \
+            --channel "$CHANNEL" 2>"$RUNNER_TEMP/rinth_publish_stderr.txt"
+          status=$?
+          set -e
+          stderr="$(cat "$RUNNER_TEMP/rinth_publish_stderr.txt")"
+          [ -n "$stderr" ] && echo "$stderr"
+
+          if [ "$status" -eq 0 ]; then
+            echo "outcome=publish_succeeded" >> "$GITHUB_OUTPUT"
+            echo "detail=rinth publish succeeded" >> "$GITHUB_OUTPUT"
+          elif [ "$status" -eq 5 ]; then
+            echo "duplicate=true" >> "$GITHUB_OUTPUT"
+          else
+            {
+              echo "outcome=failed"
+              echo "detail=rinth publish failed (exit $status): ${stderr//$'\n'/ }"
+            } >> "$GITHUB_OUTPUT"
+          fi
+      - name: Verify existing duplicate version's identity
+        if: steps.config.outputs.exit_code == '0' && steps.publish.outputs.duplicate == 'true'
+        id: duplicate
+        env:
+          PROJECT_ID: ${{ vars.MODRINTH_PROJECT_ID }}
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+          VERSION: ${{ needs.check-existing.outputs.version }}
+          SHA: ${{ needs.check-existing.outputs.sha }}
+          PACK_NAME: ${{ steps.targets.outputs.pack_name }}
+        run: |
+          bunx --bun github:brooswit-minecraft/rinth#v0.9.1 versions latest \
+            "$PROJECT_ID" --version-number "$VERSION" --json > "$RUNNER_TEMP/duplicate_version.json"
+          python3 scripts/release_decisions.py resolve-duplicate \
+            --version-json-file "$RUNNER_TEMP/duplicate_version.json" \
+            --expected-version-number "$VERSION" \
+            --expected-sha "$SHA" \
+            --pack-name "$PACK_NAME" \
+            --github-output "$GITHUB_OUTPUT"
+
+  # Section 3 "Read-back": the ONLY job allowed to resolve a run's outcome
+  # to `published`. Runs after either publish path that did NOT already
+  # perform an equivalent confirmed read-back itself (recover-publish's own
+  # duplicate-then-verify fallback already did, so that path skips this
+  # job -- see record-outcome's resolve-outcome call for how both paths
+  # converge on the same commit status either way).
+  verify-publication:
+    needs: [check-existing, release, recover-publish]
+    # `always()`: exactly one of `release`/`recover-publish` is expected to
+    # be SKIPPED on every branch this job cares about (only one of the two
+    # ever runs per Section 3's flow diagram) -- without always() here,
+    # Actions' default "only run if every `needs` job succeeded" rule would
+    # skip this job on that basis alone, before this `if:` is even
+    # evaluated.
+    if: |
+      always() && github.event_name == 'push' && (
+        (needs.check-existing.outputs.branch == 'no_release' && needs.release.result == 'success') ||
+        (needs.check-existing.outputs.branch == 'replay' && needs.recover-publish.outputs.outcome == 'publish_succeeded')
+      )
+    runs-on: ubuntu-latest
+    outputs:
+      outcome: ${{ steps.verify.outputs.outcome }}
+      detail: ${{ steps.verify.outputs.detail }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Resolve pack name
+        id: pack
+        run: echo "name=$(sed -n 's/^name = "\(.*\)"/\1/p' pack.toml)" >> "$GITHUB_OUTPUT"
+      - name: Read back the published Modrinth version
+        id: rinth
+        env:
+          PROJECT_ID: ${{ vars.MODRINTH_PROJECT_ID }}
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+          VERSION: ${{ needs.check-existing.outputs.version }}
+        run: |
+          set +e
+          bunx --bun github:brooswit-minecraft/rinth#v0.9.1 versions latest \
+            "$PROJECT_ID" --version-number "$VERSION" --wait 60 --wait-interval 10 --json \
+            > "$RUNNER_TEMP/verify_version.json" 2>"$RUNNER_TEMP/verify_stderr.txt"
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          set -e
+          cat "$RUNNER_TEMP/verify_stderr.txt" || true
+      - name: Resolve verify-publication outcome
+        id: verify
+        env:
+          RINTH_EXIT_CODE: ${{ steps.rinth.outputs.exit_code }}
+          VERSION: ${{ needs.check-existing.outputs.version }}
+          SHA: ${{ needs.check-existing.outputs.sha }}
+          PACK_NAME: ${{ steps.pack.outputs.name }}
+        run: |
+          python3 scripts/release_decisions.py resolve-verify \
+            --rinth-exit-code "$RINTH_EXIT_CODE" \
+            --version-json-file "$RUNNER_TEMP/verify_version.json" \
+            --expected-version-number "$VERSION" \
+            --expected-sha "$SHA" \
+            --pack-name "$PACK_NAME" \
+            --github-output "$GITHUB_OUTPUT"
+
+  # Section 4: the machine-readable surface. Resolves the run's single
+  # outcome from every upstream job's own output/result and sets the
+  # sickos/release-outcome commit status on the triggering sha. `if:
+  # always()` so this job runs for a held push and for every failure
+  # branch above, not only the happy path -- it is deliberately NOT in
+  # scope for a run dropped entirely by the concurrency group (Section 4's
+  # own "Known gap"), since that run never starts any job at all.
+  record-outcome:
+    needs: [check-hold, check-existing, check-config, release, recover-publish, verify-publication]
+    if: always() && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Resolve outcome
+        id: resolve
+        env:
+          HELD: ${{ needs.check-hold.outputs.held || 'false' }}
+          HELD_REASON: ${{ needs.check-hold.outputs.reason }}
+          EXISTING_BRANCH: ${{ needs.check-existing.outputs.branch }}
+          CONFLICT_DETAIL: ${{ needs.check-existing.outputs.message }}
+          CONFIG_MISSING: ${{ needs.check-config.outputs.missing }}
+          RELEASE_JOB_RESULT: ${{ needs.release.result }}
+          RECOVER_OUTCOME: ${{ needs.recover-publish.outputs.outcome }}
+          RECOVER_DETAIL: ${{ needs.recover-publish.outputs.detail }}
+          VERIFY_OUTCOME: ${{ needs.verify-publication.outputs.outcome }}
+          VERIFY_DETAIL: ${{ needs.verify-publication.outputs.detail }}
+        run: |
+          python3 scripts/release_decisions.py resolve-outcome \
+            --held "$HELD" \
+            --held-reason "$HELD_REASON" \
+            --existing-branch "$EXISTING_BRANCH" \
+            --conflict-detail "$CONFLICT_DETAIL" \
+            --config-missing "$CONFIG_MISSING" \
+            --release-job-result "$RELEASE_JOB_RESULT" \
+            --recover-outcome "$RECOVER_OUTCOME" \
+            --recover-detail "$RECOVER_DETAIL" \
+            --verify-outcome "$VERIFY_OUTCOME" \
+            --verify-detail "$VERIFY_DETAIL" \
+            --github-output "$GITHUB_OUTPUT"
+      - name: Set sickos/release-outcome commit status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+          OUTCOME: ${{ steps.resolve.outputs.outcome }}
+          STATE: ${{ steps.resolve.outputs.state }}
+          DESCRIPTION: ${{ steps.resolve.outputs.description }}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/statuses/${SHA}" \
+            -f state="$STATE" \
+            -f context=sickos/release-outcome \
+            -f description="$DESCRIPTION"
+          echo "Outcome: $OUTCOME ($STATE): $DESCRIPTION" >> "$GITHUB_STEP_SUMMARY"

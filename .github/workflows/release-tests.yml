@@ -1,0 +1,55 @@
+name: Release decision engine tests
+
+# MINECRAFT-57: unit tests for scripts/release_decisions.py (see
+# docs/release-policy.md) and an actionlint pass over release.yml itself,
+# mirroring da-auto-bump-tests.yml's existing precedent for its own
+# workflow/script pair.
+
+on:
+  pull_request:
+    paths:
+      - scripts/release_decisions.py
+      - tests/test_release_decisions.py
+      - .github/workflows/release.yml
+      - .github/workflows/release-tests.yml
+  push:
+    branches: [main]
+    paths:
+      - scripts/release_decisions.py
+      - tests/test_release_decisions.py
+      - .github/workflows/release.yml
+      - .github/workflows/release-tests.yml
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run release decision engine tests
+        run: python -m unittest discover -s tests -p 'test_release_decisions.py'
+
+  actionlint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          # Independent of the Makefile's PACKWIZ_REF toolchain pin below --
+          # actionlint v1.7.12 needs Go >= 1.25, one job, no shared state.
+          go-version: '1.25'
+      - name: Install pinned actionlint
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: Lint release.yml
+        run: "$(go env GOPATH)/bin/actionlint .github/workflows/release.yml"
