@@ -40,6 +40,11 @@ hash = "ebcfe072e96879e32119c250e37ffa1502a88af85d21591b763ec4cfbe2d4425"
 metafile = true
 
 [[files]]
+file = "mods/dynamic-despawn.pw.toml"
+hash = "9fb3353983a2e73c375334816df84a770e76ef015a5a5ffe8f65c2e3be9305f1"
+metafile = true
+
+[[files]]
 file = "mods/dynamic-terrain.pw.toml"
 hash = "e91aafd2fbc6705b2b601e50212e2020f47c08e58af96da4afe13732354d02ca"
 metafile = true
