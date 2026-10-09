@@ -581,23 +581,57 @@ through `bunx`, so nothing needs installing in your repo.
 ### Live server tuning
 
 Repository-owned settings in `server-config.json` are synchronized by
-`.github/workflows/server-tuning.yml` whenever that file changes, or on manual
-dispatch. The workflow reads `level-name` from the hosted `server.properties`, then
-requires exactly one existing Dynamic Atmosphere config: the modern
+`.github/workflows/server-tuning.yml` whenever that file (or the sync script/tests)
+changes, after the "Server update" workflow completes (so a Dynamic Atmosphere
+version bump re-applies automatically — see below), or on manual dispatch. The
+workflow reads `level-name` from the hosted `server.properties`, then requires
+exactly one existing Dynamic Atmosphere config: the modern
 `config/dynamicatmosphere-server.toml` path or the legacy
 `<level-name>/serverconfig/dynamicatmosphere-server.toml` path. It updates only the
-listed fields through strict-host-key SFTP and verifies the atomic upload. It uses the same `SERVER_SFTP_*` repository
-variables and secrets as the SFTP deployment route and shares that route's
-concurrency lock. NeoForge reloads this server config; the tuning workflow does not
-restart Minecraft.
+listed fields through strict-host-key SFTP and verifies the atomic upload. It uses the
+same `SERVER_SFTP_*` repository variables and secrets as the SFTP deployment route
+(`reset-world.yml`) and shares that route's concurrency lock. NeoForge reloads this
+server config; the tuning workflow does not restart Minecraft.
 
-`runtime.simulationSkipChance` applies to every atmospheric material (default
-0.75). `enderGas.portalBlockEmission` sets the integer amount emitted per portal
-block per producer pass (default 100, zero disables it). These join
-`integrations.createFanTransportPerRpm` in the repository-owned tuning file.
-The independent fan pass uses `integrations.createFanIntervalTicks` (100 ticks,
-five seconds) and `integrations.maxFanChunksPerTick` (32). It never uses the
-ordinary simulation skip setting. These values are also synchronized by CI.
+`server-config.json` must define every field in the sync script's `ALLOWED` map
+exactly once — a config missing one, or naming a field outside that map, is refused
+rather than partially applied. The allow-list currently covers:
+
+- `runtime.simulationSkipChance` (default 0.75) — applies to every atmospheric
+  material.
+- `runtime.simulationIntervalTicks` (default 200) and `runtime.producerIntervalTicks`
+  (default 300) — the main simulation/production cadence; lower is faster.
+- `vapor.rainCloudHeight` (default 192) and `heavyGas.dissipationFactor` (default 3) —
+  shared by Void Gas, Ender Gas and Slime's own dissipation.
+- Per-material emission amounts under `enderGas.*`, `voidGas.*`, `dust.*`,
+  `exhaust.*` and `slime.*` (e.g. `enderGas.portalBlockEmission`, default 100, zero
+  disables it).
+- `integrations.createFanTransportPerRpm` (default 1.0), `integrations.createFanIntervalTicks`
+  (100 ticks, five seconds) and `integrations.maxFanChunksPerTick` (32) — the
+  independent Create fan pass; it never uses the ordinary simulation skip setting.
+
+Ranges, types and defaults are taken from Dynamic Atmosphere's own `ModConfigSpec`
+(`DynamicAtmosphereServerConfig.java`) at the version pinned in
+`mods/dynamic-atmosphere.pw.toml` — re-verify against that source, not against this
+list, on a DA bump that changes these fields' bounds.
+
+**Client-side values are out of reach on purpose.** Settings like
+`smokeOpticalDensity` or reach live in `config/dynamicatmosphere-client.toml` on each
+player's own machine, not on the server. A server-side sync structurally cannot
+reach them — that's not a gap in the allow-list, it's a different file on a
+different computer.
+
+**Re-applying after a DA version bump.** DA's rename-aside config versioning
+renames the live toml aside and regenerates it at defaults when its internal
+`configVersion` no longer matches, discarding every key this sync manages. Because
+the sync is chained to run after "Server update" completes (not on a path trigger
+for `mods/dynamic-atmosphere.pw.toml`, which would race ahead of the actual deploy —
+see the comment in `server-tuning.yml`), a DA bump's regeneration gets patched back
+to the repository's tuning on the very next run. The sync already reads the live
+config back before patching; when a field is found sitting at DA's default instead
+of the value this repository last wrote, that's the regeneration signature, and the
+run surfaces it (a `::warning::` and a job-summary section) instead of silently
+re-patching over the evidence.
 
 ## Working on the pack
 

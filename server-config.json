@@ -1,9 +1,47 @@
 {
   "runtime": {
-    "simulationSkipChance": 0.75
+    "simulationSkipChance": 0.75,
+    "simulationIntervalTicks": 200,
+    "producerIntervalTicks": 300
+  },
+  "vapor": {
+    "rainCloudHeight": 192
+  },
+  "heavyGas": {
+    "dissipationFactor": 3.0
   },
   "enderGas": {
-    "portalBlockEmission": 100
+    "portalBlockEmission": 100,
+    "mobEmission": 1,
+    "portalOccupantEmission": 2,
+    "passiveBlockEmission": 1,
+    "pearlUseEmission": 24,
+    "pearlImpactEmission": 48
+  },
+  "voidGas": {
+    "hostileDeathEmission": 40,
+    "netherrackEmission": 2,
+    "bottomEmission": 8
+  },
+  "dust": {
+    "walkEmission": 1,
+    "runEmission": 3,
+    "jumpEmission": 8,
+    "landEmission": 6,
+    "fallDamageBaseEmission": 16,
+    "fallDamageEmissionPerPoint": 2,
+    "maxFallDamageEmission": 64,
+    "blockBreakEmission": 16,
+    "blockPlaceEmission": 12,
+    "fallingBlockEmission": 24
+  },
+  "exhaust": {
+    "passiveEmission": 1,
+    "damageEmissionPerPoint": 4,
+    "maxDamageEmission": 64
+  },
+  "slime": {
+    "undergroundEmission": 8
   },
   "integrations": {
     "createFanTransportPerRpm": 1.0,
