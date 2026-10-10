@@ -175,6 +175,17 @@ class TestReleaseWorkflowRuntimeContract(unittest.TestCase):
         self.assertIn("statuses: write", record)
         self.assertIn('gh api "repos/${GITHUB_REPOSITORY}/statuses/${SHA}"', record)
 
+    def test_verify_existing_is_fixed_to_the_released_source_and_read_only(self):
+        recovery = self.workflow.split("  verify-existing:", 1)[1].split("  # Section 1.", 1)[0]
+        self.assertIn("RECOVERY_VERSION: '0.49.0'", recovery)
+        self.assertIn("RECOVERY_SOURCE_SHA: cdb439e62be83b0a6a3da3c635d990792e559afa", recovery)
+        self.assertIn("RECOVERY_ASSET_SHA256: da8045a2669e78f8372aed353658747cf4fd33b0a11cfa81534f9a8920c99b7e", recovery)
+        self.assertIn("ref: ${{ env.RECOVERY_SOURCE_SHA }}", recovery)
+        self.assertIn("bunx --bun github:brooswit-minecraft/rinth#v0.9.1 versions latest", recovery)
+        self.assertNotIn("rinth#v0.8.0 publish", recovery)
+        self.assertIn("statuses: write", recovery)
+        self.assertIn("statuses/${RECOVERY_SOURCE_SHA}", recovery)
+
     def test_message_names_exact_missing_vars_and_points_at_readme(self):
         message = missing_config_message(["MODRINTH_TOKEN"])
         self.assertIn("MODRINTH_TOKEN", message)
