@@ -90,10 +90,19 @@ jobs:
       RECOVERY_SOURCE_SHA: cdb439e62be83b0a6a3da3c635d990792e559afa
       RECOVERY_ASSET_SHA256: da8045a2669e78f8372aed353658747cf4fd33b0a11cfa81534f9a8920c99b7e
       RECOVERY_ASSET_URL: https://github.com/brooswit-minecraft/sickos/releases/download/v0.49.0/Sickos-0.49.0.mrpack
+      FIXED_WORKFLOW_SHA: ${{ github.workflow_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.RECOVERY_SOURCE_SHA }}
+          path: release-source
+      # Keep the recovery tools separate from the released source.  The
+      # original source predates compare-artifact-sha512; this checkout is
+      # pinned to the exact workflow-file SHA selected for this dispatch.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: workflow-tools
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -103,8 +112,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          source_version="$(sed -n 's/^version = "\(.*\)"/\1/p' pack.toml)"
-          source_pack_name="$(sed -n 's/^name = "\(.*\)"/\1/p' pack.toml)"
+          source_version="$(sed -n 's/^version = "\(.*\)"/\1/p' release-source/pack.toml)"
+          source_pack_name="$(sed -n 's/^name = "\(.*\)"/\1/p' release-source/pack.toml)"
           set +e
           release_json="$(gh release view "v$RECOVERY_VERSION" --json targetCommitish,tagName,assets)"
           release_status=$?
@@ -120,7 +129,7 @@ jobs:
           echo "pack_name=$source_pack_name" >> "$GITHUB_OUTPUT"
           {
             echo "### Verify-existing recovery identity"
-            echo "- Fixed workflow commit: $GITHUB_SHA"
+            echo "- Fixed workflow/tools commit: $FIXED_WORKFLOW_SHA"
             echo "- Original source commit: $RECOVERY_SOURCE_SHA"
             echo "- GitHub Release: v$RECOVERY_VERSION (target: $target_sha)"
             echo "- GitHub artifact: Sickos-0.49.0.mrpack (sha256: $asset_digest)"
@@ -144,7 +153,7 @@ jobs:
           RINTH_EXIT_CODE: ${{ steps.rinth.outputs.exit_code }}
           PACK_NAME: ${{ steps.source.outputs.pack_name }}
         run: |
-          python3 scripts/release_decisions.py resolve-verify \
+          python3 workflow-tools/scripts/release_decisions.py resolve-verify \
             --rinth-exit-code "$RINTH_EXIT_CODE" \
             --version-json-file "$RUNNER_TEMP/verify_existing_version.json" \
             --expected-version-number "$RECOVERY_VERSION" \
@@ -164,7 +173,7 @@ jobs:
             github_sha512="$(sha512sum "$RUNNER_TEMP/recovery_github.mrpack" | awk '{print $1}')"
           fi
           modrinth_sha512="$(jq -r '.files[] | select(.filename == "Sickos-0.49.0.mrpack") | .hashes.sha512 // empty' "$RUNNER_TEMP/verify_existing_version.json" 2>/dev/null || true)"
-          python3 scripts/release_decisions.py compare-artifact-sha512 \
+          python3 workflow-tools/scripts/release_decisions.py compare-artifact-sha512 \
             --expected-sha512 "$github_sha512" \
             --actual-sha512 "$modrinth_sha512" \
             --github-output "$GITHUB_OUTPUT"

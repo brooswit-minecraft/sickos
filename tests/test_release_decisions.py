@@ -1,4 +1,5 @@
 import importlib.util
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -182,6 +183,11 @@ class TestReleaseWorkflowRuntimeContract(unittest.TestCase):
         self.assertIn("RECOVERY_SOURCE_SHA: cdb439e62be83b0a6a3da3c635d990792e559afa", recovery)
         self.assertIn("RECOVERY_ASSET_SHA256: da8045a2669e78f8372aed353658747cf4fd33b0a11cfa81534f9a8920c99b7e", recovery)
         self.assertIn("ref: ${{ env.RECOVERY_SOURCE_SHA }}", recovery)
+        self.assertIn("path: release-source", recovery)
+        self.assertIn("ref: ${{ github.workflow_sha }}", recovery)
+        self.assertIn("path: workflow-tools", recovery)
+        self.assertIn("release-source/pack.toml", recovery)
+        self.assertIn("workflow-tools/scripts/release_decisions.py", recovery)
         self.assertIn("bunx --bun github:brooswit-minecraft/rinth#v0.9.1 versions latest", recovery)
         self.assertNotIn("rinth#v0.8.0 publish", recovery)
         self.assertIn("statuses: write", recovery)
@@ -195,6 +201,28 @@ class TestReleaseWorkflowRuntimeContract(unittest.TestCase):
         status_call = recovery.index('gh api "repos/${GITHUB_REPOSITORY}/statuses/${RECOVERY_SOURCE_SHA}"')
         failure_exit = recovery.index('exit 1')
         self.assertLess(status_call, failure_exit)
+
+    def test_fixed_tools_cli_is_used_after_original_source_boundary(self):
+        """The recovered source predates the new helper, so invoking it from
+        that checkout would fail before status recording.  Exercise the
+        helper from the fixed tools tree and prove the original tree lacks it.
+        """
+        original = subprocess.run(
+            ["git", "show", "cdb439e62be83b0a6a3da3c635d990792e559afa:scripts/release_decisions.py"],
+            cwd=MODULE_PATH.parent.parent,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        self.assertNotIn("compare-artifact-sha512", original)
+        result = subprocess.run(
+            [sys.executable, str(MODULE_PATH), "compare-artifact-sha512",
+             "--expected-sha512", "a" * 128, "--actual-sha512", "a" * 128],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn("identity=match", result.stdout)
 
     def test_message_names_exact_missing_vars_and_points_at_readme(self):
         message = missing_config_message(["MODRINTH_TOKEN"])
