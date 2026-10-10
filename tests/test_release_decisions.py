@@ -157,6 +157,24 @@ class TestModrinthConfig(unittest.TestCase):
         self.assertFalse(result["configured"])
         self.assertEqual(result["missing"], ["MODRINTH_TOKEN", "MODRINTH_PROJECT_ID"])
 
+
+class TestReleaseWorkflowRuntimeContract(unittest.TestCase):
+    """Guard tools and permissions that pure decision tests cannot exercise."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.workflow = (Path(__file__).resolve().parent.parent / ".github/workflows/release.yml").read_text()
+
+    def test_verification_installs_bun_for_rinth_readback(self):
+        verify = self.workflow.split("  verify-publication:", 1)[1].split("  record-outcome:", 1)[0]
+        self.assertIn("- uses: oven-sh/setup-bun@v2", verify)
+        self.assertIn("bunx --bun github:brooswit-minecraft/rinth#v0.9.1 versions latest", verify)
+
+    def test_record_outcome_can_write_commit_status(self):
+        record = self.workflow.split("  record-outcome:", 1)[1]
+        self.assertIn("statuses: write", record)
+        self.assertIn('gh api "repos/${GITHUB_REPOSITORY}/statuses/${SHA}"', record)
+
     def test_message_names_exact_missing_vars_and_points_at_readme(self):
         message = missing_config_message(["MODRINTH_TOKEN"])
         self.assertIn("MODRINTH_TOKEN", message)
