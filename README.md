@@ -3,6 +3,14 @@
 See [CONTRIBUTING.md](CONTRIBUTING.md) for version categories and the automated
 release process. Features advance minor; fixes advance patch.
 
+## Dynamic Skateboards
+
+Sickos 0.49.0 adds Dynamic Skateboards 0.1.0 on both client and server. Craft
+or select a skateboard in the main hand to skate, then use ollies, flips,
+grabs, manuals, geometry-derived grinds, and recover a board after a bail.
+The mod requires Sable, which is already included in the pack. Use the same
+Sickos version on both sides when playing together.
+
 A [Create](https://modrinth.com/mod/create)-focused Minecraft **1.21.1 / NeoForge
 21.1.250** modpack, built from the [schematic](https://github.com/brooswit-minecraft/schematic)
 template below. Pinned mods live under `mods/`; `Rediculous Ore Generation` and
