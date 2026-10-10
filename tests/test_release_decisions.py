@@ -1,4 +1,5 @@
 import importlib.util
+import subprocess
 import sys
 import unittest
 from pathlib import Path
@@ -20,6 +21,7 @@ missing_config_message = release_decisions.missing_config_message
 check_identity = release_decisions.check_identity
 resolve_duplicate_publish = release_decisions.resolve_duplicate_publish
 resolve_verify_publication = release_decisions.resolve_verify_publication
+compare_artifact_sha512 = release_decisions.compare_artifact_sha512
 outcome_to_status = release_decisions.outcome_to_status
 resolve_run_outcome = release_decisions.resolve_run_outcome
 
@@ -175,6 +177,54 @@ class TestReleaseWorkflowRuntimeContract(unittest.TestCase):
         self.assertIn("statuses: write", record)
         self.assertIn('gh api "repos/${GITHUB_REPOSITORY}/statuses/${SHA}"', record)
 
+    def test_verify_existing_is_fixed_to_the_released_source_and_read_only(self):
+        recovery = self.workflow.split("  verify-existing:", 1)[1].split("  # Section 1.", 1)[0]
+        self.assertIn("RECOVERY_VERSION: '0.49.0'", recovery)
+        self.assertIn("RECOVERY_SOURCE_SHA: cdb439e62be83b0a6a3da3c635d990792e559afa", recovery)
+        self.assertIn("RECOVERY_ASSET_SHA256: da8045a2669e78f8372aed353658747cf4fd33b0a11cfa81534f9a8920c99b7e", recovery)
+        self.assertIn("ref: ${{ env.RECOVERY_SOURCE_SHA }}", recovery)
+        self.assertIn("path: release-source", recovery)
+        self.assertIn("ref: ${{ github.workflow_sha }}", recovery)
+        self.assertIn("path: workflow-tools", recovery)
+        self.assertIn("release-source/pack.toml", recovery)
+        self.assertIn("workflow-tools/scripts/release_decisions.py", recovery)
+        self.assertIn('gh release view "v$RECOVERY_VERSION" --repo "$GITHUB_REPOSITORY"', recovery)
+        self.assertIn("bunx --bun github:brooswit-minecraft/rinth#v0.9.1 versions latest", recovery)
+        self.assertNotIn("rinth#v0.8.0 publish", recovery)
+        self.assertIn("statuses: write", recovery)
+        self.assertIn("statuses/${RECOVERY_SOURCE_SHA}", recovery)
+        self.assertIn("compare-artifact-sha512", recovery)
+        self.assertIn("sha512sum", recovery)
+        self.assertIn('exit 1', recovery)
+
+    def test_verify_existing_records_failure_before_exiting_nonzero(self):
+        recovery = self.workflow.split("  verify-existing:", 1)[1].split("  # Section 1.", 1)[0]
+        status_call = recovery.index('gh api "repos/${GITHUB_REPOSITORY}/statuses/${RECOVERY_SOURCE_SHA}"')
+        failure_exit = recovery.index('exit 1')
+        self.assertLess(status_call, failure_exit)
+
+    def test_fixed_tools_cli_is_used_after_original_source_boundary(self):
+        """The recovered source predates the new helper, so invoking it from
+        that checkout would fail before status recording.  Exercise the
+        helper from the fixed tools tree and prove the original tree lacks it.
+        """
+        original = subprocess.run(
+            ["git", "show", "cdb439e62be83b0a6a3da3c635d990792e559afa:scripts/release_decisions.py"],
+            cwd=MODULE_PATH.parent.parent,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        self.assertNotIn("compare-artifact-sha512", original)
+        result = subprocess.run(
+            [sys.executable, str(MODULE_PATH), "compare-artifact-sha512",
+             "--expected-sha512", "a" * 128, "--actual-sha512", "a" * 128],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertIn("identity=match", result.stdout)
+
     def test_message_names_exact_missing_vars_and_points_at_readme(self):
         message = missing_config_message(["MODRINTH_TOKEN"])
         self.assertIn("MODRINTH_TOKEN", message)
@@ -186,6 +236,20 @@ class TestReleaseWorkflowRuntimeContract(unittest.TestCase):
         self.assertIn("MODRINTH_TOKEN", message)
         self.assertIn("MODRINTH_PROJECT_ID", message)
         self.assertIn("README.md#secrets--variables", message)
+
+
+class TestRecoveryArtifactEquality(unittest.TestCase):
+    def test_matching_sha512_is_accepted(self):
+        result = compare_artifact_sha512("a" * 128, "A" * 128)
+        self.assertTrue(result["ok"])
+
+    def test_mismatched_sha512_fails_closed(self):
+        result = compare_artifact_sha512("a" * 128, "b" * 128)
+        self.assertFalse(result["ok"])
+
+    def test_missing_sha512_fails_closed(self):
+        result = compare_artifact_sha512("a" * 128, "")
+        self.assertFalse(result["ok"])
 
 
 class TestMissingConfigResolvesToFailedNeverSkipped(unittest.TestCase):

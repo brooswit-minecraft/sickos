@@ -238,6 +238,23 @@ def check_identity(
     }
 
 
+def compare_artifact_sha512(expected_sha512: str, actual_sha512: str) -> dict:
+    """Return a read-only artifact-equality result for recovery verification.
+
+    Both values come from immutable artifacts: the expected value is computed
+    from the downloaded GitHub Release file, and the actual value is returned
+    by Modrinth for its attached file.  Empty values fail closed so a download
+    or API-read error cannot be mistaken for a matching artifact.
+    """
+    expected = expected_sha512.strip().lower()
+    actual = actual_sha512.strip().lower()
+    if not expected or not actual:
+        return {"ok": False, "detail": "artifact SHA-512 unavailable"}
+    if expected != actual:
+        return {"ok": False, "detail": "artifact SHA-512 mismatch"}
+    return {"ok": True, "detail": "artifact SHA-512 match"}
+
+
 # --------------------------------------------------------------------------
 # Section 2.2 step 3: recover-publish's duplicate-then-verify fallback.
 # --------------------------------------------------------------------------
@@ -457,6 +474,11 @@ def main(argv=None):
     verify_p.add_argument("--pack-name", required=True)
     verify_p.add_argument("--github-output", default=None)
 
+    artifact_p = sub.add_parser("compare-artifact-sha512")
+    artifact_p.add_argument("--expected-sha512", default="")
+    artifact_p.add_argument("--actual-sha512", default="")
+    artifact_p.add_argument("--github-output", default=None)
+
     outcome_p = sub.add_parser("resolve-outcome")
     outcome_p.add_argument("--held", choices=["true", "false"], required=True)
     outcome_p.add_argument("--held-reason", default="")
@@ -542,6 +564,14 @@ def main(argv=None):
             pack_name=args.pack_name,
         )
         _write_outputs(args.github_output, {"outcome": result["outcome"], "detail": result["detail"]})
+        return 0
+
+    if args.command == "compare-artifact-sha512":
+        result = compare_artifact_sha512(args.expected_sha512, args.actual_sha512)
+        _write_outputs(args.github_output, {
+            "identity": "match" if result["ok"] else "mismatch",
+            "detail": result["detail"],
+        })
         return 0
 
     if args.command == "resolve-outcome":

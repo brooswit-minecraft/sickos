@@ -31,6 +31,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          # The recovery-boundary test reads the immutable v0.49.0 source
+          # tree by SHA to prove that its older helper is never invoked.
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
