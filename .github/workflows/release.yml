@@ -380,6 +380,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      # `rinth` is invoked through bunx below; this job does not inherit the
+      # tool installed by the reusable release job that published the pack.
+      - uses: oven-sh/setup-bun@v2
       - name: Resolve pack name
         id: pack
         run: echo "name=$(sed -n 's/^name = "\(.*\)"/\1/p' pack.toml)" >> "$GITHUB_OUTPUT"
@@ -424,6 +427,9 @@ jobs:
     needs: [check-hold, check-existing, check-config, release, recover-publish, verify-publication]
     if: always() && github.event_name == 'push'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
