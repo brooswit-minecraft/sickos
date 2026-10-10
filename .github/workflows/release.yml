@@ -115,7 +115,7 @@ jobs:
           source_version="$(sed -n 's/^version = "\(.*\)"/\1/p' release-source/pack.toml)"
           source_pack_name="$(sed -n 's/^name = "\(.*\)"/\1/p' release-source/pack.toml)"
           set +e
-          release_json="$(gh release view "v$RECOVERY_VERSION" --json targetCommitish,tagName,assets)"
+          release_json="$(gh release view "v$RECOVERY_VERSION" --repo "$GITHUB_REPOSITORY" --json targetCommitish,tagName,assets)"
           release_status=$?
           set -e
           target_sha="$(jq -r '.targetCommitish // empty' <<<"$release_json")"

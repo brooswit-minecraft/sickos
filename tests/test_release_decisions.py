@@ -188,6 +188,7 @@ class TestReleaseWorkflowRuntimeContract(unittest.TestCase):
         self.assertIn("path: workflow-tools", recovery)
         self.assertIn("release-source/pack.toml", recovery)
         self.assertIn("workflow-tools/scripts/release_decisions.py", recovery)
+        self.assertIn('gh release view "v$RECOVERY_VERSION" --repo "$GITHUB_REPOSITORY"', recovery)
         self.assertIn("bunx --bun github:brooswit-minecraft/rinth#v0.9.1 versions latest", recovery)
         self.assertNotIn("rinth#v0.8.0 publish", recovery)
         self.assertIn("statuses: write", recovery)
