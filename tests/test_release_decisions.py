@@ -20,6 +20,7 @@ missing_config_message = release_decisions.missing_config_message
 check_identity = release_decisions.check_identity
 resolve_duplicate_publish = release_decisions.resolve_duplicate_publish
 resolve_verify_publication = release_decisions.resolve_verify_publication
+compare_artifact_sha512 = release_decisions.compare_artifact_sha512
 outcome_to_status = release_decisions.outcome_to_status
 resolve_run_outcome = release_decisions.resolve_run_outcome
 
@@ -185,6 +186,15 @@ class TestReleaseWorkflowRuntimeContract(unittest.TestCase):
         self.assertNotIn("rinth#v0.8.0 publish", recovery)
         self.assertIn("statuses: write", recovery)
         self.assertIn("statuses/${RECOVERY_SOURCE_SHA}", recovery)
+        self.assertIn("compare-artifact-sha512", recovery)
+        self.assertIn("sha512sum", recovery)
+        self.assertIn('exit 1', recovery)
+
+    def test_verify_existing_records_failure_before_exiting_nonzero(self):
+        recovery = self.workflow.split("  verify-existing:", 1)[1].split("  # Section 1.", 1)[0]
+        status_call = recovery.index('gh api "repos/${GITHUB_REPOSITORY}/statuses/${RECOVERY_SOURCE_SHA}"')
+        failure_exit = recovery.index('exit 1')
+        self.assertLess(status_call, failure_exit)
 
     def test_message_names_exact_missing_vars_and_points_at_readme(self):
         message = missing_config_message(["MODRINTH_TOKEN"])
@@ -197,6 +207,20 @@ class TestReleaseWorkflowRuntimeContract(unittest.TestCase):
         self.assertIn("MODRINTH_TOKEN", message)
         self.assertIn("MODRINTH_PROJECT_ID", message)
         self.assertIn("README.md#secrets--variables", message)
+
+
+class TestRecoveryArtifactEquality(unittest.TestCase):
+    def test_matching_sha512_is_accepted(self):
+        result = compare_artifact_sha512("a" * 128, "A" * 128)
+        self.assertTrue(result["ok"])
+
+    def test_mismatched_sha512_fails_closed(self):
+        result = compare_artifact_sha512("a" * 128, "b" * 128)
+        self.assertFalse(result["ok"])
+
+    def test_missing_sha512_fails_closed(self):
+        result = compare_artifact_sha512("a" * 128, "")
+        self.assertFalse(result["ok"])
 
 
 class TestMissingConfigResolvesToFailedNeverSkipped(unittest.TestCase):

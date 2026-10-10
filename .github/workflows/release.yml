@@ -89,6 +89,7 @@ jobs:
       RECOVERY_VERSION: '0.49.0'
       RECOVERY_SOURCE_SHA: cdb439e62be83b0a6a3da3c635d990792e559afa
       RECOVERY_ASSET_SHA256: da8045a2669e78f8372aed353658747cf4fd33b0a11cfa81534f9a8920c99b7e
+      RECOVERY_ASSET_URL: https://github.com/brooswit-minecraft/sickos/releases/download/v0.49.0/Sickos-0.49.0.mrpack
     steps:
       - uses: actions/checkout@v4
         with:
@@ -104,10 +105,13 @@ jobs:
         run: |
           source_version="$(sed -n 's/^version = "\(.*\)"/\1/p' pack.toml)"
           source_pack_name="$(sed -n 's/^name = "\(.*\)"/\1/p' pack.toml)"
+          set +e
           release_json="$(gh release view "v$RECOVERY_VERSION" --json targetCommitish,tagName,assets)"
-          target_sha="$(jq -r '.targetCommitish' <<<"$release_json")"
+          release_status=$?
+          set -e
+          target_sha="$(jq -r '.targetCommitish // empty' <<<"$release_json")"
           asset_digest="$(jq -r '.assets[] | select(.name == "Sickos-0.49.0.mrpack") | .digest' <<<"$release_json")"
-          if [ "$source_version" = "$RECOVERY_VERSION" ] && [ "$target_sha" = "$RECOVERY_SOURCE_SHA" ] && [ "$asset_digest" = "sha256:$RECOVERY_ASSET_SHA256" ]; then
+          if [ "$release_status" -eq 0 ] && [ "$source_version" = "$RECOVERY_VERSION" ] && [ "$target_sha" = "$RECOVERY_SOURCE_SHA" ] && [ "$asset_digest" = "sha256:$RECOVERY_ASSET_SHA256" ]; then
             echo "identity=match" >> "$GITHUB_OUTPUT"
           else
             echo "identity=mismatch" >> "$GITHUB_OUTPUT"
@@ -147,25 +151,51 @@ jobs:
             --expected-sha "$RECOVERY_SOURCE_SHA" \
             --pack-name "$PACK_NAME" \
             --github-output "$GITHUB_OUTPUT"
+      - name: Compare GitHub and Modrinth pack artifacts
+        id: artifact
+        run: |
+          set +e
+          curl --fail --location --silent --show-error "$RECOVERY_ASSET_URL" \
+            --output "$RUNNER_TEMP/recovery_github.mrpack"
+          download_status=$?
+          set -e
+          github_sha512=""
+          if [ "$download_status" -eq 0 ]; then
+            github_sha512="$(sha512sum "$RUNNER_TEMP/recovery_github.mrpack" | awk '{print $1}')"
+          fi
+          modrinth_sha512="$(jq -r '.files[] | select(.filename == "Sickos-0.49.0.mrpack") | .hashes.sha512 // empty' "$RUNNER_TEMP/verify_existing_version.json" 2>/dev/null || true)"
+          python3 scripts/release_decisions.py compare-artifact-sha512 \
+            --expected-sha512 "$github_sha512" \
+            --actual-sha512 "$modrinth_sha512" \
+            --github-output "$GITHUB_OUTPUT"
+          {
+            echo "- Downloaded GitHub artifact SHA-512: ${github_sha512:-unavailable}"
+            echo "- Modrinth artifact SHA-512: ${modrinth_sha512:-unavailable}"
+          } >> "$GITHUB_STEP_SUMMARY"
       - name: Resolve and record recovery outcome
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_IDENTITY: ${{ steps.source.outputs.identity }}
           VERIFY_OUTCOME: ${{ steps.verify.outputs.outcome }}
           VERIFY_DETAIL: ${{ steps.verify.outputs.detail }}
+          ARTIFACT_IDENTITY: ${{ steps.artifact.outputs.identity }}
+          ARTIFACT_DETAIL: ${{ steps.artifact.outputs.detail }}
         run: |
-          if [ "$SOURCE_IDENTITY" = match ] && [ "$VERIFY_OUTCOME" = published ]; then
+          if [ "$SOURCE_IDENTITY" = match ] && [ "$VERIFY_OUTCOME" = published ] && [ "$ARTIFACT_IDENTITY" = match ]; then
             state=success
-            description="PUBLISHED: $VERIFY_DETAIL"
+            description="PUBLISHED: $VERIFY_DETAIL; $ARTIFACT_DETAIL"
           else
             state=failure
-            description="FAILED: source identity=$SOURCE_IDENTITY; $VERIFY_DETAIL"
+            description="FAILED: source=$SOURCE_IDENTITY; read-back=$VERIFY_OUTCOME; artifact=$ARTIFACT_IDENTITY"
           fi
           gh api "repos/${GITHUB_REPOSITORY}/statuses/${RECOVERY_SOURCE_SHA}" \
             -f state="$state" \
             -f context=sickos/release-outcome \
             -f description="$description"
           echo "Outcome: $state: $description" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$state" = failure ]; then
+            exit 1
+          fi
 
   # Section 1. Only meaningful on push -- a human publishing a release
   # directly, or an explicit workflow_dispatch dry run, has already made
