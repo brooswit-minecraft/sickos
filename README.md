@@ -5,7 +5,7 @@ release process. Features advance minor; fixes advance patch.
 
 ## Dynamic Skateboards
 
-Sickos 0.49.0 adds Dynamic Skateboards 0.1.0 on both client and server. Craft
+Sickos 0.50.0 adds Dynamic Skateboards 0.3.0 on both client and server. Craft
 or select a skateboard in the main hand to skate, then use ollies, flips,
 grabs, manuals, geometry-derived grinds, and recover a board after a bail.
 The mod requires Sable, which is already included in the pack. Use the same
