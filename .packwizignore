@@ -9,6 +9,7 @@ Makefile
 .github/
 .modrinth/
 docs/
+changelog.d/
 scripts/
 tests/
 server-config.json

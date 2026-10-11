@@ -3,6 +3,14 @@
 See [CONTRIBUTING.md](CONTRIBUTING.md) for version categories and the automated
 release process. Features advance minor; fixes advance patch.
 
+## Dynamic Skateboards
+
+Sickos 0.50.0 adds Dynamic Skateboards 0.3.0 on both client and server. Craft
+or select a skateboard in the main hand to skate, then use ollies, flips,
+grabs, manuals, geometry-derived grinds, and recover a board after a bail.
+The mod requires Sable, which is already included in the pack. Use the same
+Sickos version on both sides when playing together.
+
 A [Create](https://modrinth.com/mod/create)-focused Minecraft **1.21.1 / NeoForge
 21.1.250** modpack, built from the [schematic](https://github.com/brooswit-minecraft/schematic)
 template below. Pinned mods live under `mods/`; `Rediculous Ore Generation` and
@@ -24,6 +32,18 @@ their steps, so the border between old and new terrain can show a step). Erosion
 (creative, Tools & Utilities) that reports tire slip to Dynamic Terrain. Adding either is
 compatible with existing worlds; removing them later would delete the placed blocks and cars.
 The client and the server must run the same Sickos version.
+
+## Passable Foliage
+
+Sickos adds [Passable Foliage](https://modrinth.com/mod/passable-foliage)
+9.3.2+neoforge and its required [Kiwi](https://modrinth.com/mod/kiwi) library
+15.8.7+neoforge on both client and server. Passable Foliage removes collision from
+leaf blocks and reduces fall damage when landing in leaves, so vehicles and players
+can pass through tree canopies. Short grass and tall grass already have no solid
+collision and are not changed by this pack integration. The mod controls additional
+passable blocks with its block tag; Sickos adds no tag or configuration override, so
+other foliage keeps its upstream/default behavior. Follow-on vehicle-resistance work
+must therefore treat leaves as passable rather than as a collision obstacle.
 
 ## Dynamic Atmosphere
 
