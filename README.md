@@ -33,6 +33,18 @@ their steps, so the border between old and new terrain can show a step). Erosion
 compatible with existing worlds; removing them later would delete the placed blocks and cars.
 The client and the server must run the same Sickos version.
 
+## Passable Foliage
+
+Sickos adds [Passable Foliage](https://modrinth.com/mod/passable-foliage)
+9.3.2+neoforge and its required [Kiwi](https://modrinth.com/mod/kiwi) library
+15.8.7+neoforge on both client and server. Passable Foliage removes collision from
+leaf blocks and reduces fall damage when landing in leaves, so vehicles and players
+can pass through tree canopies. Short grass and tall grass already have no solid
+collision and are not changed by this pack integration. The mod controls additional
+passable blocks with its block tag; Sickos adds no tag or configuration override, so
+other foliage keeps its upstream/default behavior. Follow-on vehicle-resistance work
+must therefore treat leaves as passable rather than as a collision obstacle.
+
 ## Dynamic Atmosphere
 
 **Sickos 0.23.0 is a breaking update. Back up your world before upgrading.**
