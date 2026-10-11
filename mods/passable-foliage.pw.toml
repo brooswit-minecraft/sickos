@@ -1,0 +1,13 @@
+name = "Passable Foliage"
+filename = "PassableFoliage-1.21.1-NeoForge-9.3.2.jar"
+side = "both"
+
+[download]
+url = "https://cdn.modrinth.com/data/uaLW6JVR/versions/YU7X3l1D/PassableFoliage-1.21.1-NeoForge-9.3.2.jar"
+hash-format = "sha512"
+hash = "9eeeaf01d18dd8861b4f8bb4af810b15c51b5682f022ba39566cf0da6b6881c7020ef598037d4325c6fc82e810a98a76ec578a9e5bb47695f7d353f42eb42b28"
+
+[update]
+[update.modrinth]
+mod-id = "uaLW6JVR"
+version = "YU7X3l1D"

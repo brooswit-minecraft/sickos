@@ -65,6 +65,11 @@ hash = "e53646f88aeb6bd54c38db50da972abdac91e83c145a8f974107b0ca103b15bc"
 metafile = true
 
 [[files]]
+file = "mods/kiwi.pw.toml"
+hash = "547d5668cd5858a1c243a4ff6efaa23e48e4a60c8336fd144c29036cedb0f730"
+metafile = true
+
+[[files]]
 file = "mods/lithostitched.pw.toml"
 hash = "0e1046e1bb16b42706ba58700f294787dc8fe643518bc5fb26eeaea8e96fd320"
 metafile = true
@@ -87,6 +92,11 @@ metafile = true
 [[files]]
 file = "mods/pams-harvestcraft-2-trees.pw.toml"
 hash = "697e5d429406179e06f02a1f4fe9e337df56adf36cee6c35e9f08b6bcd0cade6"
+metafile = true
+
+[[files]]
+file = "mods/passable-foliage.pw.toml"
+hash = "2b0a5d562d3b5e7390f24c78d362973c62200dbaa3377d5f4d0b368691f3e626"
 metafile = true
 
 [[files]]
