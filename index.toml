@@ -45,13 +45,18 @@ hash = "9fb3353983a2e73c375334816df84a770e76ef015a5a5ffe8f65c2e3be9305f1"
 metafile = true
 
 [[files]]
+file = "mods/dynamic-skateboards.pw.toml"
+hash = "ae1875260bc0b7a6089a9f80edf4bc693bc9bc7c58ded273ff5f8ae69cc5f788"
+metafile = true
+
+[[files]]
 file = "mods/dynamic-terrain.pw.toml"
 hash = "4619d960b7cc85927a117ad0af309f72986f95afef9d9691fe82eb4894632550"
 metafile = true
 
 [[files]]
 file = "mods/dynamic-vehicles.pw.toml"
-hash = "91e57bed12cf20b9a921b70fa91c3276851aee5581982dc4d10fc1c7351327af"
+hash = "7ea240013e0f8bc92a8c9b02c0e04451ad9a4fd1eeef00a58df38f63ecc3f81b"
 metafile = true
 
 [[files]]
