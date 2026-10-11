@@ -1,13 +1,13 @@
 name = "Dynamic Skateboards"
-filename = "dynamicskateboards-0.1.0.jar"
+filename = "dynamicskateboards-0.3.0.jar"
 side = "both"
 
 [download]
-url = "https://github.com/brooswit-minecraft/dynamic-skateboards/releases/download/v0.1.0/dynamicskateboards-0.1.0.jar"
-hash-format = "sha512"
-hash = "770d41dd297da28f7900d72ec84d1a3c325a175a5cb72de570e122fa91eca3351247dd307afb138235c7aa6fca8aae1f43e666d4927ae2efbc81f276ed7175be"
+url = "https://github.com/brooswit-minecraft/dynamic-skateboards/releases/download/v0.3.0/dynamicskateboards-0.3.0.jar"
+hash-format = "sha256"
+hash = "1ff05eb63b20935d13dbd6c7c3f80cbaa8cb0060e0c12d6989797c6d4fbe834f"
 
 [update]
 [update.modrinth]
 mod-id = "n0hFQ5AT"
-version = "PymaAr6d"
+version = "yWvoWum6"
