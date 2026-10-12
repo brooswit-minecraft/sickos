@@ -41,7 +41,7 @@ metafile = true
 
 [[files]]
 file = "mods/dynamic-despawn.pw.toml"
-hash = "9fb3353983a2e73c375334816df84a770e76ef015a5a5ffe8f65c2e3be9305f1"
+hash = "07c49cde20a9bb8f4cff30c4dc33157e6edf4ef7fef6d43662f8799bc96879a7"
 metafile = true
 
 [[files]]
