@@ -120,6 +120,11 @@ hash = "522ea92e4206f8d0b823e444fea75d8c6897261863b17c7c5bf16e26195a7cdb"
 metafile = true
 
 [[files]]
+file = "mods/ribbits.pw.toml"
+hash = "c981bdb8a2e70584ca6d97aa2f9c504078f3e72bdb50491bdcfb9e51735c8d1d"
+metafile = true
+
+[[files]]
 file = "mods/sable.pw.toml"
 hash = "a1fa121ed5d0207e4cdd3f545d043f68f9a4bb38dcb21278b968fad5e4cefe4a"
 metafile = true
