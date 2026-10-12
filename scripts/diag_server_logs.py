@@ -88,7 +88,7 @@ def deployment_state(sftp, root):
             if not stat.S_ISREG(attrs.st_mode):
                 unsafe.append(name)
                 continue
-            digest = hashlib.sha256()
+            digest = hashlib.sha512()
             with sftp.open(path, "rb") as handle:
                 while True:
                     chunk = handle.read(1024 * 1024)
