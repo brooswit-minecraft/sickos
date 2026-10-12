@@ -1,0 +1,12 @@
+name = "Create: Pillager Arise"
+filename = "create_pillagers_arise NeoForge 1.21.1-132.36.jar"
+side = "both"
+
+[download]
+url = "https://cdn.modrinth.com/data/VT2rW2wr/versions/dSpuz2DS/create_pillagers_arise%20NeoForge%201.21.1-132.36.jar"
+hash-format = "sha512"
+hash = "81405f806b400c11b6052e35212923935f5e1052c8b0068f33794ea754c6b50ff658c8ec99b8eab7bd26c517b5f8572c07c8429e6391fc01066ea065c7adbee8"
+
+[update.modrinth]
+mod-id = "VT2rW2wr"
+version = "dSpuz2DS"

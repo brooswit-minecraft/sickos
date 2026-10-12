@@ -25,6 +25,46 @@ hash = "456f66abd180b3f5765473cda5e8acb1a6ea8b15b7ee34442be9a7af414cfc63"
 metafile = true
 
 [[files]]
+file = "mods/create-dynamic-village.pw.toml"
+hash = "410f0e4f5dafb2a084877f265ff7d1006504c0ded5040e0f9c50b0408a2665d8"
+metafile = true
+
+[[files]]
+file = "mods/create-easy-structures.pw.toml"
+hash = "65f9adde07c242d952ce9ec6aa0d32d628e09c971cc1a92193823ed67e683cb7"
+metafile = true
+
+[[files]]
+file = "mods/create-let-the-adventure-begin.pw.toml"
+hash = "7f4ef560e949dca99ce211c94c164489bc29e6f9b58258d396c482525aa5c060"
+metafile = true
+
+[[files]]
+file = "mods/create-new-beginnings.pw.toml"
+hash = "d4e5ca09e5acf8fb57f08d127b5d3e1780e71009b0d822decfd95074b74d7d93"
+metafile = true
+
+[[files]]
+file = "mods/create-pillager-arise.pw.toml"
+hash = "00a522e3de492f414ae5d3b01d097c351cffe92dd4e0e1dbca23dc33d1f30eb2"
+metafile = true
+
+[[files]]
+file = "mods/create-rustic-structures.pw.toml"
+hash = "c6043872921c596a501b30aa79dfebc2a01fb67bc635f20d74a86b97c9b915a6"
+metafile = true
+
+[[files]]
+file = "mods/create-structures-arise.pw.toml"
+hash = "ca7d77449b0b766b1d2d2da3d5d2fabe9e4370c4ae47c02f8dfb738ea69244bd"
+metafile = true
+
+[[files]]
+file = "mods/create-structures-overhaul.pw.toml"
+hash = "a4a17696786d0c90632342a38bd13ba8c481b639ef02a9d9d6bf11a125441156"
+metafile = true
+
+[[files]]
 file = "mods/create.pw.toml"
 hash = "dcaf5f2e28db0b9a127d0167456832341045ddc9aec058c3d9fcf53f618d2404"
 metafile = true
@@ -37,6 +77,11 @@ metafile = true
 [[files]]
 file = "mods/distant-horizons.pw.toml"
 hash = "6d37de7b436e094a7834d51b5d9d803653ab445e1041853f32a61599b054c7bf"
+metafile = true
+
+[[files]]
+file = "mods/dungeon-crawl.pw.toml"
+hash = "e29678252778b572900668972b8816fc0c0a358ece905450af757efbd185e574"
 metafile = true
 
 [[files]]
@@ -70,8 +115,48 @@ hash = "848ba3d5c40903b190d9fc2f92d7369a76e73cf8881b882787d28e7bde3ac637"
 metafile = true
 
 [[files]]
+file = "mods/geckolib.pw.toml"
+hash = "b78e88ef67215f2e63a2c0dd8f59e89f135ae1140cee4d32bb4cecf6797d7bbd"
+metafile = true
+
+[[files]]
+file = "mods/geophilic.pw.toml"
+hash = "adccc47ece9e8983d3e108cd6b9ca12846b065805cc47e720dd9bf069d2890ea"
+metafile = true
+
+[[files]]
 file = "mods/glitchcore.pw.toml"
 hash = "e53646f88aeb6bd54c38db50da972abdac91e83c145a8f974107b0ca103b15bc"
+metafile = true
+
+[[files]]
+file = "mods/ice-and-fire-community-edition.pw.toml"
+hash = "7b5976c0e60f468d671a20048cd2d1672372aad0ef1cd0f5cfed641b31df42c5"
+metafile = true
+
+[[files]]
+file = "mods/idas.pw.toml"
+hash = "8a96fa65d0445933cb03c0d1f8cc9201b8a94739086758e8d938aa2f413b6fe3"
+metafile = true
+
+[[files]]
+file = "mods/integrated-api.pw.toml"
+hash = "64f779c58673f22948d52433e8be52862d6f0b041ce39c22cbf9b6fd91005056"
+metafile = true
+
+[[files]]
+file = "mods/integrated-stronghold.pw.toml"
+hash = "c3ad24289d242ee18d4a744af6ede8e5d5c4aafdf63df40f02162fdbb4e42b2e"
+metafile = true
+
+[[files]]
+file = "mods/integrated-villages.pw.toml"
+hash = "bf1cc126514a90a91c30d35367bc64c48c475af853352b71643ac839ea4f8c1e"
+metafile = true
+
+[[files]]
+file = "mods/jupiter.pw.toml"
+hash = "9d9ceeedc92ca5f84aa2ea0c360b2e66eb4a7a4e57628aecb49329d525c34a52"
 metafile = true
 
 [[files]]
@@ -82,6 +167,16 @@ metafile = true
 [[files]]
 file = "mods/lithostitched.pw.toml"
 hash = "0e1046e1bb16b42706ba58700f294787dc8fe643518bc5fb26eeaea8e96fd320"
+metafile = true
+
+[[files]]
+file = "mods/moonlight-lib.pw.toml"
+hash = "dfde7780899fcb40b3d2664efd5490b59156e4ccccd78d455c10747abc472f78"
+metafile = true
+
+[[files]]
+file = "mods/naturalist.pw.toml"
+hash = "b9d94d2d3baeaebaa59cb758b49189081daa1d2561fdff229a480bd39d2830be"
 metafile = true
 
 [[files]]
@@ -115,6 +210,16 @@ hash = "522ea92e4206f8d0b823e444fea75d8c6897261863b17c7c5bf16e26195a7cdb"
 metafile = true
 
 [[files]]
+file = "mods/project-vibrant-journeys.pw.toml"
+hash = "b8e9184aaffe57e8d15c6852e1902db8fc6ae1da99da05a4dced958f42e40f8c"
+metafile = true
+
+[[files]]
+file = "mods/quark.pw.toml"
+hash = "64cc803a23fcea1f55c5068baf50bf5c98e3fe9c2d79ecb7d5a367d7b0f1b374"
+metafile = true
+
+[[files]]
 file = "mods/sable.pw.toml"
 hash = "a1fa121ed5d0207e4cdd3f545d043f68f9a4bb38dcb21278b968fad5e4cefe4a"
 metafile = true
@@ -125,8 +230,18 @@ hash = "73b1e4f6608fcd396acc3e4e7aa753d314c8810ef4caf831ed93d9932d93f896"
 metafile = true
 
 [[files]]
+file = "mods/supplementaries.pw.toml"
+hash = "01675deeac45d32b33102c1e96f5856121fc4ef687d6cee03118d3e5688d1d42"
+metafile = true
+
+[[files]]
 file = "mods/tectonic.pw.toml"
 hash = "fef2f8085bbdf6d398b02c87225ad9ccf9cc5d71edde13cd18e12a154764c84e"
+metafile = true
+
+[[files]]
+file = "mods/uranus.pw.toml"
+hash = "4746aed5b6d0a1b45a3c988e18af1a665c7cc3688d2b4f863d85826009c6ff4f"
 metafile = true
 
 [[files]]
@@ -137,4 +252,9 @@ metafile = true
 [[files]]
 file = "mods/xaeros-world-map.pw.toml"
 hash = "f4bc20e3483a7a935b9ee674227aad73d24ecc4ea93e6c2d99955927a2197b20"
+metafile = true
+
+[[files]]
+file = "mods/zeta.pw.toml"
+hash = "a544cdd001d5197d4414e6c38735b540a69e00da4376576521dffa25b435d32a"
 metafile = true
