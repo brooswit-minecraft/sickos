@@ -17,3 +17,19 @@ jobs:
   # out of range. Pinned to its own tag (not @v1) until v1 is reviewed forward.
   dependency-check:
     uses: brooswit-minecraft/schematic/.github/workflows/reusable-dependency-check.yml@dep-check-v1.0.0
+
+  runtime-compatibility:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Build and materialize the reviewed NeoForge runtime
+        run: |
+          make tools
+          make verify-runtime

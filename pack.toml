@@ -1,6 +1,6 @@
 name = "Sickos"
 author = "brooswit"
-version = "0.53.0"
+version = "0.53.1"
 pack-format = "packwiz:1.1.0"
 
 [index]
@@ -10,4 +10,4 @@ hash = "3d43c293673d1955bfea676c8a6293e11863a7a468b938847a16527b0129c4a4"
 
 [versions]
 minecraft = "1.21.1"
-neoforge = "21.1.250"
+neoforge = "21.1.252"
