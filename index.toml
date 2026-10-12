@@ -138,3 +138,63 @@ metafile = true
 file = "mods/xaeros-world-map.pw.toml"
 hash = "f4bc20e3483a7a935b9ee674227aad73d24ecc4ea93e6c2d99955927a2197b20"
 metafile = true
+
+[[files]]
+file = "mods/yungs-api.pw.toml"
+hash = "2915e970e2937e5f4cb903a368f4d97ff1231cd9abe0bf43d8a587deacab15a1"
+metafile = true
+
+[[files]]
+file = "mods/yungs-better-caves.pw.toml"
+hash = "be195d278c3182ef781abc74d320286692ba6c49d33c06d18ad4af1e87376dcf"
+metafile = true
+
+[[files]]
+file = "mods/yungs-better-desert-temples.pw.toml"
+hash = "ac3c105ee89c0638fc17a483de47325bbd31409a7edcb0f5b47dbd388a94dde9"
+metafile = true
+
+[[files]]
+file = "mods/yungs-better-dungeons.pw.toml"
+hash = "9cb35c73db6d20bfb14ccfcfed9fffe19d7d8a1ebba075b0c5f77bef33ba25f8"
+metafile = true
+
+[[files]]
+file = "mods/yungs-better-end-island.pw.toml"
+hash = "7f4023e0dd4578dd9ac1622e9d6dd09895ad43e656360ff97c312693eedf2571"
+metafile = true
+
+[[files]]
+file = "mods/yungs-better-jungle-temples.pw.toml"
+hash = "42869561284f3917fa0b2c60afd45957b86a8bff36e57e7db6e4484d7ae8ba6b"
+metafile = true
+
+[[files]]
+file = "mods/yungs-better-mineshafts.pw.toml"
+hash = "0be940eb12063c129b4904126b9717d026382c212350c9e6151dd0986a5f673a"
+metafile = true
+
+[[files]]
+file = "mods/yungs-better-nether-fortresses.pw.toml"
+hash = "8b6f08f03e1f26b0e34a17a8128f45728abcc1c967f0c40af9527c1692821785"
+metafile = true
+
+[[files]]
+file = "mods/yungs-better-ocean-monuments.pw.toml"
+hash = "540670157fea72d0228aa9fcbe9c54cab25deedb90c9540d9bd8863d37263d84"
+metafile = true
+
+[[files]]
+file = "mods/yungs-better-witch-huts.pw.toml"
+hash = "9983b8082cb1b93f2141022989c61ecac7297910fff3a9caf577028ada35c469"
+metafile = true
+
+[[files]]
+file = "mods/yungs-cave-biomes.pw.toml"
+hash = "c75e612573884b1c05aa9c41e24d68fb6c7056865cb69f9dcca00bf0129775f0"
+metafile = true
+
+[[files]]
+file = "mods/yungs-extras.pw.toml"
+hash = "0f0a320a51c2f1939abc47f5c12772922b6e4273ad9dab743b91d1c29d5a91be"
+metafile = true
