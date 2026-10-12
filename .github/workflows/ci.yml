@@ -10,10 +10,82 @@ permissions:
 
 jobs:
   build:
-    uses: brooswit-minecraft/schematic/.github/workflows/reusable-ci.yml@v1
-    secrets: inherit
+    name: Validate and build pack
+    runs-on: ubuntu-latest
+    env:
+      # Existing ephemeral Actions token, used only to read the approved
+      # private Loader release into the ignored build-time override.
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+      - name: Install pinned packwiz
+        run: make tools
+      - name: Verify index is up to date
+        run: make check
+      - name: Build and verify .mrpack
+        run: make build
+      - name: Resolve artifact name
+        id: pack
+        run: |
+          echo "name=$(sed -n 's/^name = \"\(.*\)\"/\1/p' pack.toml)" >> "$GITHUB_OUTPUT"
+          echo "version=$(sed -n 's/^version = \"\(.*\)\"/\1/p' pack.toml)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.pack.outputs.name }}-${{ steps.pack.outputs.version }}-mrpack
+          path: build/*.mrpack
+          if-no-files-found: error
 
   # MINECRAFT-38: fail when a pinned mod's required dependency is missing or
-  # out of range. Pinned to its own tag (not @v1) until v1 is reviewed forward.
+  # out of range. The Loader is an mrpack override rather than a public Packwiz
+  # download, so the existing checker receives it through an ephemeral local
+  # manifest after the approved materialization step.
   dependency-check:
-    uses: brooswit-minecraft/schematic/.github/workflows/reusable-dependency-check.yml@dep-check-v1.0.0
+    name: Check required mod dependencies
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: brooswit-minecraft/schematic
+          ref: v1
+          path: .schematic-tools
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Check dependency closure including bundled Loader override
+        run: |
+          set -euo pipefail
+          make materialize-magicavoxel-loader
+          workdir="$(mktemp -d)"
+          server_pid=
+          cleanup() {
+            rm -rf "$workdir"
+            [ -z "$server_pid" ] || kill "$server_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          mkdir "$workdir/mods" "$workdir/assets"
+          cp mods/*.pw.toml "$workdir/mods/"
+          cp mods/magicavoxel-loader-0.1.2.jar "$workdir/assets/"
+          cat > "$workdir/mods/magicavoxel-loader-ci.pw.toml" <<'EOF'
+          name = "MagicVoxel Loader"
+          filename = "magicavoxel-loader-0.1.2.jar"
+          side = "both"
+
+          [download]
+          url = "http://127.0.0.1:8765/magicavoxel-loader-0.1.2.jar"
+          hash-format = "sha512"
+          hash = "e8f6203fdd200b331afe349eb2042d41b7c0615e72ebf7348218b8490ab36dd6a294ee7f1be12b71ab15944cfe150a4f4ff4061fd2209aac3398cafe3a3b26de"
+          EOF
+          python3 -m http.server 8765 --bind 127.0.0.1 \
+            --directory "$workdir/assets" >/tmp/magicavoxel-loader-http.log 2>&1 &
+          server_pid=$!
+          python .schematic-tools/scripts/dependency_check.py \
+            --mods-dir "$workdir/mods" --pack pack.toml

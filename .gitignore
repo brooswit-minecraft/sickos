@@ -7,6 +7,10 @@ build/
 .packwiz-cache/
 bin/
 
+# Private, release-time-only mrpack override.  It is verified and materialized
+# by `make materialize-magicavoxel-loader`; never commit its bytes.
+mods/magicavoxel-loader-0.1.2.jar
+
 # Python bytecode cache
 __pycache__/
 
