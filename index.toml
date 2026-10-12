@@ -140,11 +140,6 @@ hash = "1c1b88dcf9174dd7fa98ec6ec737880bd60da90ec91fedadef4d0eb20a38db36"
 metafile = true
 
 [[files]]
-file = "mods/dynamic-whips.pw.toml"
-hash = "519559c0d6f7f6f24f76894c8ab8515b9d1d975f3078e307d889625134fa8cb4"
-metafile = true
-
-[[files]]
 file = "mods/flowing-fluids.pw.toml"
 hash = "848ba3d5c40903b190d9fc2f92d7369a76e73cf8881b882787d28e7bde3ac637"
 metafile = true
