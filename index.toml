@@ -140,11 +140,6 @@ hash = "3d3fe8cd45dc883b430f95843ea05a73172808f8f0e0df24439992c85bc80b43"
 metafile = true
 
 [[files]]
-file = "mods/dynamic-whips.pw.toml"
-hash = "519559c0d6f7f6f24f76894c8ab8515b9d1d975f3078e307d889625134fa8cb4"
-metafile = true
-
-[[files]]
 file = "mods/flowing-fluids.pw.toml"
 hash = "848ba3d5c40903b190d9fc2f92d7369a76e73cf8881b882787d28e7bde3ac637"
 metafile = true
@@ -203,10 +198,6 @@ metafile = true
 file = "mods/lithostitched.pw.toml"
 hash = "0e1046e1bb16b42706ba58700f294787dc8fe643518bc5fb26eeaea8e96fd320"
 metafile = true
-
-[[files]]
-file = "mods/magicavoxel-loader-0.1.2.jar"
-hash = "65c2026c00bd4a799c0acbf1d90c1ad4d69233510a2399a37d052fddf0c48578"
 
 [[files]]
 file = "mods/moogs-structure-lib.pw.toml"
