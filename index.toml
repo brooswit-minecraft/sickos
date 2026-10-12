@@ -5,6 +5,16 @@ file = "config/defaultoptions/servers.dat"
 hash = "cbe1f6166b49efb1493edef5b1d356bc879c9da61abddc6f3ef9932a6d2dee6f"
 
 [[files]]
+file = "mods/alexs-caves.pw.toml"
+hash = "42dceca205acd93598b35932a55b734937ef3196a83da57c3bb1837691c1f604"
+metafile = true
+
+[[files]]
+file = "mods/alexs-mobs.pw.toml"
+hash = "f6e46ab1be0af181e83a23b71b86c1eac0c962d05570ac43fd0a6e45fd081cf9"
+metafile = true
+
+[[files]]
 file = "mods/architectury-api.pw.toml"
 hash = "187eafde5974beee1263538b462b7b8fe2fc8948c5d413980d9796d55928580b"
 metafile = true
@@ -12,6 +22,16 @@ metafile = true
 [[files]]
 file = "mods/balm.pw.toml"
 hash = "2aa745e51506af80a6a2bb7dcfc4e27fc2c2323b35dbfa9e52eb290acd1ff7b4"
+metafile = true
+
+[[files]]
+file = "mods/biomes-o-plenty.pw.toml"
+hash = "e7e6e3692549d61a36baf08793c6dbeef954546797e0e0980f0e3535a29beab4"
+metafile = true
+
+[[files]]
+file = "mods/citadel.pw.toml"
+hash = "c3f6787722664fdfe26e70949caa4e440243f56f78d0a18392a11e0609ad0d7b"
 metafile = true
 
 [[files]]
@@ -30,6 +50,11 @@ hash = "dcaf5f2e28db0b9a127d0167456832341045ddc9aec058c3d9fcf53f618d2404"
 metafile = true
 
 [[files]]
+file = "mods/cristel-lib.pw.toml"
+hash = "287bae0926e684bc4b034a00ebe075f059cc1a614ec794f8daf5337aabe49e82"
+metafile = true
+
+[[files]]
 file = "mods/default-options.pw.toml"
 hash = "a6967d761dde867ccc1af53dc9f4e530eb9917a9cb21d0fc15708e8cd2c0f2ba"
 metafile = true
@@ -37,6 +62,11 @@ metafile = true
 [[files]]
 file = "mods/distant-horizons.pw.toml"
 hash = "6d37de7b436e094a7834d51b5d9d803653ab445e1041853f32a61599b054c7bf"
+metafile = true
+
+[[files]]
+file = "mods/dungeons-and-taverns.pw.toml"
+hash = "a58bd65a0389246c1b6b0e92bda9b6d0eb654b7a5705e59561d04c1ad85acc98"
 metafile = true
 
 [[files]]
@@ -100,6 +130,11 @@ hash = "d9601ecb4ed443820139bb8db3cd0a1501d8afb4b1513e2525bdfe593d6d0f59"
 metafile = true
 
 [[files]]
+file = "mods/natures-spirit.pw.toml"
+hash = "99b94d93f19037913371083299d61767d3ecd1d69c18ab9d2c2cd1b7c586ca24"
+metafile = true
+
+[[files]]
 file = "mods/pams-harvestcraft-2-crops.pw.toml"
 hash = "4db7cd1ac4109ca4ba41936d4ae83d22a8f1157a731faeb527f5e78b003d27c0"
 metafile = true
@@ -130,6 +165,11 @@ hash = "522ea92e4206f8d0b823e444fea75d8c6897261863b17c7c5bf16e26195a7cdb"
 metafile = true
 
 [[files]]
+file = "mods/regions-unexplored.pw.toml"
+hash = "432cfa1b334b8cb8c90511792b80b20ba048e7acf4199eb1511aacabc5d26dc2"
+metafile = true
+
+[[files]]
 file = "mods/ribbits.pw.toml"
 hash = "c981bdb8a2e70584ca6d97aa2f9c504078f3e72bdb50491bdcfb9e51735c8d1d"
 metafile = true
@@ -145,6 +185,11 @@ hash = "73b1e4f6608fcd396acc3e4e7aa753d314c8810ef4caf831ed93d9932d93f896"
 metafile = true
 
 [[files]]
+file = "mods/structory.pw.toml"
+hash = "3426d015c8bfd8f5158a84e8ccf1a0feb029ee80b70e065419ff587ca974ce7d"
+metafile = true
+
+[[files]]
 file = "mods/tectonic.pw.toml"
 hash = "fef2f8085bbdf6d398b02c87225ad9ccf9cc5d71edde13cd18e12a154764c84e"
 metafile = true
@@ -152,6 +197,21 @@ metafile = true
 [[files]]
 file = "mods/terrablender.pw.toml"
 hash = "ea92bf49f90f889f2a8120a923fb6d1873ef4cfee0ff3c2e8f762b27631cdf96"
+metafile = true
+
+[[files]]
+file = "mods/towns-and-towers.pw.toml"
+hash = "32abe759c74e6450b6a81349a736449419a921f2674a5745728231c32765901f"
+metafile = true
+
+[[files]]
+file = "mods/valhelsia-core.pw.toml"
+hash = "7b7bf20599278715cfacc6a3af7d0d49651f57efa7123df1174aba1fbc540c3e"
+metafile = true
+
+[[files]]
+file = "mods/valhelsia-structures.pw.toml"
+hash = "c3b253887921cf814d1b0c871923adda5c2ea179fcbf86982660f609adcd5916"
 metafile = true
 
 [[files]]
