@@ -35,13 +35,18 @@ hash = "a6967d761dde867ccc1af53dc9f4e530eb9917a9cb21d0fc15708e8cd2c0f2ba"
 metafile = true
 
 [[files]]
+file = "mods/distant-horizons.pw.toml"
+hash = "6d37de7b436e094a7834d51b5d9d803653ab445e1041853f32a61599b054c7bf"
+metafile = true
+
+[[files]]
 file = "mods/dynamic-atmosphere.pw.toml"
 hash = "ebcfe072e96879e32119c250e37ffa1502a88af85d21591b763ec4cfbe2d4425"
 metafile = true
 
 [[files]]
 file = "mods/dynamic-despawn.pw.toml"
-hash = "9fb3353983a2e73c375334816df84a770e76ef015a5a5ffe8f65c2e3be9305f1"
+hash = "07c49cde20a9bb8f4cff30c4dc33157e6edf4ef7fef6d43662f8799bc96879a7"
 metafile = true
 
 [[files]]
@@ -56,7 +61,7 @@ metafile = true
 
 [[files]]
 file = "mods/dynamic-vehicles.pw.toml"
-hash = "7ea240013e0f8bc92a8c9b02c0e04451ad9a4fd1eeef00a58df38f63ecc3f81b"
+hash = "1c1b88dcf9174dd7fa98ec6ec737880bd60da90ec91fedadef4d0eb20a38db36"
 metafile = true
 
 [[files]]
