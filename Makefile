@@ -15,7 +15,7 @@ MRPACK       := $(BUILD_DIR)/$(PACK_NAME)-$(PACK_VERSION).mrpack
 # Prefer a packwiz already on PATH; otherwise use the one `make tools` installs.
 PACKWIZ ?= $(shell command -v packwiz 2>/dev/null || echo $(CURDIR)/bin/packwiz)
 
-.PHONY: all build refresh check tools clean
+.PHONY: all build refresh check verify-runtime tools clean
 
 all: build
 
@@ -36,6 +36,11 @@ check: refresh
 		exit 1; \
 	fi
 	@echo "OK: index is up to date."
+
+## verify-runtime: prove the exported mrpack and a materialized server use the
+## same NeoForge version accepted by Quark's own metadata.
+verify-runtime: build
+	python3 scripts/verify-neoforge-runtime.py --mrpack $(MRPACK)
 
 ## build: export the pack to build/$(PACK_NAME)-$(PACK_VERSION).mrpack.
 build: refresh
