@@ -37,8 +37,8 @@ def listing(sftp, path):
     return [f"{a.filename}  {a.st_size} bytes  mtime={a.st_mtime}" for a in entries]
 
 
-def deployment_state(sftp, root):
-    """Read only deployment metadata and hashes; never print file contents."""
+def deployment_state(sftp, root, recover=False):
+    """Verify deployment state; optionally preserve one explicitly approved stale marker."""
     import hashlib
     import json
     import stat
@@ -107,7 +107,37 @@ def deployment_state(sftp, root):
     print("managed_missing", json.dumps(missing))
     print("unsafe_paths_skipped", json.dumps(unsafe))
     mods = sftp.listdir_attr(f"{root}/mods")
-    print("untracked_mods", json.dumps(sorted("mods/" + a.filename for a in mods if "mods/" + a.filename not in files)))
+    untracked = sorted("mods/" + a.filename for a in mods if "mods/" + a.filename not in files)
+    print("untracked_mods", json.dumps(untracked))
+    if recover:
+        expected_marker = b"/.schematic-stage-295069d938ce4abdaa5267e53ce9a6a6"
+        if marker is None:
+            print("marker_recovery", "already absent; no mutation")
+            return
+        if root != "" or marker != expected_marker or manifest.get("version") != "0.50.0" or len(files) != 21:
+            raise ValueError("Recovery scope differs from approved diagnostic")
+        if matched != 21 or mismatches or missing or unsafe or untracked:
+            raise ValueError("Recovery refused: managed state differs")
+        try:
+            sftp.lstat(expected_marker.decode())
+        except FileNotFoundError:
+            pass
+        else:
+            raise ValueError("Recovery refused: staging path exists")
+        if metadata(".schematic-deploy-pending") != expected_marker or metadata(".schematic-deploy.json") != raw:
+            raise ValueError("Recovery refused: metadata changed during verification")
+        backup = "/.schematic-deploy-pending.backup-20261012-0_50_0"
+        try:
+            sftp.lstat(backup)
+        except FileNotFoundError:
+            pass
+        else:
+            raise ValueError("Recovery backup already exists; refusing overwrite")
+        sftp.rename("/.schematic-deploy-pending", backup)
+        if metadata(backup.lstrip("/")) != expected_marker:
+            raise ValueError("Recovery backup verification failed")
+        print("marker_recovery", "preserved exact marker at " + backup)
+
 
 
 def main():
@@ -124,7 +154,7 @@ def main():
                            allow_agent=False, look_for_keys=False, timeout=30, auth_timeout=30, banner_timeout=30)
             with client.open_sftp() as sftp:
                 sftp.get_channel().settimeout(60)
-                deployment_state(sftp, root)
+                deployment_state(sftp, root, recover=env.get("RECOVER_APPROVED_STALE_MARKER") == "true")
                 for name in ("", "logs", "crash-reports", "mods"):
                     print(f"\n=== listing {root}/{name} ===")
                     print("\n".join(clean(l) for l in listing(sftp, f"{root}/{name}".rstrip("/") or "/")))
