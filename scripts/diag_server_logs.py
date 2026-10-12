@@ -37,6 +37,79 @@ def listing(sftp, path):
     return [f"{a.filename}  {a.st_size} bytes  mtime={a.st_mtime}" for a in entries]
 
 
+def deployment_state(sftp, root):
+    """Read only deployment metadata and hashes; never print file contents."""
+    import hashlib
+    import json
+    import stat
+    from pathlib import PurePosixPath
+
+    def metadata(name):
+        path = f"{root}/{name}"
+        try:
+            attrs = sftp.lstat(path)
+        except FileNotFoundError:
+            return None
+        if not stat.S_ISREG(attrs.st_mode) or attrs.st_size > 1000000:
+            raise ValueError("Unsafe or oversized deployment metadata")
+        with sftp.open(path, "rb") as handle:
+            return handle.read(1000001)
+
+    marker = metadata(".schematic-deploy-pending")
+    print("\n=== deployment state (read-only) ===")
+    print("pending_marker_present", marker is not None)
+    if marker is not None:
+        stage = marker.decode("utf-8").strip()
+        if not re.fullmatch(re.escape(root) + r"/\.schematic-stage-[0-9a-f]{32}", stage):
+            print("stage_reference", "invalid; not followed")
+        else:
+            print("stage_reference", stage)
+            try:
+                print("stage_entries", json.dumps(sorted(sftp.listdir(stage))))
+            except FileNotFoundError:
+                print("stage_present", False)
+    raw = metadata(".schematic-deploy.json")
+    if raw is None:
+        print("managed_manifest_present", False)
+        return
+    manifest = json.loads(raw)
+    files = manifest.get("files", {})
+    print("manifest_version", manifest.get("version"))
+    print("managed_files", len(files))
+    matched, mismatches, missing, unsafe = 0, [], [], []
+    for name, expected in sorted(files.items()):
+        parts = PurePosixPath(name).parts
+        if not parts or name.startswith("/") or any(p in (".", "..") or p.startswith(".") for p in parts) or "\\" in name:
+            unsafe.append(name)
+            continue
+        path = f"{root}/{name}"
+        try:
+            attrs = sftp.lstat(path)
+            if not stat.S_ISREG(attrs.st_mode):
+                unsafe.append(name)
+                continue
+            digest = hashlib.sha256()
+            with sftp.open(path, "rb") as handle:
+                while True:
+                    chunk = handle.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    digest.update(chunk)
+            actual = digest.hexdigest()
+            if actual == expected:
+                matched += 1
+            else:
+                mismatches.append({"path": name, "expected": expected, "actual": actual})
+        except FileNotFoundError:
+            missing.append(name)
+    print("managed_hash_matches", matched)
+    print("managed_hash_mismatches", json.dumps(mismatches))
+    print("managed_missing", json.dumps(missing))
+    print("unsafe_paths_skipped", json.dumps(unsafe))
+    mods = sftp.listdir_attr(f"{root}/mods")
+    print("untracked_mods", json.dumps(sorted("mods/" + a.filename for a in mods if "mods/" + a.filename not in files)))
+
+
 def main():
     env = os.environ
     root = env["SERVER_SFTP_PATH"].rstrip("/")
@@ -51,6 +124,7 @@ def main():
                            allow_agent=False, look_for_keys=False, timeout=30, auth_timeout=30, banner_timeout=30)
             with client.open_sftp() as sftp:
                 sftp.get_channel().settimeout(60)
+                deployment_state(sftp, root)
                 for name in ("", "logs", "crash-reports", "mods"):
                     print(f"\n=== listing {root}/{name} ===")
                     print("\n".join(clean(l) for l in listing(sftp, f"{root}/{name}".rstrip("/") or "/")))
