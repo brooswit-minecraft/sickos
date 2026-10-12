@@ -1,0 +1,12 @@
+name = "Integrated Stronghold"
+filename = "integrated_stronghold-1.1.4+1.21.1-neoforge.jar"
+side = "both"
+
+[download]
+url = "https://cdn.modrinth.com/data/KUJdfPQz/versions/GkHH2Wqj/integrated_stronghold-1.1.4%2B1.21.1-neoforge.jar"
+hash-format = "sha512"
+hash = "e6101af3cf1eb58232ad30a9f9b936ebe728cbef681653b298edad696952d008e9a8ade03a23a9b6dab3d15e8903430aebca1b0eafa7c13d9da060e1952c6e64"
+
+[update.modrinth]
+mod-id = "KUJdfPQz"
+version = "GkHH2Wqj"
