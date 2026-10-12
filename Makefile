@@ -12,9 +12,6 @@ PACK_VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' pack.toml)
 BUILD_DIR    := build
 MRPACK       := $(BUILD_DIR)/$(PACK_NAME)-$(PACK_VERSION).mrpack
 
-# Private, approved runtime dependency. Its JAR is materialized only for a
-# build, checked against its immutable digest, and exported as an override.
-
 # Prefer a packwiz already on PATH; otherwise use the one `make tools` installs.
 PACKWIZ ?= $(shell command -v packwiz 2>/dev/null || echo $(CURDIR)/bin/packwiz)
 
