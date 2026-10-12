@@ -7,6 +7,9 @@ build/
 .packwiz-cache/
 bin/
 
+# Private MagicVoxel Loader build-time override; never commit its bytes.
+mods/magicavoxel-loader-*.jar
+
 # Python bytecode cache
 __pycache__/
 
