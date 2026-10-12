@@ -1,8 +1,8 @@
 name = "Dynamic Vehicles"
-filename = "dynamicvehicles-0.43.0.jar"
+filename = "dynamicvehicles-0.45.1.jar"
 side = "both"
 
 [download]
-url = "https://github.com/brooswit-minecraft/dynamic-vehicles/releases/download/v0.43.0/dynamicvehicles-0.43.0.jar"
+url = "https://github.com/brooswit-minecraft/dynamic-vehicles/releases/download/v0.45.1/dynamicvehicles-0.45.1.jar"
 hash-format = "sha512"
-hash = "ad8588b0965e18d3fdeaa98434c7d5f0f30bc172776749f6364b026e539ca79544cd8f05649c1e9bac9382440c19d49ef55aa07a26e4e033d6807d96d5ae654d"
+hash = "7839a39a2d4abcbaec5186eb44115a67f11a0998008e268f729ee232a0a280f02d0bae0647bbaeed953fb19404567eaf186afcad937dc6bda647cc726e79680d"

@@ -121,7 +121,7 @@ metafile = true
 
 [[files]]
 file = "mods/dynamic-despawn.pw.toml"
-hash = "07c49cde20a9bb8f4cff30c4dc33157e6edf4ef7fef6d43662f8799bc96879a7"
+hash = "e50f5ce21c45ac01fb286d719e86222bd818c637fbcb540022369522aadd6d28"
 metafile = true
 
 [[files]]
@@ -136,7 +136,7 @@ metafile = true
 
 [[files]]
 file = "mods/dynamic-vehicles.pw.toml"
-hash = "1c1b88dcf9174dd7fa98ec6ec737880bd60da90ec91fedadef4d0eb20a38db36"
+hash = "3d3fe8cd45dc883b430f95843ea05a73172808f8f0e0df24439992c85bc80b43"
 metafile = true
 
 [[files]]

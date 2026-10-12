@@ -7,6 +7,7 @@ build/
 .packwiz-cache/
 bin/
 
+
 # Python bytecode cache
 __pycache__/
 
