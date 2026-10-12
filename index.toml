@@ -70,6 +70,11 @@ hash = "848ba3d5c40903b190d9fc2f92d7369a76e73cf8881b882787d28e7bde3ac637"
 metafile = true
 
 [[files]]
+file = "mods/geckolib.pw.toml"
+hash = "2454839eb798acae733636a2237057995ccdd414bd2c4add0aeb77b78c3b76e1"
+metafile = true
+
+[[files]]
 file = "mods/glitchcore.pw.toml"
 hash = "e53646f88aeb6bd54c38db50da972abdac91e83c145a8f974107b0ca103b15bc"
 metafile = true
@@ -127,6 +132,11 @@ metafile = true
 [[files]]
 file = "mods/tectonic.pw.toml"
 hash = "fef2f8085bbdf6d398b02c87225ad9ccf9cc5d71edde13cd18e12a154764c84e"
+metafile = true
+
+[[files]]
+file = "mods/terrablender.pw.toml"
+hash = "ea92bf49f90f889f2a8120a923fb6d1873ef4cfee0ff3c2e8f762b27631cdf96"
 metafile = true
 
 [[files]]
