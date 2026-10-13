@@ -52,6 +52,6 @@ jobs:
     with:
       version: ${{ inputs.version }}
       allow-stopped: true
-      # TEMPORARY, same reason: take the deploy scripts from the pinned commit, not the v1 tag.
-      tools-ref: ee37f3182c012eca78558e4429b1f75d1028399a
+      # Pin the tested SFTP verification fix; the workflow pin above supports tools-ref.
+      tools-ref: 13e633fcca27d2659b4393d5d84a0c389181b446
     secrets: inherit
