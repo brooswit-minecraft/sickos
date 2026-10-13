@@ -41,3 +41,9 @@ jobs:
           SERVER_RCON_PORT: ${{ vars.SERVER_RCON_PORT }}
           SERVER_RCON_PASSWORD: ${{ secrets.SERVER_RCON_PASSWORD }}
         run: python scripts/verify_server_054.py
+      - name: Publish version and readiness evidence for the local updater
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-compatibility-0.54.0
+          path: ${{ runner.temp }}/server-compatibility-0.54.0.json
+          if-no-files-found: error

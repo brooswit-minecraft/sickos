@@ -1,9 +1,12 @@
 """Read-only release, runtime-log, and active-world verification."""
 import importlib.util
+from datetime import datetime, timezone
 import json
 import os
+from pathlib import Path
 import re
 import stat
+import tomllib
 
 spec = importlib.util.spec_from_file_location("deploy", ".schematic-tools/scripts/server_deploy.py")
 d = importlib.util.module_from_spec(spec)
@@ -20,7 +23,14 @@ try:
         selected = [p for p in manifest["files"] if re.search(r"/(?:dynamicwhips|magicavoxel-loader)[^/]*\.jar$", p)]
         assert any("dynamicwhips-0.7.0.jar" in p for p in selected)
         assert any("magicavoxel-loader-0.1.3.jar" in p for p in selected)
+        expected = {}
+        for pin in ("dynamic-whips", "magicavoxel-loader"):
+            with open("mods/" + pin + ".pw.toml", "rb") as source:
+                metadata = tomllib.load(source)
+            assert metadata["download"]["hash-format"] == "sha512"
+            expected["mods/" + metadata["filename"]] = metadata["download"]["hash"]
         for path in selected:
+            assert manifest["files"][path] == expected[path]
             assert d.remote_hash(sftp, root + "/" + path) == manifest["files"][path]
             print("verified_mod:", json.dumps(path), flush=True)
         level = d.read_level_name(sftp, root)
@@ -46,6 +56,20 @@ try:
                 print("runtime_evidence:", d.tail_lines(line, 1)[0], flush=True)
     d.wait_until_ready(os.environ)
     print("rcon_readiness: success", flush=True)
+    report = {
+        "schema": 1,
+        "repository": "brooswit-minecraft/sickos",
+        "pack_version": "0.54.0",
+        "deployment_run_id": 38434871857,
+        "verification_run_id": os.environ.get("GITHUB_RUN_ID"),
+        "verified_at": datetime.now(timezone.utc).isoformat(),
+        "pending_marker": False,
+        "verified_mod_sha512": expected,
+        "rcon_ready": True,
+        "startup_done_in_current_log": "Done (" in log,
+        "world_reset": False,
+    }
+    (Path(os.environ["RUNNER_TEMP"]) / "server-compatibility-0.54.0.json").write_text(json.dumps(report, indent=2) + "\n")
 except Exception as error:
     print("Verification failed:", type(error).__name__, flush=True)
     raise SystemExit(1)
