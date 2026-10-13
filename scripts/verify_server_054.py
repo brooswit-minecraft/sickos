@@ -17,9 +17,9 @@ try:
         assert manifest.get("version") == "0.54.0"
         assert not d.attributes(sftp, root + "/" + d.PENDING)
         print("pending_marker: absent", flush=True)
-        selected = [p for p in manifest["files"] if re.search(r"/dynamic(?:whips|loader)[^/]*\.jar$", p)]
+        selected = [p for p in manifest["files"] if re.search(r"/(?:dynamicwhips|magicavoxel-loader)[^/]*\.jar$", p)]
         assert any("dynamicwhips-0.7.0.jar" in p for p in selected)
-        assert any("dynamicloader-0.1.3.jar" in p for p in selected)
+        assert any("magicavoxel-loader-0.1.3.jar" in p for p in selected)
         for path in selected:
             assert d.remote_hash(sftp, root + "/" + path) == manifest["files"][path]
             print("verified_mod:", json.dumps(path), flush=True)
@@ -42,7 +42,7 @@ try:
             source.prefetch(size, max_concurrent_requests=32)
             log = source.read().decode("utf-8", "replace")
         for line in log.splitlines():
-            if re.search(r"dynamicwhips.*0\.7\.0|dynamicloader.*0\.1\.3|Done \(|Preparing level", line, re.I):
+            if re.search(r"dynamicwhips.*0\.7\.0|magicavoxel.*0\.1\.3|Done \(|Preparing level", line, re.I):
                 print("runtime_evidence:", d.tail_lines(line, 1)[0], flush=True)
     d.wait_until_ready(os.environ)
     print("rcon_readiness: success", flush=True)
