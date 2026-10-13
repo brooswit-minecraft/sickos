@@ -39,8 +39,14 @@ try:
             target = root + "/" + path
             if not d.regular(sftp, target):
                 missing.append(path)
-            elif d.remote_hash(sftp, target) != digest:
-                changed.append(path)
+            else:
+                with sftp.open(target, "rb") as source:
+                    size = source.stat().st_size
+                    if size > d.MAX_FILE:
+                        raise ValueError("File exceeds verification limit")
+                    source.prefetch(size, max_concurrent_requests=32)
+                    if d.file_hash(source) != digest:
+                        changed.append(path)
         print("changed_managed_files:", json.dumps(changed), flush=True)
         print("missing_managed_files:", json.dumps(missing), flush=True)
 except Exception as error:
