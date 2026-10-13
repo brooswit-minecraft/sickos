@@ -1,57 +1,43 @@
 name: Server update
-
-# After a release publishes a version to Modrinth, re-points a
-# Modrinth-hosted server's upstream at that version and restarts it. Skips
-# cleanly (and the run still succeeds) when MODRINTH_SERVER_ID /
-# MODRINTH_TOKEN are not configured — see the reusable-server-update.yml
-# workflow this stub calls, upstream in brooswit-minecraft/schematic.
-#
-# Chained on the "Release" workflow's completion (workflow_run) rather than
-# on `release: published` directly, so this only starts once release.yml has
-# actually finished publishing to Modrinth — no race with the upstream
-# reusable-release.yml workflow.
-# `workflows: ["Release"]` matches release.yml's `name: Release` (its display
-# name), NOT its filename — renaming that `name:` field would silently break
-# this chain. NOTE: a workflow_run trigger only arms once this file is on the
-# repo's default branch; it will not fire from a PR branch (see README) — an
-# existing consumer's stub can keep the older `release: published` trigger
-# indefinitely instead (see the migration note in README), it is not required
-# to switch.
-#
-# This still needs a guard beyond "the Release run succeeded": release.yml
-# also runs on workflow_dispatch for dry runs that deliberately create no
-# GitHub Release (see README), and those must NOT trigger a server update.
-# The `if:` below requires BOTH a successful conclusion AND that the Release
-# run's own trigger was `release`, which excludes dry runs. It also has to
-# admit this workflow's OWN workflow_dispatch (the manual re-point path) —
-# `github.event.workflow_run.*` is unset there, so the guard is an explicit
-# OR rather than a single combined condition.
 on:
-  workflow_run:
-    workflows: ["Release"]
-    types: [completed]
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to announce (defaults to the pack.toml version)'
         required: false
         type: string
-
 permissions:
   contents: read
-
 jobs:
-  server-update:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' &&
-       (github.event.workflow_run.event == 'release' || github.event.workflow_run.event == 'push'))
-    # TEMPORARY: pinned to a schematic commit (branch MINECRAFT-54-tools-ref, NOT on main) that adds
-    # `allow-stopped` and `tools-ref`, until the moving `v1` tag is approved to move. Switch back to @v1 then.
-    uses: brooswit-minecraft/schematic/.github/workflows/reusable-server-update.yml@ee37f3182c012eca78558e4429b1f75d1028399a
-    with:
-      version: ${{ inputs.version }}
-      allow-stopped: true
-      # Pin the tested SFTP verification fix; the workflow pin above supports tools-ref.
-      tools-ref: 13e633fcca27d2659b4393d5d84a0c389181b446
-    secrets: inherit
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: schematic-sftp-${{ github.repository }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: brooswit-minecraft/schematic
+          ref: 13e633fcca27d2659b4393d5d84a0c389181b446
+          path: .schematic-tools
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install 'paramiko==4.0.0'
+      - name: Verify deployed mods, runtime readiness, and active world
+        env:
+          SERVER_SFTP_HOST: ${{ vars.SERVER_SFTP_HOST }}
+          SERVER_SFTP_PORT: ${{ vars.SERVER_SFTP_PORT }}
+          SERVER_SFTP_PATH: ${{ vars.SERVER_SFTP_PATH }}
+          SERVER_SFTP_USERNAME: ${{ secrets.SERVER_SFTP_USERNAME }}
+          SERVER_SFTP_PASSWORD: ${{ secrets.SERVER_SFTP_PASSWORD }}
+          SERVER_SFTP_PRIVATE_KEY: ${{ secrets.SERVER_SFTP_PRIVATE_KEY }}
+          SERVER_SFTP_KNOWN_HOSTS: ${{ secrets.SERVER_SFTP_KNOWN_HOSTS }}
+          SERVER_RCON_HOST: ${{ vars.SERVER_RCON_HOST }}
+          SERVER_RCON_PORT: ${{ vars.SERVER_RCON_PORT }}
+          SERVER_RCON_PASSWORD: ${{ secrets.SERVER_RCON_PASSWORD }}
+        run: python scripts/verify_server_054.py
