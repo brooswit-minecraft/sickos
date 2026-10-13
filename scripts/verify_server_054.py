@@ -14,6 +14,8 @@ d = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(d)
 
 try:
+    d.wait_until_ready(os.environ)
+    print("rcon_readiness: success", flush=True)
     with d.sftp_session(os.environ) as sftp:
         root = os.environ["SERVER_SFTP_PATH"].rstrip("/")
         manifest = d.read_manifest(sftp, root + "/" + d.MANIFEST)
@@ -45,6 +47,10 @@ try:
             print("verified_mod:", json.dumps(path), flush=True)
         level = d.read_level_name(sftp, root)
         print("active_world_path:", json.dumps(root + "/" + level), flush=True)
+        reset_completed = datetime.fromisoformat("2026-10-13T17:54:32+00:00").timestamp()
+        level_data = sftp.lstat(root + "/" + level + "/level.dat")
+        assert level_data.st_mtime > reset_completed
+        print("world_level_dat_updated_after_verified_reset: true", flush=True)
         for suffix in ("", "_nether", "_the_end"):
             path = root + "/" + level + suffix
             attr = d.attributes(sftp, path)
@@ -64,31 +70,9 @@ try:
         for line in log.splitlines():
             if re.search(r"dynamicwhips.*0\.7\.0|magicavoxel.*0\.1\.3|Done \(|Preparing level", line, re.I):
                 print("runtime_evidence:", d.tail_lines(line, 1)[0], flush=True)
-    d.wait_until_ready(os.environ)
-    print("rcon_readiness: success", flush=True)
-    archives = list((Path(os.environ["RUNNER_TEMP"]) / "verified-release").glob("*.mrpack"))
-    assert len(archives) == 1
-    with archives[0].open("rb") as source:
-        archive_sha256 = hashlib.file_digest(source, "sha256").hexdigest()
     assert manifest["dependencies"] == {"minecraft": "1.21.1", "neoforge": "21.1.252"}
-    report = {
-        "schemaVersion": 1,
-        "server": "breezy-trident848.modrinth.gg:25565",
-        "sha256": archive_sha256,
-        "dependencies": manifest["dependencies"],
-        "ready": True,
-        "verifiedAt": datetime.now(timezone.utc).isoformat(),
-        "repository": "brooswit-minecraft/sickos",
-        "pack_version": "0.54.0",
-        "deployment_run_id": 38434871857,
-        "verification_run_id": os.environ.get("GITHUB_RUN_ID"),
-        "pending_marker": False,
-        "verified_mod_sha512": {p: manifest["files"][p] for p in selected},
-        "rcon_ready": True,
-        "startup_done_in_current_log": "Done (" in log,
-        "world_reset": False,
-    }
-    (Path(os.environ["RUNNER_TEMP"]) / "server-compatibility-0.54.0.json").write_text(json.dumps(report, indent=2) + "\n")
+    assert "Done (" in log
+    print("Read-only startup verification complete. No client deployment receipt published.", flush=True)
 except Exception as error:
     print("Verification failed:", type(error).__name__, flush=True)
     raise SystemExit(1)
