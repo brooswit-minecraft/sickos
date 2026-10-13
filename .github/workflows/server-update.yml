@@ -46,12 +46,11 @@ jobs:
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
        (github.event.workflow_run.event == 'release' || github.event.workflow_run.event == 'push'))
-    # TEMPORARY: pinned to a schematic commit (branch MINECRAFT-54-tools-ref, NOT on main) that adds
-    # `allow-stopped` and `tools-ref`, until the moving `v1` tag is approved to move. Switch back to @v1 then.
-    uses: brooswit-minecraft/schematic/.github/workflows/reusable-server-update.yml@ee37f3182c012eca78558e4429b1f75d1028399a
+    # Pin workflow and tools together, including readiness-gated compatibility publication.
+    uses: brooswit-minecraft/schematic/.github/workflows/reusable-server-update.yml@c6c2d0a660794d37f2d177771a7e0058b2c4b93a
     with:
       version: ${{ inputs.version }}
       allow-stopped: true
-      # Pin the tested SFTP verification fix; the workflow pin above supports tools-ref.
-      tools-ref: 13e633fcca27d2659b4393d5d84a0c389181b446
+      server-address: breezy-trident848.modrinth.gg:25565
+      tools-ref: c6c2d0a660794d37f2d177771a7e0058b2c4b93a
     secrets: inherit
