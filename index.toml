@@ -5,6 +5,30 @@ file = "config/defaultoptions/servers.dat"
 hash = "cbe1f6166b49efb1493edef5b1d356bc879c9da61abddc6f3ef9932a6d2dee6f"
 
 [[files]]
+file = "config/xaero/minimap/common.cfg"
+hash = "2b49df024c03a369c62a303c72755e7fedeb4f4653ff53a12fd37bd83ccd4ed0"
+
+[[files]]
+file = "config/xaero/minimap/default_radar_categories_client.json"
+hash = "afb02111f1018f2e433db5709c53b65397ed77a63e14e5791d9143adcee548b1"
+
+[[files]]
+file = "config/xaero/minimap/profiles/default.cfg"
+hash = "f3c404cba37e63c4a3d357713d9dfaa1a6a51dcac66bd4c57010dfd04b3390e1"
+
+[[files]]
+file = "config/xaero/minimap/profiles/entity_radar_categories/default.cfg.json"
+hash = "afb02111f1018f2e433db5709c53b65397ed77a63e14e5791d9143adcee548b1"
+
+[[files]]
+file = "config/xaero/minimap/server_profiles/default.cfg"
+hash = "f3c404cba37e63c4a3d357713d9dfaa1a6a51dcac66bd4c57010dfd04b3390e1"
+
+[[files]]
+file = "config/xaero/minimap/server_profiles/entity_radar_categories/default.cfg.json"
+hash = "afbd1723c29f9514dd3fa1baee170fe4da46d1fb3ccf4157a760cb62eba1f010"
+
+[[files]]
 file = "mods/alexs-caves.pw.toml"
 hash = "42dceca205acd93598b35932a55b734937ef3196a83da57c3bb1837691c1f604"
 metafile = true
@@ -336,7 +360,7 @@ metafile = true
 
 [[files]]
 file = "mods/xaeros-minimap.pw.toml"
-hash = "aba95d9a82a7cedda4c0ce936ead9c764d0ffbc10483f0648d022213df7bb703"
+hash = "e97cb865d7a8c8310905d9140899fa55ea23c3fff2e23a17255ce2c162322ad7"
 metafile = true
 
 [[files]]
