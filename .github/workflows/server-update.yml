@@ -8,7 +8,7 @@ on:
 permissions:
   contents: read
 jobs:
-  diagnose:
+  recover:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     concurrency:
@@ -21,14 +21,25 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: brooswit-minecraft/schematic
-          ref: ee37f3182c012eca78558e4429b1f75d1028399a
+          ref: 13e633fcca27d2659b4393d5d84a0c389181b446
           path: .schematic-tools
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - run: python -m pip install 'paramiko==4.0.0'
-      - name: Read deployment state without mutation
+      - name: Test fail-closed recovery against local fake SFTP
+        run: python scripts/test_recover_sftp_054.py -v
+      - name: Materialize exact published release 0.54.0
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/server-release"
+          gh release download v0.54.0 --repo "$GITHUB_REPOSITORY" --pattern '*.mrpack' --dir "$RUNNER_TEMP/server-release"
+          mapfile -d '' packs < <(find "$RUNNER_TEMP/server-release" -maxdepth 1 -type f -name '*.mrpack' -print0)
+          test "${#packs[@]}" -eq 1
+          python .schematic-tools/scripts/server_deploy.py materialize --archive "${packs[0]}" --version 0.54.0 --output "$RUNNER_TEMP/server-files"
+      - name: Verify exact incident state and preserve interrupted deployment evidence
         env:
           SERVER_SFTP_HOST: ${{ vars.SERVER_SFTP_HOST }}
           SERVER_SFTP_PORT: ${{ vars.SERVER_SFTP_PORT }}
@@ -37,4 +48,4 @@ jobs:
           SERVER_SFTP_PASSWORD: ${{ secrets.SERVER_SFTP_PASSWORD }}
           SERVER_SFTP_PRIVATE_KEY: ${{ secrets.SERVER_SFTP_PRIVATE_KEY }}
           SERVER_SFTP_KNOWN_HOSTS: ${{ secrets.SERVER_SFTP_KNOWN_HOSTS }}
-        run: python scripts/diagnose_sftp.py
+        run: python scripts/recover_sftp_054.py
