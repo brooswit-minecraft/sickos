@@ -66,13 +66,22 @@ try:
                 print("runtime_evidence:", d.tail_lines(line, 1)[0], flush=True)
     d.wait_until_ready(os.environ)
     print("rcon_readiness: success", flush=True)
+    archives = list((Path(os.environ["RUNNER_TEMP"]) / "verified-release").glob("*.mrpack"))
+    assert len(archives) == 1
+    with archives[0].open("rb") as source:
+        archive_sha256 = hashlib.file_digest(source, "sha256").hexdigest()
+    assert manifest["dependencies"] == {"minecraft": "1.21.1", "neoforge": "21.1.252"}
     report = {
-        "schema": 1,
+        "schemaVersion": 1,
+        "server": "breezy-trident848.modrinth.gg:25565",
+        "sha256": archive_sha256,
+        "dependencies": manifest["dependencies"],
+        "ready": True,
+        "verifiedAt": datetime.now(timezone.utc).isoformat(),
         "repository": "brooswit-minecraft/sickos",
         "pack_version": "0.54.0",
         "deployment_run_id": 38434871857,
         "verification_run_id": os.environ.get("GITHUB_RUN_ID"),
-        "verified_at": datetime.now(timezone.utc).isoformat(),
         "pending_marker": False,
         "verified_mod_sha512": {p: manifest["files"][p] for p in selected},
         "rcon_ready": True,
