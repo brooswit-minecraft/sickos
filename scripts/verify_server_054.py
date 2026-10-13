@@ -1,5 +1,6 @@
 """Read-only release, runtime-log, and active-world verification."""
 import importlib.util
+import hashlib
 from datetime import datetime, timezone
 import json
 import os
@@ -27,11 +28,20 @@ try:
         for pin in ("dynamic-whips", "magicavoxel-loader"):
             with open("mods/" + pin + ".pw.toml", "rb") as source:
                 metadata = tomllib.load(source)
-            assert metadata["download"]["hash-format"] == "sha512"
-            expected["mods/" + metadata["filename"]] = metadata["download"]["hash"]
+            expected["mods/" + metadata["filename"]] = metadata["download"]
         for path in selected:
-            assert manifest["files"][path] == expected[path]
             assert d.remote_hash(sftp, root + "/" + path) == manifest["files"][path]
+            algorithm = expected[path]["hash-format"]
+            assert algorithm in ("sha256", "sha512")
+            if algorithm == "sha512":
+                assert manifest["files"][path] == expected[path]["hash"]
+            else:
+                with sftp.open(root + "/" + path, "rb") as source:
+                    source.prefetch(source.stat().st_size, max_concurrent_requests=32)
+                    digest = hashlib.sha256()
+                    while chunk := source.read(1024 * 1024):
+                        digest.update(chunk)
+                assert digest.hexdigest() == expected[path]["hash"]
             print("verified_mod:", json.dumps(path), flush=True)
         level = d.read_level_name(sftp, root)
         print("active_world_path:", json.dumps(root + "/" + level), flush=True)
@@ -64,7 +74,7 @@ try:
         "verification_run_id": os.environ.get("GITHUB_RUN_ID"),
         "verified_at": datetime.now(timezone.utc).isoformat(),
         "pending_marker": False,
-        "verified_mod_sha512": expected,
+        "verified_mod_sha512": {p: manifest["files"][p] for p in selected},
         "rcon_ready": True,
         "startup_done_in_current_log": "Done (" in log,
         "world_reset": False,
