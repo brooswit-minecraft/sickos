@@ -1,26 +1,12 @@
-name: Server tuning
-
+name: Xaero read-only inspection
 on:
-  push:
-    branches: [main]
-    paths:
-      - server-config.json
-      - scripts/sync-server-config.py
-      - tests/test_sync_server_config.py
-      - .github/workflows/server-tuning.yml
   workflow_dispatch:
-
 permissions:
   contents: read
-
-concurrency:
-  group: schematic-sftp-${{ github.repository }}
-  cancel-in-progress: false
-
 jobs:
-  sync:
+  inspect:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
@@ -28,18 +14,14 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: brooswit-minecraft/schematic
-          ref: v1
+          ref: c6c2d0a660794d37f2d177771a7e0058b2c4b93a
           path: .schematic-tools
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install config sync dependencies
-        run: python -m pip install 'paramiko==4.0.0' 'tomlkit==0.13.3'
-      - name: Run focused config sync tests
-        run: python -m unittest discover -s tests -p 'test_sync_server_config.py'
-      - name: Atomically synchronize live server tuning
-        run: python scripts/sync-server-config.py
+      - run: python -m pip install 'paramiko==4.0.0'
+      - name: Inventory only Xaero server installation and config filenames
         env:
           SERVER_SFTP_HOST: ${{ vars.SERVER_SFTP_HOST }}
           SERVER_SFTP_PORT: ${{ vars.SERVER_SFTP_PORT }}
@@ -48,3 +30,4 @@ jobs:
           SERVER_SFTP_PASSWORD: ${{ secrets.SERVER_SFTP_PASSWORD }}
           SERVER_SFTP_PRIVATE_KEY: ${{ secrets.SERVER_SFTP_PRIVATE_KEY }}
           SERVER_SFTP_KNOWN_HOSTS: ${{ secrets.SERVER_SFTP_KNOWN_HOSTS }}
+        run: python scripts/inspect_xaero.py
