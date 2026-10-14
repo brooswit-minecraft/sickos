@@ -366,6 +366,28 @@ class TestCategoryMapping(EngineTestCase):
         self.assertIn("Back up your world. Run `/da migrate` once.", notes)
         self.assertNotIn("OLD, must not be picked up.", notes)
 
+    def test_atmo7_breaking_migration_notes_preserve_required_reset_instructions(self):
+        release_body = (
+            "# 0.20.0-alpha.1\n\n## Migration\n\n"
+            "Saved dust, ender, exhaust, void, and slime gas is discarded on load.\n"
+            "The violence config resets to defaults under voidGas.\n"
+            "Client and server must use the same Dynamic Atmosphere version.\n\n"
+            "## Changes\n\n- breaking config migration\n"
+        )
+        body_file = self.repo.parent / "release-body-atmo7.md"
+        body_file.write_text(release_body, encoding="utf-8")
+        self.addCleanup(body_file.unlink, missing_ok=True)
+
+        payload = make_payload(version="0.20.0-alpha.1", category="breaking")
+        summary, exit_code, _ = self.run_engine(payload, release_body_override=str(body_file))
+        self.assertEqual(exit_code, bump.EXIT_OK)
+        self.assertEqual(summary["new_pack_version"], "0.23.0")
+
+        notes = (self.repo / summary["notes_path"]).read_text(encoding="utf-8")
+        self.assertIn("Saved dust, ender, exhaust, void, and slime gas is discarded on load.", notes)
+        self.assertIn("The violence config resets to defaults under voidGas.", notes)
+        self.assertIn("Client and server must use the same Dynamic Atmosphere version.", notes)
+
     def test_breaking_without_migration_section_fails_closed(self):
         release_body = "# 0.20.0-alpha.1\n\n## Changes\n\n- stuff\n"
         body_file = self.repo.parent / "release-body-nomig.md"
