@@ -41,11 +41,40 @@ permissions:
   contents: read
 
 jobs:
-  server-update:
+  deployment-policy:
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.workflow_run.conclusion == 'success' &&
        (github.event.workflow_run.event == 'release' || github.event.workflow_run.event == 'push'))
+    runs-on: ubuntu-latest
+    outputs:
+      deploy: ${{ steps.policy.outputs.deploy }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        if: github.event_name == 'workflow_run'
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          path: release-source
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Honor the originating release's deployment policy
+        id: policy
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" = workflow_dispatch ]; then
+            # An explicit later deployment remains possible without republishing.
+            echo 'deploy=true' >> "$GITHUB_OUTPUT"
+          else
+            git -C release-source show -s --format=%B > "$RUNNER_TEMP/release-message.txt"
+            python3 scripts/server_update_policy.py "$RUNNER_TEMP/release-message.txt" >> "$GITHUB_OUTPUT"
+          fi
+
+  server-update:
+    needs: deployment-policy
+    if: needs.deployment-policy.outputs.deploy == 'true'
     # Pin workflow and tools together, including readiness-gated compatibility publication.
     uses: brooswit-minecraft/schematic/.github/workflows/reusable-server-update.yml@c6c2d0a660794d37f2d177771a7e0058b2c4b93a
     with:
