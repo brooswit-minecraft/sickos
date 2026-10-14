@@ -260,8 +260,41 @@ story.
   `docs/icons/candidate_a_rotation.png`, once SICKOS-12 landed that file on
   `main`. See above.
 
-## After (pending)
+## After
 
-To be filled in by the shelved upload story, once a human has chosen an
-icon from SICKOS-12's candidates and the real `mode: upload` dispatch has
-run.
+An icon is live on the sickos listing:
+
+```
+icon_url: https://cdn.modrinth.com/data/RuhnnPqO/f742f3d69c6849d7d47a0c23d94465b76f4efc8c_96.webp
+```
+
+The current authenticated read-back is
+https://github.com/brooswit-minecraft/sickos/actions/runs/38488265479
+(success). Its relevant output was:
+
+```json
+{
+  "id": "RuhnnPqO",
+  "slug": "sickos",
+  "status": "withheld",
+  "requested_status": "approved",
+  "queued": "2026-08-29T15:33:56.860869Z",
+  "icon_url": "https://cdn.modrinth.com/data/RuhnnPqO/f742f3d69c6849d7d47a0c23d94465b76f4efc8c_96.webp",
+  "gallery": []
+}
+```
+
+This icon was uploaded on 2026-09-10T00:22Z outside this repository's
+`rinth-icon.yml` workflow, by the human's own route. The human supplied the
+icon; none of SICKOS-12's candidates was used. There is no CI run log for the
+upload because it did not go through CI. The read-back is evidence that the
+icon is on the listing, not evidence of how it was uploaded.
+
+The before/after pair is therefore closed by an external event, not by the
+shelved upload story. SICKOS-14 is Done and superseded, so it will not fill
+this section.
+
+The project remains queued for approval. This current read reports
+`status: withheld`, which differs from the `status: processing` observation
+recorded on 2026-09-10; the change is stated here rather than treated as an
+unchanged moderation state.
