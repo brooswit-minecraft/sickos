@@ -72,6 +72,13 @@ this policy to future releases; do not republish or renumber existing artifacts.
    merge commit" and "Squash and merge," not for "Rebase and merge" unless
    placed in that rebase's last commit. See `docs/release-policy.md` for
    the full contract.
+   To publish without automatically deploying hosting, put `Release-Only: true`
+   in the final git-trailer paragraph of the commit landing on `main`. GitHub and
+   Modrinth publication still run normally; Server update checks the originating
+   release commit and skips its hosting job. This applies only to that release,
+   preserves normal deployment for other releases, and does not prevent a later
+   explicitly authorized Server update dispatch. Invalid values fail closed.
+
 5. Verify release and deployment results, including restart and health. Distinguish
    a successful server start from an actual client launch/join test in reporting.
 

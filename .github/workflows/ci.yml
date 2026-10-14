@@ -9,6 +9,15 @@ permissions:
   contents: read
 
 jobs:
+  release-policy-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python3 -m unittest discover -s tests -p 'test_server_update_policy.py'
+
   build:
     uses: brooswit-minecraft/schematic/.github/workflows/reusable-ci.yml@v1
     secrets: inherit

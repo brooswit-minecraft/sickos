@@ -1,8 +1,13 @@
 name = "Dynamic Vehicles"
-filename = "dynamicvehicles-0.52.0.jar"
+filename = "dynamicvehicles-0.52.1.jar"
 side = "both"
 
 [download]
-url = "https://github.com/brooswit-minecraft/dynamic-vehicles/releases/download/v0.52.0/dynamicvehicles-0.52.0.jar"
+url = "https://cdn.modrinth.com/data/srLLPzF8/versions/rlU8yRRf/dynamicvehicles-0.52.1.jar"
 hash-format = "sha512"
-hash = "24ab2e9190c9c8c90dc45d56738d58c2f87ebcb30d8850725e7017ed51a3bf7a59f24e014f150fa8b237fc57b98f66fcdc7c19266338d84b8b024f1d6cd4cd83"
+hash = "34deb6946b9652d35556038e2a4751d3dc0156ebf0f67f3602dbb068def6dbae273c311d3818e3aa9e5dd2bfd261f1015a6f3e8e5632b934480c056866609266"
+
+[update]
+[update.modrinth]
+mod-id = "srLLPzF8"
+version = "rlU8yRRf"
