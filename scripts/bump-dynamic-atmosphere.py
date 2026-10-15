@@ -558,6 +558,10 @@ def verify_against_modrinth_metadata(payload, fetcher):
     if metadata.get("project_id") != DA_MOD_ID:
         refuse(f"metadata project_id {metadata.get('project_id')!r} is not {DA_MOD_ID}")
 
+    if metadata.get("version_number") != payload["version"]:
+        refuse(f"metadata version_number {metadata.get('version_number')!r} does not equal "
+               f"payload version {payload['version']!r}")
+
     files = metadata.get("files")
     if not isinstance(files, list):
         refuse("metadata has no files list")

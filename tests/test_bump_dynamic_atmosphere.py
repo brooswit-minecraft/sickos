@@ -148,6 +148,7 @@ def modrinth_metadata_for(payload, *, project_id="PZV7RorC", version_id=None):
     return {
         "id": version_id or payload["modrinth_version_id"],
         "project_id": project_id,
+        "version_number": payload["version"],
         "files": [{
             "filename": payload["file_name"],
             "url": payload["download_url"],
@@ -874,6 +875,20 @@ class TestModrinthMetadataGate(EngineTestCase):
         payload = make_payload(category="patch", content=self.CONTENT)
         MODRINTH_METADATA[payload["modrinth_version_id"]]["project_id"] = "SOMEOTHER"
         self.assertIn("project_id", self.attempt(payload))
+
+    def test_forged_older_bytes_labelled_as_newer_version_fails_closed(self):
+        # Valid, genuinely published OLDER release (hashes, url, file all real) presented
+        # under a NEWER payload version string: version_number must equal payload.version.
+        payload = make_payload(version="0.21.0-alpha.1", category="patch", content=self.CONTENT)
+        MODRINTH_METADATA[payload["modrinth_version_id"]]["version_number"] = "0.20.0-alpha.1"
+        message = self.attempt(payload)
+        self.assertIn("version_number", message)
+        self.assertIn("0.20.0-alpha.1", message)
+
+    def test_metadata_without_version_number_fails_closed(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        del MODRINTH_METADATA[payload["modrinth_version_id"]]["version_number"]
+        self.assertIn("version_number", self.attempt(payload))
 
     def test_metadata_version_id_mismatch_fails_closed(self):
         payload = make_payload(category="patch", content=self.CONTENT)

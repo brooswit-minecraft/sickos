@@ -246,7 +246,8 @@ The dispatch payload is untrusted, so its hashes are not accepted on their
 own authority. Before downloading, the engine fetches
 `https://api.modrinth.com/v2/version/<modrinth_version_id>` and requires:
 `id` equals the payload's `modrinth_version_id`; `project_id` is
-`PZV7RorC`; exactly one file has the payload's `file_name`; and that
+`PZV7RorC`; `version_number` equals the payload's `version` (the
+version that drives the downgrade check and the release notes); exactly one file has the payload's `file_name`; and that
 file's `hashes.sha512`, `hashes.sha1` and `url` equal the payload's. The
 downloaded jar is then hashed and must match too. Any failure (including
 HTTP 404 or a transport error) is `EXIT_INTEGRITY_FAILURE` and nothing in
