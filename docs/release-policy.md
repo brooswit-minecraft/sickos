@@ -115,11 +115,8 @@ validated — free text for a human.
 `workflow_dispatch` paths are never held — a human publishing a release
 directly, or an explicit dry run, has already made the eligibility decision
 that HOLD exists to gate). It reads `${{ github.event.head_commit.message
-}}`, parses it with the same trailer-detection function `scripts/
-apply-da-release-notes.py`'s `has_da_auto_bump_trailer()` already
-implements generically (extend it, or extract a shared `has_trailer(name,
-message)` helper — MINECRAFT-42's implementation choice), and outputs
-`held: true|false`.
+}}`, parses it with `scripts/release_decisions.py`'s generic
+`has_trailer(name, message)` helper, and outputs `held: true|false`.
 
 **What HOLD actually guarantees — read this before relying on it.** A
 `Release-Hold: true` trailer defers only the release triggered by *that one

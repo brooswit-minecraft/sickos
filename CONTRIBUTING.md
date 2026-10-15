@@ -52,8 +52,9 @@ this policy to future releases; do not republish or renumber existing artifacts.
    `.github/workflows/da-auto-bump.yml`, which prepares the bump with
    `scripts/bump-dynamic-atmosphere.py` and pushes it -- see
    `docs/da-auto-bump.md`, including its pause switch and fail-closed behavior.
-   If that commit carries a `DA-Auto-Bump` trailer, a follow-up workflow also
-   edits the release body -- see `docs/release-notes-plumbing.md`.) For the
+   When that commit's `docs/releases/<version>.md` exists, `release.yml`
+   passes it to the shared release workflow as `notes-file`, filling both
+   the GitHub release body and the Modrinth changelog.) For the
    accepted-change release policy -- which changes are release-eligible,
    version-concurrency and retry/idempotency handling, the outcome-state
    contract, and recovery after a partial failure -- see

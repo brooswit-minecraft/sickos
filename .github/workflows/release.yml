@@ -247,6 +247,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       sha: ${{ github.sha }}
       message: ${{ steps.resolve.outputs.message }}
+      notes_file: ${{ steps.notes.outputs.path }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -257,6 +258,22 @@ jobs:
       - name: Resolve pack version
         id: version
         run: echo "version=$(sed -n 's/^version = "\(.*\)"/\1/p' pack.toml)" >> "$GITHUB_OUTPUT"
+      # MINECRAFT-49: docs/releases/<version>.md, read at this same pushed
+      # commit, becomes reusable-release.yml@v1's notes-file input below --
+      # but only when it exists here. AC6 of that input treats an empty
+      # string as unset (the supported shape for a hand-authored release
+      # with no notes file); a non-empty path that doesn't resolve to a
+      # real file fails the run by design, so this must never emit a path
+      # that doesn't exist.
+      - name: Resolve release notes file
+        id: notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python3 scripts/release_decisions.py resolve-notes-file \
+            --version "$VERSION" \
+            --repo-root . \
+            --github-output "$GITHUB_OUTPUT"
       - name: Look up existing GitHub Release for this version
         id: existing
         env:
@@ -352,11 +369,17 @@ jobs:
   # header comment), so its internal P1/P2 predicates already resolve the
   # same way a plain push always has, with no extra inputs needed here.
   release:
-    needs: [check-config]
+    needs: [check-existing, check-config]
     if: github.event_name == 'push' && needs.check-config.outputs.configured == 'true'
     permissions:
       contents: write
     uses: brooswit-minecraft/schematic/.github/workflows/reusable-release.yml@v1
+    with:
+      # MINECRAFT-49: fills both the GitHub release body and the Modrinth
+      # changelog from docs/releases/<version>.md (SCHEM-33/34, v1). Empty
+      # when check-existing found no such file at this commit -- the
+      # documented "unset" shape, not a failure.
+      notes-file: ${{ needs.check-existing.outputs.notes_file }}
     secrets: inherit
 
   # Section 2.2 item 3: the "replay" branch -- a GitHub Release for this

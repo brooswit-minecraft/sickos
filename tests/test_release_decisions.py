@@ -1,6 +1,7 @@
 import importlib.util
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -24,6 +25,7 @@ resolve_verify_publication = release_decisions.resolve_verify_publication
 compare_artifact_sha512 = release_decisions.compare_artifact_sha512
 outcome_to_status = release_decisions.outcome_to_status
 resolve_run_outcome = release_decisions.resolve_run_outcome
+resolve_notes_file = release_decisions.resolve_notes_file
 
 # docs/release-policy.md's durable-evidence baseline: sickos's own real,
 # already-published v0.23.2 GitHub Release, verified live via
@@ -136,6 +138,43 @@ class TestResolveExistingRelease(unittest.TestCase):
         # release with a fabricated *different* sha, never a real publish.
         result = resolve_existing_release(REAL_V0_23_2_TARGET_COMMITISH, "f" * 40)
         self.assertEqual(result["branch"], "conflict")
+
+
+class TestResolveNotesFile(unittest.TestCase):
+    """MINECRAFT-49: notes-file passthrough to reusable-release.yml@v1."""
+
+    def test_existing_notes_file_returns_repo_relative_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            releases_dir = repo_root / "docs" / "releases"
+            releases_dir.mkdir(parents=True)
+            (releases_dir / "0.24.0.md").write_text("Notes for 0.24.0\n", encoding="utf-8")
+
+            result = resolve_notes_file("0.24.0", repo_root)
+
+            self.assertEqual(result, "docs/releases/0.24.0.md")
+
+    def test_missing_notes_file_returns_empty_string(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+
+            result = resolve_notes_file("0.24.0", repo_root)
+
+            # Empty, never a path that doesn't exist -- reusable-release.yml@v1
+            # treats "" as unset but fails the run loudly on a non-empty path
+            # it can't resolve to a real file.
+            self.assertEqual(result, "")
+
+    def test_other_versions_notes_file_does_not_match(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            releases_dir = repo_root / "docs" / "releases"
+            releases_dir.mkdir(parents=True)
+            (releases_dir / "0.23.0.md").write_text("Notes for a different version\n", encoding="utf-8")
+
+            result = resolve_notes_file("0.24.0", repo_root)
+
+            self.assertEqual(result, "")
 
 
 class TestModrinthConfig(unittest.TestCase):

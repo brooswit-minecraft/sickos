@@ -34,12 +34,13 @@ def has_trailer(name: str, message: str) -> bool:
     """True iff `message` carries a trailer keyed `name` (case-insensitive),
     using git's own trailer parser rather than a loose grep -- a mention of
     the key in the message body (not in a trailer block) never counts. Any
-    value shape after the colon is accepted. Mirrors
-    scripts/apply-da-release-notes.py's has_da_auto_bump_trailer(), kept as
-    its own copy here rather than imported, since
-    docs/release-policy.md leaves "extend it, or extract a shared helper"
-    as this story's implementation choice and the two scripts have no other
-    coupling worth introducing for one four-line function.
+    value shape after the colon is accepted. The canonical implementation
+    (MINECRAFT-42's "extract a shared has_trailer(name, message) helper"
+    choice, per docs/release-policy.md); scripts/da-auto-bump-dispatch.py
+    loads this function by file path (see its own comment) rather than
+    keeping a separate copy, since MINECRAFT-49 deleted the one other
+    implementation that used to exist (apply-da-release-notes.py's
+    has_da_auto_bump_trailer()).
     """
     result = subprocess.run(
         ["git", "interpret-trailers", "--parse"],
@@ -137,6 +138,23 @@ def conflict_message(version: str, existing_sha: str, this_sha: str) -> str:
         "The pack.toml version number was reused for different content -- bump "
         "pack.toml's version before merging another pack change."
     )
+
+
+# --------------------------------------------------------------------------
+# MINECRAFT-49: notes-file passthrough to schematic's reusable-release.yml@v1.
+# --------------------------------------------------------------------------
+
+def resolve_notes_file(version: str, repo_root: Path) -> str:
+    """Repo-relative `docs/releases/<version>.md` path, or "" if absent.
+
+    reusable-release.yml@v1's `notes-file` input treats an empty string as
+    unset (the documented, supported pattern for a hand-authored release
+    with no notes file) but fails the run loudly on a non-empty path that
+    does not resolve to a real file -- so this must emit "" rather than a
+    path that doesn't exist, never the reverse.
+    """
+    path = repo_root / "docs" / "releases" / f"{version}.md"
+    return f"docs/releases/{version}.md" if path.is_file() else ""
 
 
 # --------------------------------------------------------------------------
@@ -447,6 +465,11 @@ def main(argv=None):
     existing_p.add_argument("--version", required=True)
     existing_p.add_argument("--github-output", default=None)
 
+    notes_p = sub.add_parser("resolve-notes-file")
+    notes_p.add_argument("--version", required=True)
+    notes_p.add_argument("--repo-root", required=True, type=Path)
+    notes_p.add_argument("--github-output", default=None)
+
     config_p = sub.add_parser("check-config")
     config_p.add_argument("--token-set", choices=["true", "false"], required=True)
     config_p.add_argument("--project-id-set", choices=["true", "false"], required=True)
@@ -511,6 +534,11 @@ def main(argv=None):
         if result["branch"] == "conflict":
             outputs["message"] = conflict_message(args.version, result["existing_sha"], result["this_sha"])
         _write_outputs(args.github_output, outputs)
+        return 0
+
+    if args.command == "resolve-notes-file":
+        notes_file = resolve_notes_file(args.version, args.repo_root)
+        _write_outputs(args.github_output, {"path": notes_file})
         return 0
 
     if args.command == "check-config":

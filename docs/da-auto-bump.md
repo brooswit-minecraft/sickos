@@ -431,13 +431,13 @@ back to none), the engine run above, then a decision:
 
 ### Trailer format
 
-`scripts/apply-da-release-notes.py`'s `has_da_auto_bump_trailer()` (the
-SICKOS-79 release-notes gate) uses git's own trailer parser, which only
-recognises a `DA-Auto-Bump:` line sitting **alone in the commit message's
-final paragraph**, separated from everything above it by a blank line. A
-trailer-shaped line glued directly under prose or a bullet list, with no
-blank line before it, is silently NOT recognised -- the commit message
-constructed by `da-auto-bump-dispatch.py build-commit-message` is
-unit-tested against the real `has_da_auto_bump_trailer()` function (not a
-reimplementation of it) for exactly this, including a multi-line body and
-a bullet list above the trailer.
+`scripts/release_decisions.py`'s generic `has_trailer(name, message)`
+(loaded by `da-auto-bump-dispatch.py`, see its own comment) uses git's own
+trailer parser, which only recognises a `DA-Auto-Bump:` line sitting
+**alone in the commit message's final paragraph**, separated from
+everything above it by a blank line. A trailer-shaped line glued directly
+under prose or a bullet list, with no blank line before it, is silently
+NOT recognised -- the commit message constructed by
+`da-auto-bump-dispatch.py build-commit-message` is unit-tested against the
+real `has_trailer()` function (not a reimplementation of it) for exactly
+this, including a multi-line body and a bullet list above the trailer.

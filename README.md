@@ -475,10 +475,12 @@ This builds and uploads the `.mrpack` as a workflow artifact but skips the
 Release-asset step (there is no Release object to attach to) and the Modrinth publish
 step, the same as any run without Modrinth configured.
 
-For an auto-bump push specifically (a commit carrying a `DA-Auto-Bump` trailer),
-`.github/workflows/da-auto-bump-notes.yml` additionally edits that release's GitHub
-body afterward; see [docs/release-notes-plumbing.md](docs/release-notes-plumbing.md)
-for what it does and does not cover.
+For a release whose commit has `docs/releases/<version>.md` (e.g. an
+auto-bump push, but any commit at that version qualifies), `release.yml`
+passes that file to `reusable-release.yml@v1` as `notes-file` -- its
+content fills both the GitHub release body and the Modrinth changelog. A
+release with no such file behaves exactly as before: generated notes, an
+empty Modrinth changelog.
 
 The accepted-change release policy -- eligibility, the durable hold
 mechanism, version-concurrency and retry/idempotency handling, the
@@ -558,8 +560,9 @@ fired, and the pushed commit sha (or why there isn't one).
 **Commit trailer.** A pushed bump's commit message ends with a
 `DA-Auto-Bump: <da_version> <modrinth_version_id>` trailer, alone in its
 own final paragraph (a blank line before it) -- this exact shape is what
-`da-auto-bump-notes.yml` above gates on; see
-[docs/da-auto-bump.md](docs/da-auto-bump.md)'s "Trailer format" section
+`release.yml`'s `check-hold` job's trailer parser (and
+`da-auto-bump-dispatch.py build-commit-message`'s own self-check) key on;
+see [docs/da-auto-bump.md](docs/da-auto-bump.md)'s "Trailer format" section
 for why the shape matters.
 
 **Listing review issue.** When the engine sets `listing_review_required`
