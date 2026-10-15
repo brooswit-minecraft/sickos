@@ -17,6 +17,7 @@ import sys
 import tempfile
 import tomllib
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -510,6 +511,71 @@ def fetch_release_body(github_release_url, override_path):
 
 
 # --------------------------------------------------------------------------
+# Independent integrity gate (AC3): the dispatch payload is untrusted input,
+# so its sha1/sha512/url are NOT accepted on their own authority. They must
+# match the file entry Modrinth itself publishes for the resolved version
+# (GET /v2/version/{id}), and the downloaded jar must match that entry too.
+# Any mismatch, missing entry, non-200 or transport failure (including a
+# project Modrinth does not serve anonymously) fails closed before any repo
+# file is written. An optional MODRINTH_TOKEN in the environment is sent as
+# the Authorization header, for the day the project is only readable
+# with a token; it is never logged or written anywhere.
+# --------------------------------------------------------------------------
+
+def fetch_modrinth_version_metadata(version_id):
+    url = f"https://api.modrinth.com/v2/version/{urllib.parse.quote(version_id, safe='')}"
+    headers = {"User-Agent": USER_AGENT}
+    token = os.environ.get("MODRINTH_TOKEN")
+    if token:
+        headers["Authorization"] = token
+    request = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return json.loads(response.read())
+
+
+def verify_against_modrinth_metadata(payload, fetcher):
+    """Return the matched Modrinth file entry, or raise EngineError (fail closed)."""
+    version_id = payload["modrinth_version_id"]
+
+    def refuse(reason):
+        raise EngineError(
+            EXIT_INTEGRITY_FAILURE, "integrity_failure",
+            f"Modrinth version metadata check failed for {version_id}: {reason}",
+        )
+
+    try:
+        metadata = fetcher(version_id)
+    except urllib.error.HTTPError as error:
+        refuse(f"metadata lookup returned HTTP {error.code} (a project Modrinth does not "
+               "serve to this caller cannot be verified, so the bump is refused)")
+    except Exception as error:  # noqa: BLE001 - any lookup failure fails closed
+        refuse(f"metadata lookup failed: {error!r}")
+
+    if not isinstance(metadata, dict):
+        refuse("metadata response was not a JSON object")
+    if metadata.get("id") != version_id:
+        refuse(f"metadata id {metadata.get('id')!r} does not match the requested version id")
+    if metadata.get("project_id") != DA_MOD_ID:
+        refuse(f"metadata project_id {metadata.get('project_id')!r} is not {DA_MOD_ID}")
+
+    files = metadata.get("files")
+    if not isinstance(files, list):
+        refuse("metadata has no files list")
+    matches = [f for f in files if isinstance(f, dict) and f.get("filename") == payload["file_name"]]
+    if len(matches) != 1:
+        refuse(f"expected exactly one file named {payload['file_name']!r}, found {len(matches)}")
+    entry = matches[0]
+    hashes = entry.get("hashes") if isinstance(entry.get("hashes"), dict) else {}
+    if str(hashes.get("sha512", "")).lower() != payload["sha512"]:
+        refuse("payload sha512 differs from Modrinth's published sha512")
+    if str(hashes.get("sha1", "")).lower() != payload["sha1"]:
+        refuse("payload sha1 differs from Modrinth's published sha1")
+    if entry.get("url") != payload["download_url"]:
+        refuse("payload download_url differs from Modrinth's published file url")
+    return entry
+
+
+# --------------------------------------------------------------------------
 # AC8: Modrinth vouch check. Never fails the run or changes the exit code --
 # so the whole check, including reading the control mod's pin file, is
 # wrapped: ANY exception (a transport failure urllib does not wrap in
@@ -793,7 +859,7 @@ def assert_only_da_pin_changed_under_mods(repo_root, run_command=subprocess.run)
 
 def run_engine(repo_root, payload_raw, *, release_body_override=None,
                 downloader=default_downloader, run_command=subprocess.run,
-                gate_commands=None):
+                gate_commands=None, metadata_fetcher=None):
     repo_root = Path(repo_root)
     assert_restore_targets_clean(repo_root, run_command=run_command)
     payload = validate_payload(payload_raw)
@@ -871,6 +937,7 @@ def run_engine(repo_root, payload_raw, *, release_body_override=None,
                 "own section of the DA GitHub release body",
             )
 
+    verify_against_modrinth_metadata(payload, metadata_fetcher or fetch_modrinth_version_metadata)
     download_and_verify(payload["download_url"], payload["sha1"], payload["sha512"], downloader)
 
     vouch = run_vouch_check(repo_root, payload["sha512"])
