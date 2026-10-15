@@ -132,6 +132,12 @@ jobs:
       - name: Run the DA auto-bump engine
         id: engine
         if: steps.pause.outputs.paused != 'true'
+        env:
+          # Existing repo secret (already used by release.yml). Scoped to this
+          # step only; the engine uses it solely for the api.modrinth.com
+          # version-metadata lookup and removes it from its environment
+          # before running make/packwiz.
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
         run: |
           set +e
           python3 scripts/bump-dynamic-atmosphere.py \

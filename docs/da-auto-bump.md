@@ -253,12 +253,17 @@ downloaded jar is then hashed and must match too. Any failure (including
 HTTP 404 or a transport error) is `EXIT_INTEGRITY_FAILURE` and nothing in
 the repo is touched. The "vouch check" below stays informational only.
 
-**Known consequence:** while DA's Modrinth project is not served to
-anonymous callers (it returns 404 today), this gate refuses every real bump
-rather than trusting the payload. It becomes usable once the project is
-visible, or when the environment variable `MODRINTH_TOKEN` (sent as the
-`Authorization` header, never logged) holds a token that can read it. No
-token is configured by this repo; adding one is an owner decision.
+**Authenticated access.** The workflow passes the repository's existing
+`MODRINTH_TOKEN` secret (the one `release.yml` already uses; no secret is
+added or changed) to the engine step only. The engine sends it solely as the
+`Authorization` header of the `api.modrinth.com` metadata request, and
+removes it from its own environment before it runs `make`/packwiz/git, so no
+other subprocess inherits it. It is never logged or written. **Unverified:**
+whether that token can read DA project `PZV7RorC` has not been tested (live
+runs are held). If it cannot, the gate returns `EXIT_INTEGRITY_FAILURE`
+(HTTP 401/403/404) and refuses the bump rather than trusting the payload. With
+no token (for example a local run) and the project private, the same
+refusal happens.
 
 ## Pin write
 
@@ -271,7 +276,10 @@ resolves a mod only through that API and can only move to the latest
 version, not to the version a dispatch names. packwiz still validates the
 result: `make refresh`, `make check` and `make build` run packwiz over the
 rewritten pin before anything is committed. Re-evaluate using `packwiz
-update` once the project is publicly resolvable. Every
+update` once the project is publicly resolvable.
+This direct-pin write, backed by the metadata gate above, is the proposed
+alternative to the literal `packwiz update` requirement; it is pending owner
+acceptance. Every
 string value is TOML-escaped. `name` and `side` are preserved from the
 existing pin; `filename`, `download.url`, `download.hash` (with
 `hash-format` fixed at `sha512`), and `update.modrinth.version` come from

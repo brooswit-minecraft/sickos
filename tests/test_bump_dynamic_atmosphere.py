@@ -921,7 +921,7 @@ class TestModrinthMetadataGate(EngineTestCase):
 
 
 class TestMetadataFetcherAuth(unittest.TestCase):
-    def test_token_sent_only_when_set_and_version_id_is_quoted(self):
+    def fetch(self, version_id, token):
         captured = {}
 
         class Resp:
@@ -934,12 +934,32 @@ class TestMetadataFetcherAuth(unittest.TestCase):
             captured["auth"] = request.get_header("Authorization")
             return Resp()
 
-        with mock.patch.object(bump.urllib.request, "urlopen", fake_urlopen):
-            with mock.patch.dict(bump.os.environ, {}, clear=False):
-                bump.os.environ.pop("MODRINTH_TOKEN", None)
-                bump.fetch_modrinth_version_metadata("a/b")
-                self.assertIsNone(captured["auth"])
-                self.assertTrue(captured["url"].endswith("/v2/version/a%2Fb"))
-            with mock.patch.dict(bump.os.environ, {"MODRINTH_TOKEN": "tok"}):
-                bump.fetch_modrinth_version_metadata("abc")
-                self.assertEqual(captured["auth"], "tok")
+        with mock.patch.object(bump.urllib.request, "urlopen", fake_urlopen), \
+                mock.patch.object(bump, "_MODRINTH_TOKEN", token):
+            bump.fetch_modrinth_version_metadata(version_id)
+        return captured
+
+    def test_token_sent_only_when_set_and_version_id_is_quoted(self):
+        captured = self.fetch("a/b", None)
+        self.assertIsNone(captured["auth"])
+        self.assertTrue(captured["url"].endswith("/v2/version/a%2Fb"))
+        self.assertEqual(self.fetch("abc", "tok")["auth"], "tok")
+
+    def test_main_removes_token_from_environment_before_gates_run(self):
+        seen = {}
+
+        def fake_run_engine(repo_root, payload_raw, **kwargs):
+            seen["env_token"] = bump.os.environ.get("MODRINTH_TOKEN")
+            seen["module_token"] = bump._MODRINTH_TOKEN
+            return {"changed": False}, bump.EXIT_OK, "ok"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            payload_path = Path(tmp) / "p.json"
+            payload_path.write_text("{}", encoding="utf-8")
+            with mock.patch.dict(bump.os.environ, {"MODRINTH_TOKEN": "secret-tok"}), \
+                    mock.patch.object(bump, "run_engine", fake_run_engine), \
+                    mock.patch.object(bump, "_MODRINTH_TOKEN", None):
+                self.assertEqual(bump.main(["--payload", str(payload_path), "--repo-root", tmp]), bump.EXIT_OK)
+                self.assertNotIn("MODRINTH_TOKEN", bump.os.environ)
+        self.assertIsNone(seen["env_token"])
+        self.assertEqual(seen["module_token"], "secret-tok")

@@ -522,10 +522,16 @@ def fetch_release_body(github_release_url, override_path):
 # with a token; it is never logged or written anywhere.
 # --------------------------------------------------------------------------
 
+# Captured once by main() and REMOVED from os.environ, so the make/packwiz/git
+# subprocesses the gates spawn never inherit it. Only the metadata lookup below
+# (api.modrinth.com) ever sees it.
+_MODRINTH_TOKEN = None
+
+
 def fetch_modrinth_version_metadata(version_id):
     url = f"https://api.modrinth.com/v2/version/{urllib.parse.quote(version_id, safe='')}"
     headers = {"User-Agent": USER_AGENT}
-    token = os.environ.get("MODRINTH_TOKEN")
+    token = _MODRINTH_TOKEN
     if token:
         headers["Authorization"] = token
     request = urllib.request.Request(url, headers=headers)
@@ -1046,6 +1052,9 @@ def main(argv=None):
     parser.add_argument("--release-body", default=None,
                          help="local file to use instead of fetching the GitHub release body")
     args = parser.parse_args(argv)
+
+    global _MODRINTH_TOKEN
+    _MODRINTH_TOKEN = os.environ.pop("MODRINTH_TOKEN", None) or None
 
     with open(args.payload, "r", encoding="utf-8") as handle:
         payload_raw = json.load(handle)
