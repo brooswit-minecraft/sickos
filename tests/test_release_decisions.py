@@ -1,6 +1,7 @@
 import importlib.util
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -24,6 +25,7 @@ resolve_verify_publication = release_decisions.resolve_verify_publication
 compare_artifact_sha512 = release_decisions.compare_artifact_sha512
 outcome_to_status = release_decisions.outcome_to_status
 resolve_run_outcome = release_decisions.resolve_run_outcome
+resolve_notes_file = release_decisions.resolve_notes_file
 
 # docs/release-policy.md's durable-evidence baseline: sickos's own real,
 # already-published v0.23.2 GitHub Release, verified live via
@@ -138,6 +140,43 @@ class TestResolveExistingRelease(unittest.TestCase):
         self.assertEqual(result["branch"], "conflict")
 
 
+class TestResolveNotesFile(unittest.TestCase):
+    """MINECRAFT-49: notes-file passthrough to reusable-release.yml@v1."""
+
+    def test_existing_notes_file_returns_repo_relative_path(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            releases_dir = repo_root / "docs" / "releases"
+            releases_dir.mkdir(parents=True)
+            (releases_dir / "0.24.0.md").write_text("Notes for 0.24.0\n", encoding="utf-8")
+
+            result = resolve_notes_file("0.24.0", repo_root)
+
+            self.assertEqual(result, "docs/releases/0.24.0.md")
+
+    def test_missing_notes_file_returns_empty_string(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+
+            result = resolve_notes_file("0.24.0", repo_root)
+
+            # Empty, never a path that doesn't exist -- reusable-release.yml@v1
+            # treats "" as unset but fails the run loudly on a non-empty path
+            # it can't resolve to a real file.
+            self.assertEqual(result, "")
+
+    def test_other_versions_notes_file_does_not_match(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            repo_root = Path(tmp)
+            releases_dir = repo_root / "docs" / "releases"
+            releases_dir.mkdir(parents=True)
+            (releases_dir / "0.23.0.md").write_text("Notes for a different version\n", encoding="utf-8")
+
+            result = resolve_notes_file("0.24.0", repo_root)
+
+            self.assertEqual(result, "")
+
+
 class TestModrinthConfig(unittest.TestCase):
     def test_both_set_is_configured(self):
         result = check_modrinth_config("token", "project")
@@ -236,6 +275,54 @@ class TestReleaseWorkflowRuntimeContract(unittest.TestCase):
         self.assertIn("MODRINTH_TOKEN", message)
         self.assertIn("MODRINTH_PROJECT_ID", message)
         self.assertIn("README.md#secrets--variables", message)
+
+
+class TestNotesFileWorkflowWiring(unittest.TestCase):
+    """MINECRAFT-49: offline coverage that both the fresh-release path and
+    the replay/recovery path actually consume check-existing's notes_file
+    output, not just the decision function in isolation. Native Codex's
+    review of an earlier revision found recover-publish silently publishing
+    an empty Modrinth changelog even when a notes file existed -- these
+    guard both call sites against that regressing again.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.workflow = (Path(__file__).resolve().parent.parent / ".github/workflows/release.yml").read_text()
+
+    def test_check_existing_exposes_notes_file_output(self):
+        existing = self.workflow.split("  check-existing:", 1)[1].split("  check-config:", 1)[0]
+        self.assertIn("notes_file: ${{ steps.notes.outputs.path }}", existing)
+        self.assertIn("resolve-notes-file \\", existing)
+
+    def test_fresh_release_job_passes_notes_file_input(self):
+        release_job = self.workflow.split("\n  release:\n", 1)[1].split("\n  recover-publish:\n", 1)[0]
+        self.assertIn("needs: [check-existing, check-config]", release_job)
+        self.assertIn("notes-file: ${{ needs.check-existing.outputs.notes_file }}", release_job)
+
+    def test_recover_publish_consumes_notes_file_with_empty_fallback(self):
+        recovery = self.workflow.split("\n  recover-publish:\n", 1)[1].split("\n  verify-publication:\n", 1)[0]
+        self.assertIn("NOTES_FILE: ${{ needs.check-existing.outputs.notes_file }}", recovery)
+        publish_step = recovery.split("Publish to Modrinth directly", 1)[1]
+        self.assertIn('if [ -n "$NOTES_FILE" ]; then', publish_step)
+        self.assertIn('cp -- "$NOTES_FILE" "$changelog_file"', publish_step)
+        self.assertIn('printf \'\' > "$changelog_file"', publish_step)
+        # The empty branch must be the fallback (else), never run alongside
+        # a present notes file -- i.e. the cp line must appear strictly
+        # before the printf '' fallback line in this step's own script.
+        self.assertLess(
+            publish_step.index('cp -- "$NOTES_FILE" "$changelog_file"'),
+            publish_step.index('printf \'\' > "$changelog_file"'),
+        )
+
+    def test_recover_publish_checks_out_the_same_commit_notes_file_was_resolved_at(self):
+        recovery = self.workflow.split("\n  recover-publish:\n", 1)[1].split("\n  verify-publication:\n", 1)[0]
+        # check-existing resolves notes_file from a full checkout of
+        # github.sha (fetch-depth: 0, default ref); recover-publish must
+        # pin its own checkout to that exact same sha, never a different
+        # ref, or the two could silently disagree about which commit's
+        # notes file is being published.
+        self.assertIn("ref: ${{ needs.check-existing.outputs.sha }}", recovery)
 
 
 class TestRecoveryArtifactEquality(unittest.TestCase):
