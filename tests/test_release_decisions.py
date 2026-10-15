@@ -277,6 +277,54 @@ class TestReleaseWorkflowRuntimeContract(unittest.TestCase):
         self.assertIn("README.md#secrets--variables", message)
 
 
+class TestNotesFileWorkflowWiring(unittest.TestCase):
+    """MINECRAFT-49: offline coverage that both the fresh-release path and
+    the replay/recovery path actually consume check-existing's notes_file
+    output, not just the decision function in isolation. Native Codex's
+    review of an earlier revision found recover-publish silently publishing
+    an empty Modrinth changelog even when a notes file existed -- these
+    guard both call sites against that regressing again.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.workflow = (Path(__file__).resolve().parent.parent / ".github/workflows/release.yml").read_text()
+
+    def test_check_existing_exposes_notes_file_output(self):
+        existing = self.workflow.split("  check-existing:", 1)[1].split("  check-config:", 1)[0]
+        self.assertIn("notes_file: ${{ steps.notes.outputs.path }}", existing)
+        self.assertIn("resolve-notes-file \\", existing)
+
+    def test_fresh_release_job_passes_notes_file_input(self):
+        release_job = self.workflow.split("\n  release:\n", 1)[1].split("\n  recover-publish:\n", 1)[0]
+        self.assertIn("needs: [check-existing, check-config]", release_job)
+        self.assertIn("notes-file: ${{ needs.check-existing.outputs.notes_file }}", release_job)
+
+    def test_recover_publish_consumes_notes_file_with_empty_fallback(self):
+        recovery = self.workflow.split("\n  recover-publish:\n", 1)[1].split("\n  verify-publication:\n", 1)[0]
+        self.assertIn("NOTES_FILE: ${{ needs.check-existing.outputs.notes_file }}", recovery)
+        publish_step = recovery.split("Publish to Modrinth directly", 1)[1]
+        self.assertIn('if [ -n "$NOTES_FILE" ]; then', publish_step)
+        self.assertIn('cp -- "$NOTES_FILE" "$changelog_file"', publish_step)
+        self.assertIn('printf \'\' > "$changelog_file"', publish_step)
+        # The empty branch must be the fallback (else), never run alongside
+        # a present notes file -- i.e. the cp line must appear strictly
+        # before the printf '' fallback line in this step's own script.
+        self.assertLess(
+            publish_step.index('cp -- "$NOTES_FILE" "$changelog_file"'),
+            publish_step.index('printf \'\' > "$changelog_file"'),
+        )
+
+    def test_recover_publish_checks_out_the_same_commit_notes_file_was_resolved_at(self):
+        recovery = self.workflow.split("\n  recover-publish:\n", 1)[1].split("\n  verify-publication:\n", 1)[0]
+        # check-existing resolves notes_file from a full checkout of
+        # github.sha (fetch-depth: 0, default ref); recover-publish must
+        # pin its own checkout to that exact same sha, never a different
+        # ref, or the two could silently disagree about which commit's
+        # notes file is being published.
+        self.assertIn("ref: ${{ needs.check-existing.outputs.sha }}", recovery)
+
+
 class TestRecoveryArtifactEquality(unittest.TestCase):
     def test_matching_sha512_is_accepted(self):
         result = compare_artifact_sha512("a" * 128, "A" * 128)

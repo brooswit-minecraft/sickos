@@ -387,7 +387,13 @@ jobs:
   # overwrite guard would fail unconditionally. This job never creates a
   # GitHub Release; it only ever calls `rinth publish` directly (the one
   # named exception in docs/release-policy.md's "Ownership boundary") or
-  # falls back to a read-only `rinth versions latest` comparison.
+  # falls back to a read-only `rinth versions latest` comparison. The
+  # GitHub release body is never touched here (it's already correct from
+  # the first attempt's reusable-release.yml call, replay implies release
+  # creation already succeeded there) -- but MINECRAFT-49's "Publish to
+  # Modrinth directly" step does still need the same notes file check-existing
+  # resolved, or a recovered run silently publishes an empty Modrinth
+  # changelog even when docs/releases/<version>.md exists.
   recover-publish:
     needs: [check-existing]
     if: github.event_name == 'push' && needs.check-existing.outputs.branch == 'replay'
@@ -453,6 +459,11 @@ jobs:
           MINECRAFT: ${{ steps.targets.outputs.minecraft }}
           LOADERS: ${{ steps.targets.outputs.loaders }}
           CHANNEL: ${{ contains(needs.check-existing.outputs.version, '-') && 'beta' || 'release' }}
+          # MINECRAFT-49: same path check-existing resolved at this same
+          # immutable release source commit (needs.check-existing.outputs.sha,
+          # which this job's own checkout above is pinned to) -- empty when
+          # no notes file exists there, never a stale/different commit's path.
+          NOTES_FILE: ${{ needs.check-existing.outputs.notes_file }}
         run: |
           shopt -s nullglob
           mrpacks=(build/*.mrpack)
@@ -462,7 +473,11 @@ jobs:
           fi
           mrpack_file="${mrpacks[0]}"
           changelog_file="$RUNNER_TEMP/modrinth-changelog.txt"
-          printf '' > "$changelog_file"
+          if [ -n "$NOTES_FILE" ]; then
+            cp -- "$NOTES_FILE" "$changelog_file"
+          else
+            printf '' > "$changelog_file"
+          fi
 
           loader_flags=()
           while IFS= read -r loader; do
