@@ -470,6 +470,12 @@ def _find_heading_offsets(body, line_re):
 
 
 def extract_own_release_section(body):
+    # Normalize CRLF -> LF before any offset math. Heading matching already
+    # strips \r via rstrip("\r\n"), but slicing is done on the raw body, so an
+    # unnormalized CRLF body leaves stray \r bytes in the "verbatim" output
+    # (and a leading \r survives strip("\n") in extract_migration_section
+    # below, since \r is not in that strip set).
+    body = body.replace("\r\n", "\n")
     offsets = _find_heading_offsets(body, _H1_LINE_RE)
     if not offsets:
         return body

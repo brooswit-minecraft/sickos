@@ -296,6 +296,11 @@ misread as the next top-level heading and silently truncate the
 "verbatim" text mid-fence. An unterminated fence runs to the end of the
 body, and nothing inside it is ever treated as a heading boundary.
 
+The body is normalized (`\r\n` -> `\n`) before any of the above section
+slicing runs, so a release body written with CRLF line endings extracts
+byte-for-byte identically to its LF-normalized equivalent -- no stray `\r`
+bytes or extra leading/trailing blank lines from the normalization itself.
+
 The release body is fetched from
 `GET https://api.github.com/repos/<owner>/<repo>/releases/tags/<tag>`
 (note: the API path is `/releases/tags/<tag>`, plural, not the web URL's
