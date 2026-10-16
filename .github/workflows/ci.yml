@@ -23,9 +23,9 @@ jobs:
     secrets: inherit
 
   # MINECRAFT-38: fail when a pinned mod's required dependency is missing or
-  # out of range. Pinned to its own tag (not @v1) until v1 is reviewed forward.
+  # out of range. Pin the reviewed checker workflow to its immutable commit.
   dependency-check:
-    uses: brooswit-minecraft/schematic/.github/workflows/reusable-dependency-check.yml@dep-check-v1.0.0
+    uses: brooswit-minecraft/schematic/.github/workflows/reusable-dependency-check.yml@ae2ff76372e44189ad2c661bb6913cd9c244cd1d
 
   runtime-compatibility:
     runs-on: ubuntu-latest
