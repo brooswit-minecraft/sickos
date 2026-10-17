@@ -28,6 +28,31 @@ class ServerUpdatePolicyTest(unittest.TestCase):
     def test_trailer_case_is_insensitive(self):
         self.assertFalse(should_deploy("Release\n\nrelease-only: TRUE\n"))
 
+    def test_stranded_trailer_from_squash_composition_fails_closed(self):
+        # MINECRAFT-258 incident, verbatim (see tests/test_release_decisions.py
+        # for the full fixture/explanation): a squash merge split the branch
+        # head's single terminal trailer paragraph into two, stranding
+        # Release-Only above a fresh Co-authored-by-only final paragraph.
+        # should_deploy's own "no trailer -> deploy" default then fired for
+        # real, re-pointing and restarting a live hosted server that was
+        # never authorized to restart. Must raise, not silently deploy.
+        message = (
+            "MINECRAFT-258: bump Dynamic Battle Axes to 0.2.1 (#109)\n"
+            "\n"
+            "Pin the arc-sweep-race fix (dynamic-battle-axes v0.2.1) instead of the\n"
+            "0.2.0 jar, which still has the client/integrated-server thread race an\n"
+            "independent post-merge review found. Patch bump per CONTRIBUTING.md\n"
+            "(compatible mod bugfix).\n"
+            "\n"
+            "\n"
+            "Release-Only: true\n"
+            "\n"
+            "Co-authored-by: brooswit <10604446+brooswit@users.noreply.github.com>\n"
+            "Co-authored-by: Claude Sonnet 5 <noreply@anthropic.com>\n"
+        )
+        with self.assertRaises(ValueError):
+            should_deploy(message)
+
 
 def _jobs(*name_conclusion_pairs):
     return json.dumps({"jobs": [{"name": n, "conclusion": c} for n, c in name_conclusion_pairs]})

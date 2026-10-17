@@ -30,6 +30,94 @@ MISSING_CONFIG_VARS = ("MODRINTH_TOKEN", "MODRINTH_PROJECT_ID")
 # Section 1: hold-trailer detection.
 # --------------------------------------------------------------------------
 
+def _probe_trailer_keys(paragraph: str) -> set[str]:
+    """Lowercased trailer keys git itself would recognize if `paragraph`
+    were a message's own final paragraph. Delegates entirely to git's
+    parser -- via a throwaway probe message with a dummy subject line --
+    instead of approximating its trailer-block syntax with a hand-rolled
+    regex. That matters: git accepts a FOLDED continuation line (no colon
+    at all, e.g. a wrapped `Release-Hold-Reason: Wait for\\n operator
+    approval`) and an EMPTY value (`Release-Hold-Reason:` with nothing
+    after the colon) as part of a valid trailer block, and a regex
+    requiring every line to look like `Key: value` rejects both --
+    exactly the gap an independent review found in the first version of
+    this fix (both forms bypassed stranded-trailer detection entirely)."""
+    probe = "Probe subject\n\n" + paragraph + "\n"
+    result = subprocess.run(
+        ["git", "interpret-trailers", "--parse"],
+        input=probe,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return {
+        line.split(":", 1)[0].strip().lower()
+        for line in result.stdout.splitlines()
+        if ":" in line
+    }
+
+
+def _non_final_trailer_paragraph_keys(message: str) -> set[str]:
+    """Lowercased trailer keys found in any paragraph of `message` OTHER
+    THAN the final one, for every paragraph git's own parser would
+    independently recognize as a trailer block (see `_probe_trailer_keys`)
+    -- i.e. a trailer block that exists in the message but isn't the one
+    `git interpret-trailers --parse` actually inspects, since it only
+    ever looks at the final paragraph."""
+    paragraphs = re.split(r"\n[ \t]*\n", message.strip())
+    if len(paragraphs) <= 1:
+        return set()
+    keys: set[str] = set()
+    for paragraph in paragraphs[:-1]:
+        keys |= _probe_trailer_keys(paragraph)
+    return keys
+
+
+def _raise_if_stranded(name: str, message: str, recognized_output: str) -> None:
+    """Raise if `name` is a trailer key found in some non-final paragraph
+    of `message` (see `_non_final_trailer_paragraph_keys`) but was NOT
+    recognized by git's own parser on the full message (`recognized_output`,
+    i.e. `result.stdout` from the `--parse` call both has_trailer and
+    trailer_value already make).
+
+    A squash or rebase merge can compose a fresh final paragraph (most
+    visibly, GitHub's squash composer rebuilding `Co-authored-by:` lines)
+    and leave what was a single trailer paragraph on the branch split in
+    two on the merge commit -- observed on MINECRAFT-258: a branch head
+    whose message ended in one terminal paragraph (`Release-Only: true`
+    then `Co-authored-by:`) became a merge commit with `Release-Only:
+    true` as its own earlier paragraph and only `Co-authored-by:` in the
+    final one. `git interpret-trailers --parse` only ever reads the last
+    paragraph, so the trailer silently reads as absent -- which fails
+    OPEN for both Release-Only (server_update_policy.should_deploy
+    defaults to deploying when no trailer is present) and Release-Hold
+    (parse_hold defaults to not-held). Treating "stranded" the same as
+    "absent" is the actual defect; raising here instead gives both
+    callers the same fail-closed behavior they already have for an
+    outright invalid value, via the exact same exception type.
+
+    Deliberately narrow to paragraphs git's OWN parser would recognize in
+    isolation, so a prose mention lacking a blank-line separator (no
+    paragraph split at all) or embedded mid-paragraph with other prose
+    lines is unaffected -- both existing, intentional "not a trailer"
+    shapes stay exactly as before.
+    """
+    recognized_keys = {
+        line.split(":", 1)[0].strip().lower()
+        for line in recognized_output.splitlines()
+        if ":" in line
+    }
+    if name.lower() in recognized_keys:
+        return
+    if name.lower() in _non_final_trailer_paragraph_keys(message):
+        raise ValueError(
+            f"{name!r} is a trailer key in the message, but outside the final "
+            "paragraph git interpret-trailers recognizes -- likely stranded by a "
+            "squash/rebase merge composing a fresh final trailer paragraph "
+            "(observed: MINECRAFT-258). Refusing to silently treat it as absent."
+        )
+
+
 def has_trailer(name: str, message: str) -> bool:
     """True iff `message` carries a trailer keyed `name` (case-insensitive),
     using git's own trailer parser rather than a loose grep -- a mention of
@@ -49,6 +137,7 @@ def has_trailer(name: str, message: str) -> bool:
         text=True,
         check=True,
     )
+    _raise_if_stranded(name, message, result.stdout)
     for line in result.stdout.splitlines():
         if ":" not in line:
             continue
@@ -70,6 +159,7 @@ def trailer_value(name: str, message: str) -> str | None:
         text=True,
         check=True,
     )
+    _raise_if_stranded(name, message, result.stdout)
     for line in result.stdout.splitlines():
         if ":" not in line:
             continue
