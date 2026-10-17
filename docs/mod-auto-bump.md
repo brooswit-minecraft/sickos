@@ -163,16 +163,35 @@ directly rather than re-implemented, loaded by path since that filename
 has hyphens -- the same cross-script-reuse pattern
 `da-auto-bump-dispatch.py` already uses for `has_da_auto_bump_trailer`.
 
-15 tests in `tests/test_bump_mod.py` cover: already-pinned/no-candidate
+**Breaking changes fail closed by default (AC4).** The "no generic
+Migration-section extraction" limitation above means a breaking bump has
+real notes saying "a human must write migration/reset instructions" with
+no actual instructions attached -- auto-publishing that placeholder is
+not the same as satisfying AC4's "include BREAKING release notes plus
+migration/reset instructions" requirement. `run_engine(..., category=
+"breaking", allow_breaking=False)` (the default) therefore refuses with
+`EXIT_MIGRATION_MISSING` / outcome `"breaking_change_requires_human_review"`
+instead of writing anything; a caller that has independently confirmed
+real migration notes exist can pass `allow_breaking=True` to proceed.
+`scripts/poll-mod-updates.py` never passes `allow_breaking=True`, so a
+poll-derived breaking candidate is always reported for a human to handle
+by hand, never auto-published. When a bump does proceed, its notes file
+also now includes the candidate's own Modrinth changelog verbatim (under
+"`<mod>`'s own Modrinth changelog"), not only for a breaking release.
+
+16 tests in `tests/test_bump_mod.py` cover: already-pinned/no-candidate
 no-ops, a real bump (pin rewrite, pack-version bump, notes, staging),
-breaking-category handling, downgrade refusal, the identity/hash gate's
-failure modes (wrong project, forged bytes, a 404 lookup), and
-gate-failure/dirty-tree restore. The no-downgrade check's own
-previous-version lookup fails CLOSED, not open: if that lookup itself
-fails (e.g. a 404 because the currently-pinned version was unpublished),
-the engine refuses to bump rather than silently skipping the check --
-see "No-downgrade / replay comparator" above and
-`test_unparsable_previous_metadata_fails_closed_not_open`.
+the breaking-change fail-closed gate and its `allow_breaking=True`
+override, downgrade refusal, the identity/hash gate's failure modes
+(wrong project, forged bytes, a 404 lookup), and gate-failure/dirty-tree
+restore. The no-downgrade check's own previous-version lookup fails
+CLOSED, not open: if that lookup itself fails (e.g. a 404 because the
+currently-pinned version was unpublished), the engine refuses to bump
+rather than silently skipping the check -- see "No-downgrade / replay
+comparator" above and `test_unparsable_previous_metadata_fails_closed_not_open`.
+The no-downgrade check's own "cannot compare non-semver versions" outcome
+is `"unsupported_version_scheme"`, deliberately distinct from the generic
+`"config_error"` -- see the Trigger section below for why.
 
 ## Trigger: scripts/poll-mod-updates.py + mod-auto-bump-poll.yml
 
@@ -193,34 +212,64 @@ from the candidate's own Modrinth changelog
 (`modrinth_compat.derive_category_from_changelog` -- AC4; there is no
 trigger payload here to supply one the way DA's dispatch gets).
 
-Each successful bump is committed (not just staged) before the next mod
-is considered, so a second mod's bump reads the pack-version the first
-mod's commit just advanced -- two real, compatible updates discovered in
-the same poll become two sequential releases, never a lost or
-overwritten one. One mod failing its identity/hash gate does not stop the
-rest of the run; every mod's outcome (including failures) is in the
-run's JSON summary. The script itself never pushes, matching the engine's
-own convention. The workflow pushes each bump's commit SEPARATELY, one at
-a time, in the order they were made -- not once at the end for the whole
-run: a single push at the end would only ever trigger `release.yml` for
-the LAST commit's `pack.toml` version, leaving every earlier bump in the
-same run committed but never released (its own `docs/releases/*.md`
-orphaned). Pushing commit-by-commit gives each bump its own push event
-and its own release. Push-gating and credential-checking are driven by
-whether the run's summary recorded any `"bumped"` outcome, not by the
-script's overall exit code, so one mod's unresolvable failure never
-discards another mod's already-committed, verified bump in the same run
--- the job still fails afterward (so the failure is visible), but only
-after whatever succeeded is already pushed.
+**At most one real bump per run, by design (second review round).** A
+first implementation committed every eligible mod's bump in the same run
+(each its own commit) and pushed them commit-by-commit so each got its
+own push event. That IS enough to get each bump its own `release.yml`
+trigger -- but `release.yml` has its OWN concurrency group
+(`sickos-release`; see `.github/workflows/release.yml`) with the exact
+same "a run arriving while one is in-progress and one is pending
+replaces the pending one" semantics as `mod-auto-bump`'s own group, and a
+release run takes minutes while these pushes fire seconds apart. Verified
+against a live, read-only resolution of all 78 eligible pins: a run that
+found today's 9 real candidates would commit and push 9 pack versions
+and publish roughly 2 of them, leaving ~7 on `main` with a real pin
+change and a committed `docs/releases/<version>.md` but no release --
+`release.yml`'s own skipped-version detector is explicitly non-fatal, so
+nothing catches this automatically. `poll_and_bump` now stops as soon as
+it makes one real bump commit; every pin before it (no-op or otherwise)
+is still in this run's outcome list, and every pin after it is simply
+absent -- picked up by the next scheduled run 20 minutes later, not
+reported as any kind of failure. The script itself still never pushes,
+matching the engine's own convention; the workflow pushes that one
+commit, if any.
 
-9 tests in `tests/test_poll_mod_updates.py` cover: Dynamic Atmosphere's
+**Not every non-success outcome is a failure worth paging on.** Resolved
+against live Modrinth today, 10 of the 78 eligible pins hit an outcome
+that is a PERMANENT, per-pin property, not a transient or unexpected
+failure: 4 projects return HTTP 404 to an anonymous/no-token caller
+(`"resolution_failed"`), and 6 pins' currently-pinned `version_number` is
+not valid semver, so the no-downgrade comparator can never evaluate them
+(`"unsupported_version_scheme"`; this is also why that outcome is
+deliberately distinct from the generic `"config_error"` -- see the Write
+Path section above). A `"breaking_change_requires_human_review"` outcome
+(the fail-closed gate above) is the same kind of thing: not a bug, but
+not something a retry fixes either. `scripts/poll-mod-updates.py`'s
+`EXPECTED_GAP_OUTCOMES` keeps these out of the exit-code calculation
+(still printed as `::warning::` lines, still visible) specifically so the
+scheduled job is not red by construction from its very first run --
+these 10 pins are, as of this writing, simply not covered by this
+mechanism: the 4 anonymous-inaccessible ones need `MODRINTH_TOKEN` to be
+set (still held, see "Status"), and the 6 non-semver ones need either a
+human bump or a different comparator this document does not attempt.
+
+Push-gating and credential-checking are driven by whether the run's
+summary recorded a real bump, not by the script's overall exit code, so
+an unexpected failure elsewhere in the same run never blocks pushing a
+bump this run already made -- the job still fails afterward (so the
+failure is visible), but only after that push.
+
+12 tests in `tests/test_poll_mod_updates.py` cover: Dynamic Atmosphere's
 pin considered like any other (no-op when nothing is newer for it, bumped
 when something is), no-op when nothing is newer for a mod, a single bump
 actually committing with the right trailers, a changelog-derived category
-reaching the engine, two mods bumping and coalescing into two sequential
-pack versions in one run, an incompatible candidate correctly read as
-no-candidate, a downgrade reported (not crashed), and one mod's failure
-not blocking another mod's success in the same run.
+reaching the engine, only the FIRST of two simultaneously-eligible mods
+bumping in one run (the second is left for the next run), an incompatible
+candidate correctly read as no-candidate, a downgrade reported (not
+crashed), one mod's failure not blocking another mod's success in the
+same run, a breaking candidate refused rather than auto-published, and
+`main()`'s exit-code classification itself (expected gaps alone keep the
+run green; a genuine unexpected failure still fails it).
 
 `scripts/da-auto-bump-dispatch.py` gained `build_generic_commit_message`
 for this -- same shape as `build_commit_message`, with its own
@@ -248,7 +297,9 @@ whatever the earlier run already pushed.
   `version_type == "release"` prerelease exclusion), candidate
   resolution, no-downgrade/dedup decision, token-attaching fetcher
   (`make_fetcher`), and changelog-based category derivation
-  (`derive_category_from_changelog`) (34 tests).
+  (`derive_category_from_changelog`, heading-only -- a bare free-text
+  "breaking change(s)" match was removed after it matched "No breaking
+  changes.") (35 tests).
 - `scripts/modrinth_metadata.py` -- identity/hash verification, extracted
   from and still used by the DA engine (12 tests, plus DA's own 74 still
   pass unchanged).
@@ -257,16 +308,24 @@ whatever the earlier run already pushed.
 - The direct-pin-vs-packwiz decision above.
 - `Release-Only: true` on DA's generated commits (see `da-auto-bump.md`).
 - `scripts/bump_mod.py` -- the generalized write path, with the
-  no-downgrade lookup now failing closed and `assert_only_pin_changed_
-  under_mods` checking its own `git diff` call's exit code instead of
-  passing vacuously on a git failure (15 tests).
+  no-downgrade lookup now failing closed, its own "cannot compare
+  non-semver versions" outcome now distinct (`unsupported_version_scheme`,
+  not generic `config_error`), a fail-closed `allow_breaking` gate on
+  breaking changes (`EXIT_MIGRATION_MISSING` /
+  `breaking_change_requires_human_review`), the candidate's own changelog
+  now included in generated notes, and `assert_only_pin_changed_under_mods`
+  checking its own `git diff` call's exit code instead of passing
+  vacuously on a git failure (16 tests).
 - `scripts/poll-mod-updates.py` + `.github/workflows/mod-auto-bump-poll.yml`
   -- the generalized trigger, now covering Dynamic Atmosphere's own pin
   too, reading `pack.toml`'s `[versions]` shape strictly (raises rather
   than silently defaulting to `None, None`), threading `MODRINTH_TOKEN`
   into the version-list query, deriving category from each candidate's
-  changelog, and pushing each bump commit as its own push event instead
-  of collapsing a multi-mod run into one push (9 tests).
+  changelog, making AT MOST ONE bump commit per run (so it never asks
+  `release.yml` to run twice before the first run finishes), and
+  classifying permanent per-pin gaps (`EXPECTED_GAP_OUTCOMES`) separately
+  from unexpected failures so the scheduled job is not red by
+  construction (12 tests).
 - The shared `mod-auto-bump` concurrency group, covering both mechanisms.
 - `modrinth_compat.find_dependency_conflicts` -- refuses a candidate that
   declares a currently-pinned project `incompatible` (6 tests, plus 3
@@ -293,3 +352,19 @@ whatever the earlier run already pushed.
   project remains untested live -- unchanged from the existing DA holds.
   Unit tests exercise every decision path against mocked Modrinth
   responses; they are not live-run evidence.
+- **10 of the 78 eligible pins are not covered by this mechanism today**
+  (established by a one-time, authorized, read-only resolution against
+  live Modrinth, done under the review process for this ticket -- no
+  dispatch, credential, write, or publication probe): 4 projects return
+  HTTP 404 to an anonymous caller (Dynamic Atmosphere, Dynamic
+  Skateboards, Dynamic Terrain, Dynamic Vehicles) and need `MODRINTH_TOKEN`
+  set to become resolvable -- still held, per the no-live-run item above;
+  6 pins' currently-pinned `version_number` is not valid semver (Create:
+  Easy Structures, Cristel Lib, Geophilic, IceAndFire Community Edition,
+  Quark, Zeta) and so can never pass the no-downgrade comparator -- these
+  need either a human bump to a parseable version, or a different
+  comparator this document does not attempt. Both classes report as
+  `::warning::` lines and the `"resolution_failed"`/
+  `"unsupported_version_scheme"` outcomes (see "Trigger" above), not a
+  failed run, specifically so this list stays visible without paging on
+  it every 20 minutes.

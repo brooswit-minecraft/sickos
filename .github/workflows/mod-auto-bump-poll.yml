@@ -139,34 +139,42 @@ jobs:
           private-key: ${{ secrets.SICKOS_DISPATCH_APP_PRIVATE_KEY }}
           permission-contents: write
 
-      # --- Item 2 (MINECRAFT-362 review): push each mod's bump commit
-      # SEPARATELY, in the order poll-mod-updates.py made them, instead of
-      # one push of the final HEAD. A single push would only ever let
-      # release.yml see the LAST commit's pack.toml version: every earlier
-      # bump in the same run would have a real, committed pin change and a
-      # docs/releases/<version>.md file, but no corresponding GitHub push
-      # event to trigger its own release -- an orphaned, never-published
-      # version. Pushing commit-by-commit (each one a fast-forward of the
-      # last) gives each mod's bump its own push event and its own
-      # release.yml run, matching "each bump is its own release" the way a
-      # human pushing one bump at a time would.
-      - name: Push each bump commit to main, one at a time
+      # --- Item 1/2 (MINECRAFT-362 review, second round): poll-mod-
+      # updates.py now makes AT MOST ONE bump commit per run (see its own
+      # docstring): release.yml has its own concurrency group
+      # (sickos-release) with the same "a run arriving while one is
+      # in-progress and one is pending replaces the pending one" semantics
+      # as mod-auto-bump's group, and a release run takes minutes while
+      # pushes seconds apart would still race it -- pushing commit-by-
+      # commit fixed the push side of that race last round but not
+      # release.yml's own queue. One bump per run means this step pushes
+      # at most one commit, so this workflow never asks release.yml to run
+      # twice before the first run finishes.
+      - name: Push this run's one bump commit to main, if any
         if: steps.pause.outputs.paused != 'true' && steps.poll.outputs.has_bumps == 'true' && steps.creds.outputs.method != 'none'
         env:
           APP_TOKEN: ${{ steps.mint-app-token.outputs.token }}
           PAT_TOKEN: ${{ env.SICKOS_DISPATCH_TOKEN }}
           METHOD: ${{ steps.creds.outputs.method }}
         run: |
-          mapfile -t SHAS < <(python3 -c "
+          # Written to a file and checked explicitly, rather than
+          # `mapfile < <(python3 -c ...)`: in a process-substitution
+          # pipeline, mapfile observes only its own read, never the
+          # producer's exit status, so a python failure (e.g. malformed
+          # summary.json) would silently yield an empty SHAS array and
+          # fall into the same "Nothing to push" branch as a genuinely
+          # quiet run (MINECRAFT-362 review).
+          python3 -c "
           import json
           with open('$RUNNER_TEMP/summary.json') as f:
               outcomes = json.load(f)
           for outcome in outcomes:
               if outcome.get('outcome') == 'bumped':
                   print(outcome['commit_sha'])
-          ")
+          " > "$RUNNER_TEMP/bumped-sha.txt"
 
-          if [ "${#SHAS[@]}" -eq 0 ]; then
+          SHA="$(cat "$RUNNER_TEMP/bumped-sha.txt")"
+          if [ -z "$SHA" ]; then
             echo "Nothing to push: no mod had a compatible update this run."
             exit 0
           fi
@@ -180,13 +188,11 @@ jobs:
           # Same auth-header approach as da-auto-bump.yml's push step, and
           # for the same reason: never persist the token into git config.
           AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
-          for sha in "${SHAS[@]}"; do
-            if ! git -c http.https://github.com/.extraheader="$AUTH_HEADER" \
-                push "https://github.com/${{ github.repository }}.git" "$sha:main"; then
-              echo "::error::Push to main was rejected at commit $sha (non-fast-forward, or branch protection). Any earlier commit in this list already pushed successfully and was already released. This run is safe to re-run: every engine run in scripts/poll-mod-updates.py is idempotent and will recompute fresh bumps against the current tip of main."
-              exit 1
-            fi
-          done
+          if ! git -c http.https://github.com/.extraheader="$AUTH_HEADER" \
+              push "https://github.com/${{ github.repository }}.git" "$SHA:main"; then
+            echo "::error::Push to main was rejected (non-fast-forward, or branch protection). This run is safe to re-run: scripts/poll-mod-updates.py is idempotent and will recompute a fresh bump against the current tip of main."
+            exit 1
+          fi
 
       - name: Fail the run if the poll reported any failures
         if: always() && steps.pause.outputs.paused != 'true' && steps.poll.outputs.exit_code != '0'

@@ -176,7 +176,6 @@ def resolve_latest_compatible_version(mod_id, *, game_version, loader, fetcher):
 
 
 _BREAKING_RE = re.compile(r"^#{1,6}\s*breaking\b", re.IGNORECASE | re.MULTILINE)
-_BREAKING_PHRASE_RE = re.compile(r"\bbreaking changes?\b", re.IGNORECASE)
 _FEATURE_RE = re.compile(r"^#{1,6}\s*features?\b", re.IGNORECASE | re.MULTILINE)
 _FIX_RE = re.compile(r"^#{1,6}\s*fix(?:e[sd])?\b", re.IGNORECASE | re.MULTILINE)
 
@@ -188,9 +187,13 @@ def derive_category_from_changelog(changelog):
     explicit category in its trigger payload (docs/da-auto-bump.md), which
     has no equivalent here since nothing dispatches a poll run.
 
-    Looks for a conventional "## Breaking" / "## Feature(s)" / "## Fix(es)"
-    style heading, case-insensitive. The most severe match wins when more
-    than one heading is present (a changelog that mixes fixes with a
+    Looks ONLY for a conventional "## Breaking" / "## Feature(s)" /
+    "## Fix(es)" style heading, case-insensitive -- deliberately not a
+    free-text phrase match on e.g. "breaking change(s)": that matched "No
+    breaking changes." as breaking (MINECRAFT-362 review), since a bare
+    substring search cannot tell a heading announcing a breaking change
+    apart from a sentence denying one. The most severe match wins when
+    more than one heading is present (a changelog that mixes fixes with a
     breaking change must still be treated as breaking, not patch). Returns
     None -- "unknown", per AC4 -- when no such heading is found, rather
     than guessing from arbitrary free text; the caller then defaults to
@@ -198,7 +201,7 @@ def derive_category_from_changelog(changelog):
     """
     if not changelog:
         return None
-    if _BREAKING_RE.search(changelog) or _BREAKING_PHRASE_RE.search(changelog):
+    if _BREAKING_RE.search(changelog):
         return "breaking"
     if _FEATURE_RE.search(changelog):
         return "minor"

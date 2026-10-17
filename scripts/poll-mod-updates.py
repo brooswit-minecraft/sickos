@@ -26,18 +26,42 @@ real race to protect against by excluding it -- only a real gap in
 recovering a dropped dispatch, which excluding it would reopen
 (MINECRAFT-362 review).
 
-Each eligible mod with a real update is a SEPARATE commit, made (not just
-staged) before the next mod is considered -- so a second mod's bump reads
-the pack.toml version the first mod's commit just advanced, and "two
-mods' updates in the same run" coalesce into two sequential releases
-rather than colliding on the same pack.toml edit. This script never
-pushes (same convention as scripts/bump-dynamic-atmosphere.py and
-scripts/bump_mod.py); the calling workflow pushes once at the end.
+This run makes AT MOST ONE real bump commit, then stops -- it does NOT
+keep considering the rest of the eligible pins after the first bump
+(MINECRAFT-362 review, second round). A prior version of this script
+committed every eligible mod's bump in the same run (each its own
+commit) and relied on the calling workflow to push each commit
+separately so each got its own release.yml run. That does give each
+bump its own push event, but release.yml has its OWN concurrency group
+(`sickos-release`, see .github/workflows/release.yml) with the same
+"a run arriving while one is in-progress and one is pending replaces the
+pending one" semantics this module's own docstring already describes for
+`mod-auto-bump` -- and a release run takes minutes while these pushes
+fire seconds apart, so a multi-bump run reliably outruns its own
+releases and drops the middle ones (confirmed against live Modrinth
+resolution of all eligible pins: 9 real bumps found on one run would
+have published roughly 2 of them, leaving ~7 with a real committed pin
+change and a docs/releases/<version>.md on main that release.yml's own
+(non-fatal) skipped-version detector would then flag forever). Stopping
+after one bump per poll run means at most one release.yml run is ever
+triggered by this workflow at a time; the next scheduled run (20 minutes
+later) picks up wherever this one left off, so multiple real updates
+still converge, just one release per run instead of racing several.
 
-One run's full outcome (one entry per considered mod) is always printed
-as JSON to stdout and optionally written to --summary-out, so a failure
-partway through a multi-mod run is still fully visible, not just the
-mods that happened to succeed before it.
+Every pin examined before that (whether this run's own bump, or an
+earlier pin that turned out to be a no-op/expected-gap/failure) is still
+in the summary -- only pins past the first real bump are left for a
+later run, and they are simply absent from this run's summary, not
+reported as any kind of failure.
+
+This script never pushes (same convention as
+scripts/bump-dynamic-atmosphere.py and scripts/bump_mod.py); the calling
+workflow pushes the one commit, if any, after this script returns.
+
+One run's full outcome (one entry per pin examined) is always printed as
+JSON to stdout and optionally written to --summary-out, so a failure
+partway through is still fully visible, not just the pins that happened
+to resolve before it.
 """
 
 from __future__ import annotations
@@ -59,6 +83,31 @@ import modrinth_compat  # noqa: E402
 # already makes it safe for this poll and da-auto-bump.yml's dispatch to
 # both resolve Dynamic Atmosphere's pin.
 EXCLUDED_PIN_PATHS = frozenset()
+
+# Outcomes that are a PERMANENT, per-pin property this poll cannot fix by
+# retrying, as opposed to an unexpected failure (MINECRAFT-362 review,
+# second round -- against live Modrinth resolution of all 78 eligible
+# pins today, 4 projects return HTTP 404 to an anonymous/no-token caller,
+# and 6 pins' currently-pinned version_number is not strict x.y.z semver,
+# so the no-downgrade comparator can never evaluate them):
+# - "resolution_failed": the project's version list is not resolvable
+#   with the token this run has (including none at all).
+# - "unsupported_version_scheme": the no-downgrade check cannot compare
+#   the pinned version's own version_number because it is not valid
+#   semver.
+# - "breaking_change_requires_human_review": a real candidate exists but
+#   this generic engine refuses to auto-publish a breaking change with no
+#   migration notes (see bump_mod.run_engine's allow_breaking gate).
+# Without this distinction, main()'s exit code would be permanently
+# nonzero (10 of 78 pins hit one of the first two outcomes every single
+# run) -- a scheduled job that is red by construction from its first run
+# onward teaches everyone watching it to ignore red, which is worse than
+# not having the job. These are still printed as warnings (see main()),
+# and documented in docs/mod-auto-bump.md, so they stay visible without
+# failing the run.
+EXPECTED_GAP_OUTCOMES = frozenset({
+    "resolution_failed", "unsupported_version_scheme", "breaking_change_requires_human_review",
+})
 
 
 def _load_build_generic_commit_message():
@@ -115,9 +164,13 @@ def commit_bump(repo_root, message, run_command=subprocess.run):
 
 
 def poll_and_bump(repo_root, *, token=None, fetcher=None, run_command=subprocess.run):
-    """Returns a list of one outcome dict per eligible, non-excluded mod,
-    in the order mod_eligibility.discover_eligible_pins returns them
-    (alphabetical by pin filename -- deterministic across runs)."""
+    """Returns a list of one outcome dict per pin examined, in the order
+    mod_eligibility.discover_eligible_pins returns them (alphabetical by
+    pin filename -- deterministic across runs), STOPPING as soon as one
+    real bump commit is made (see this module's docstring for why: at
+    most one bump per run avoids racing release.yml's own concurrency
+    group). Pins after that point are simply not in this run's outcome
+    list; they are picked up by the next scheduled run."""
     repo_root = Path(repo_root)
     game_version, loader = read_pack_targets(repo_root)
     # Built with `token` (never the bare, unauthenticated default_fetcher)
@@ -186,6 +239,10 @@ def poll_and_bump(repo_root, *, token=None, fetcher=None, run_command=subprocess
             listing_review_required=summary["listing_review_required"],
         )
         outcomes.append(outcome)
+        # Stop here (see this module's and poll_and_bump's docstrings):
+        # at most one bump commit per run, so at most one release.yml run
+        # is ever triggered by this workflow at a time.
+        break
 
     return outcomes
 
@@ -205,8 +262,15 @@ def main(argv=None):
     if args.summary_out:
         Path(args.summary_out).write_text(summary_text + "\n", encoding="utf-8")
 
+    for outcome in outcomes:
+        if outcome["outcome"] in EXPECTED_GAP_OUTCOMES:
+            print(
+                f"::warning::{outcome['mod_name']} ({outcome['pin_path']}) not covered this run: "
+                f"outcome={outcome['outcome']!r}, error={outcome.get('error')}"
+            )
+
     failed = [o for o in outcomes if o["outcome"] not in
-              ("no_candidate", "already_pinned", "bumped")]
+              ("no_candidate", "already_pinned", "bumped") and o["outcome"] not in EXPECTED_GAP_OUTCOMES]
     return 1 if failed else 0
 
 

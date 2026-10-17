@@ -183,10 +183,22 @@ class TestDeriveCategoryFromChangelog(unittest.TestCase):
     def test_breaking_heading_is_breaking(self):
         self.assertEqual(modrinth_compat.derive_category_from_changelog("## Breaking\n- renamed a config key"), "breaking")
 
-    def test_breaking_phrase_without_heading_is_breaking(self):
+    def test_breaking_phrase_without_heading_is_not_breaking(self):
+        # No heading -> None (unknown), not a free-text phrase match: a
+        # bare substring search for "breaking change(s)" cannot tell a
+        # heading announcing one apart from prose denying one (see the
+        # next test), so only the heading form counts.
+        self.assertIsNone(
+            modrinth_compat.derive_category_from_changelog("This release has breaking changes to the API.")
+        )
+
+    def test_denial_of_breaking_changes_without_heading_is_not_breaking(self):
+        # Previously matched "breaking" via the removed free-text phrase
+        # regex (MINECRAFT-362 review); the actual heading present here
+        # ("## Fixes") now correctly wins instead.
         self.assertEqual(
-            modrinth_compat.derive_category_from_changelog("This release has breaking changes to the API."),
-            "breaking",
+            modrinth_compat.derive_category_from_changelog("## Fixes\n- fixed a crash\n\nNo breaking changes."),
+            "patch",
         )
 
     def test_mixed_fix_and_breaking_is_breaking_not_patch(self):

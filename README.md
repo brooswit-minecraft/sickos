@@ -530,6 +530,15 @@ the Actions UI is a harder stop than the pause variable: it silently
 **drops** dispatches sent while disabled, with nothing to re-run and
 nothing queued, so prefer the pause variable.
 
+Note: if the poll backstop (not this dispatch path) is what ends up
+pinning a Dynamic Atmosphere release, it goes through the generalized
+engine (`scripts/bump_mod.py`), not this one -- the README-sentence
+rewrite and Migration-section extraction below are specific to this
+dispatch path and do not happen on that recovery route; the generic
+engine instead always flags `listing_review_required`, and a breaking
+change on that route is refused outright rather than auto-published with
+a placeholder (see [docs/mod-auto-bump.md](docs/mod-auto-bump.md)).
+
 **Credentials.** A commit pushed with the default `GITHUB_TOKEN` does not
 trigger `release.yml`'s push trigger, so this workflow mints its own push
 token: a GitHub App token (`SICKOS_DISPATCH_APP_ID` +

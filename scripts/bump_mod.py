@@ -85,6 +85,7 @@ EXIT_NOTES_EXISTS = _da.EXIT_NOTES_EXISTS
 EXIT_CONFIG_ERROR = _da.EXIT_CONFIG_ERROR
 EXIT_UNEXPECTED_ERROR = _da.EXIT_UNEXPECTED_ERROR
 EXIT_DIRTY_TREE = _da.EXIT_DIRTY_TREE
+EXIT_MIGRATION_MISSING = _da.EXIT_MIGRATION_MISSING
 
 KNOWN_CATEGORIES = _da.KNOWN_CATEGORIES
 render_pin = _da.render_da_pin  # fully generic despite the name: name/filename/side/url/hash/mod-id/version
@@ -205,8 +206,16 @@ def render_notes(*, pin, new_pack_version, previous_pack_version, candidate, map
         lines.append(
             "This release advances the minor version (Sickos is pre-1.0) and includes a "
             "breaking change. No automated migration text is available for a generic mod "
-            "bump -- a human must write migration/reset instructions before this release ships."
+            "bump -- a human must write migration/reset instructions before this release ships. "
+            "(run_engine refuses to reach this point at all unless the caller explicitly passed "
+            "allow_breaking=True, having already confirmed real migration notes exist -- see "
+            "the mod's own changelog below.)"
         )
+        lines.append("")
+    if candidate.changelog:
+        lines.append(f"## {pin.name}'s own Modrinth changelog")
+        lines.append("")
+        lines.append(candidate.changelog.strip())
         lines.append("")
     lines.append("## Listing review")
     lines.append("")
@@ -256,7 +265,7 @@ def _no_candidate_summary(pin):
 
 def run_engine(repo_root, pin, candidate, *, category=None,
                 downloader=default_downloader, run_command=subprocess.run,
-                gate_commands=None, metadata_fetcher=None, token=None):
+                gate_commands=None, metadata_fetcher=None, token=None, allow_breaking=False):
     """Bump `pin` (scripts/mod_eligibility.EligiblePin) to `candidate`
     (scripts/modrinth_compat.VersionCandidate, already filtered for
     game-version/loader compatibility by the caller). Returns
@@ -373,8 +382,14 @@ def run_engine(repo_root, pin, candidate, *, category=None,
             f"the currently pinned {previous_version_number}; refusing to downgrade",
         )
     if downgrade_decision == "unparsable_version":
+        # Deliberately NOT the generic "config_error" outcome: a non-semver
+        # version scheme is a per-pin, permanent property (not a one-off
+        # configuration mistake this run could recover from), so callers
+        # that poll many pins need to tell it apart from an unexpected
+        # failure -- see poll-mod-updates.py's EXPECTED_GAP_OUTCOMES
+        # (MINECRAFT-362 review).
         raise EngineError(
-            EXIT_CONFIG_ERROR, "config_error",
+            EXIT_CONFIG_ERROR, "unsupported_version_scheme",
             f"cannot compare non-semver version(s) for {pin.name}: "
             f"{candidate.version_number!r}, {previous_version_number!r}",
         )
@@ -395,6 +410,25 @@ def run_engine(repo_root, pin, candidate, *, category=None,
 
     previous_pack_version = load_pack_version(repo_root)
     new_pack_version, mapping_rule = bump_pack_version(previous_pack_version, category)
+
+    # AC4: a generic bump has no Migration-section-extraction mechanism
+    # (unlike DA's dedicated engine), so it cannot itself produce the
+    # "migration/reset instructions" AC4 requires for a breaking change --
+    # auto-publishing a placeholder saying "a human must write migration
+    # instructions" is not the same as having them. Fail closed by
+    # default; a caller that has independently confirmed real migration
+    # notes exist (e.g. a human running this engine by hand after reading
+    # the candidate's changelog) can pass allow_breaking=True to proceed
+    # anyway (MINECRAFT-362 review).
+    if mapping_rule == "breaking_as_minor" and not allow_breaking:
+        raise EngineError(
+            EXIT_MIGRATION_MISSING, "breaking_change_requires_human_review",
+            f"{pin.name} candidate {candidate.version_number} is a breaking change; this "
+            "generic engine cannot auto-generate migration/reset instructions. Refusing to "
+            "auto-publish a placeholder in their place -- a human must review this release and "
+            "re-run with allow_breaking=True (or --allow-breaking) once real migration notes "
+            "are ready.",
+        )
 
     releases_dir = repo_root / "docs" / "releases"
     notes_target = releases_dir / f"{new_pack_version}.md"

@@ -215,25 +215,31 @@ class TestPollAndBump(unittest.TestCase):
         self.assertIn("Mod-Auto-Bump: ALPHA1 ALPHANEW", log)
         self.assertIn("Release-Only: true", log)
 
-    def test_two_mods_bump_in_the_same_run_coalesce_sequentially(self):
+    def test_two_mods_pending_only_the_first_bumps_this_run(self):
+        # At most one bump commit per run (MINECRAFT-362 review, second
+        # round): a multi-bump run would race release.yml's own
+        # concurrency group and drop every release but the last. Alpha
+        # sorts first alphabetically, so it bumps and the run stops;
+        # Beta is left for the next scheduled run, not reported as any
+        # kind of failure -- it simply has no entry in this run's summary.
         self.modrinth.register_latest("ALPHA1", "ALPHANEW", "1.1.0", b"alpha v2")
         self.modrinth.register_old_pin_metadata("ALPHAOLD", "ALPHA1", "1.0.0")
         self.modrinth.register_latest("BETA1", "BETANEW", "2.0.0", b"beta v2")
         self.modrinth.register_old_pin_metadata("BETAOLD", "BETA1", "1.0.0")
 
+        before_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
         outcomes = self.run_poll()
+        after_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
+
         by_mod = {o["mod_id"]: o for o in outcomes}
         self.assertEqual(by_mod["ALPHA1"]["outcome"], "bumped")
-        self.assertEqual(by_mod["BETA1"]["outcome"], "bumped")
-        # Alpha bumps 0.22.0 -> 0.23.0 (minor default); beta then reads that
-        # committed 0.23.0 and bumps again -> 0.24.0. Two real, distinct
-        # commits, never a lost/overwritten update.
-        self.assertEqual(by_mod["BETA1"]["new_pack_version"], "0.24.0")
-        self.assertNotEqual(by_mod["ALPHA1"]["commit_sha"], by_mod["BETA1"]["commit_sha"])
+        self.assertNotIn("BETA1", by_mod)
+        self.assertEqual(by_mod["ALPHA1"]["new_pack_version"], "0.23.0")
 
-        log = _git(self.repo, "log", "--format=%s", "-2").stdout
-        self.assertIn("Alpha Mod", log)
-        self.assertIn("Beta Mod", log)
+        # Exactly one commit was made this run.
+        log_shas = _git(self.repo, "log", "--format=%H", f"{before_head}..{after_head}").stdout.split()
+        self.assertEqual(len(log_shas), 1)
+        self.assertEqual(log_shas[0], after_head)
 
     def test_incompatible_version_is_skipped_as_no_candidate(self):
         self.modrinth.register_latest(
@@ -284,6 +290,67 @@ class TestPollAndBump(unittest.TestCase):
         by_mod = {o["mod_id"]: o for o in outcomes}
         self.assertEqual(by_mod["ALPHA1"]["outcome"], "integrity_failure")
         self.assertEqual(by_mod["BETA1"]["outcome"], "bumped")
+
+    def test_breaking_change_is_not_auto_published(self):
+        # bump_mod.run_engine's allow_breaking gate (default False) fires
+        # for a poll-derived "breaking" category -- this script never
+        # passes allow_breaking=True, so a breaking candidate is reported,
+        # not silently published with a placeholder migration note.
+        entry = version_entry(
+            "ALPHA1", "ALPHANEW", "2.0.0", b"breaking alpha",
+            changelog="## Breaking\n- renamed a config key",
+        )
+        self.modrinth.version_lists["ALPHA1"] = [entry]
+        self.modrinth.single_versions["ALPHANEW"] = version_metadata_from_entry(entry, "ALPHA1")
+        self.modrinth.content_by_url[entry["files"][0]["url"]] = b"breaking alpha"
+        self.modrinth.register_old_pin_metadata("ALPHAOLD", "ALPHA1", "1.0.0")
+
+        before_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
+        outcomes = self.run_poll()
+        after_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
+
+        by_mod = {o["mod_id"]: o for o in outcomes}
+        self.assertEqual(by_mod["ALPHA1"]["outcome"], "breaking_change_requires_human_review")
+        self.assertFalse(by_mod["ALPHA1"]["changed"])
+        self.assertEqual(before_head, after_head)
+
+
+class TestMainExitCode(unittest.TestCase):
+    """Exercises main()'s pass/fail classification directly (item 2,
+    MINECRAFT-362 review second round) without touching Modrinth or git --
+    poll_and_bump itself is mocked, since what's under test here is purely
+    "does this set of outcomes make the job red or green"."""
+
+    def _run_main_with(self, outcomes):
+        with mock.patch.object(poll_mod_updates, "poll_and_bump", return_value=outcomes):
+            with mock.patch.dict("os.environ", {}, clear=False):
+                import io
+                import contextlib
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf):
+                    exit_code = poll_mod_updates.main(["--repo-root", "."])
+        return exit_code, buf.getvalue()
+
+    def test_expected_gaps_alone_do_not_fail_the_run(self):
+        outcomes = [
+            {"mod_id": "A", "mod_name": "A", "pin_path": "mods/a.pw.toml", "outcome": "resolution_failed", "error": "404"},
+            {"mod_id": "B", "mod_name": "B", "pin_path": "mods/b.pw.toml", "outcome": "unsupported_version_scheme", "error": "x"},
+            {"mod_id": "C", "mod_name": "C", "pin_path": "mods/c.pw.toml", "outcome": "breaking_change_requires_human_review", "error": "y"},
+            {"mod_id": "D", "mod_name": "D", "pin_path": "mods/d.pw.toml", "outcome": "no_candidate", "error": None},
+        ]
+        exit_code, output = self._run_main_with(outcomes)
+        self.assertEqual(exit_code, 0)
+        self.assertIn("::warning::A (mods/a.pw.toml)", output)
+        self.assertIn("::warning::B (mods/b.pw.toml)", output)
+        self.assertIn("::warning::C (mods/c.pw.toml)", output)
+
+    def test_a_real_unexpected_failure_still_fails_the_run(self):
+        outcomes = [
+            {"mod_id": "A", "mod_name": "A", "pin_path": "mods/a.pw.toml", "outcome": "resolution_failed", "error": "404"},
+            {"mod_id": "E", "mod_name": "E", "pin_path": "mods/e.pw.toml", "outcome": "integrity_failure", "error": "bad hash"},
+        ]
+        exit_code, _ = self._run_main_with(outcomes)
+        self.assertEqual(exit_code, 1)
 
 
 if __name__ == "__main__":

@@ -170,11 +170,13 @@ class EngineTestCase(unittest.TestCase):
     def porcelain(self):
         return _git(self.repo, "status", "--porcelain").stdout
 
-    def run_engine(self, pin, candidate, *, content=b"new mod jar", category=None, gate_commands=None):
+    def run_engine(self, pin, candidate, *, content=b"new mod jar", category=None, gate_commands=None,
+                   allow_breaking=False):
         return bump_mod.run_engine(
             self.repo, pin, candidate, category=category,
             downloader=make_downloader(content), run_command=subprocess.run,
             gate_commands=gate_commands or STUB_GATES, metadata_fetcher=self.fetch_mock,
+            allow_breaking=allow_breaking,
         )
 
 
@@ -230,18 +232,39 @@ class TestSuccessfulBump(EngineTestCase):
         self.assertIn("mods/example-mod.pw.toml", staged)
         self.assertIn("pack.toml", staged)
 
-    def test_breaking_category_bumps_minor_and_flags_breaking_in_notes(self):
+    def test_breaking_category_fails_closed_without_allow_breaking(self):
+        # AC4 requires real migration/reset instructions on a breaking
+        # release; this generic engine cannot generate them, so it must
+        # refuse rather than auto-publish a placeholder in their place
+        # (MINECRAFT-362 review).
         content = b"breaking jar"
         candidate = make_candidate(content=content, version_number="2.0.0")
         self.register(candidate.version_id, metadata_for(candidate))
         self.register(OLD_VERSION_ID, {"id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0"})
         pin = make_pin()
+        before = self.porcelain()
 
-        summary, exit_code, _ = self.run_engine(pin, candidate, content=content, category="breaking")
+        with self.assertRaises(bump_mod.EngineError) as ctx:
+            self.run_engine(pin, candidate, content=content, category="breaking")
+        self.assertEqual(ctx.exception.exit_code, bump_mod.EXIT_MIGRATION_MISSING)
+        self.assertEqual(ctx.exception.outcome, "breaking_change_requires_human_review")
+        self.assertEqual(self.porcelain(), before)
+
+    def test_breaking_category_bumps_minor_and_flags_breaking_in_notes_with_allow_breaking(self):
+        content = b"breaking jar"
+        candidate = make_candidate(content=content, version_number="2.0.0", changelog="## Breaking\n- renamed a key")
+        self.register(candidate.version_id, metadata_for(candidate))
+        self.register(OLD_VERSION_ID, {"id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0"})
+        pin = make_pin()
+
+        summary, exit_code, _ = self.run_engine(
+            pin, candidate, content=content, category="breaking", allow_breaking=True,
+        )
         self.assertEqual(exit_code, bump_mod.EXIT_OK)
         self.assertEqual(summary["mapping_rule"], "breaking_as_minor")
-        notes_path = self.repo / summary["notes_path"]
-        self.assertIn("BREAKING", notes_path.read_text(encoding="utf-8"))
+        notes_text = (self.repo / summary["notes_path"]).read_text(encoding="utf-8")
+        self.assertIn("BREAKING", notes_text)
+        self.assertIn("renamed a key", notes_text)
 
     def test_unparsable_previous_metadata_fails_closed_not_open(self):
         # The previous-version lookup fails (404) -- e.g. the currently
