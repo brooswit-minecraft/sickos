@@ -53,9 +53,26 @@ class ServerTuningGateContractTest(unittest.TestCase):
         self.assertIn("!cancelled()", gate)
         self.assertNotIn("always()", gate)
 
-    def test_guard_reads_release_message_from_a_separate_checkout(self):
+    def test_guard_reads_job_evidence_from_the_triggering_run_by_id(self):
+        # Not a commit/trailer re-derivation: github.event.workflow_run.head_sha
+        # is not guaranteed to be the commit that actually triggered the
+        # chain (MINECRAFT-258 review, second pass). The guard must key off
+        # the triggering run's own immutable id and its own job list.
         guard_job = self.workflow.split("\n  release-only-guard:\n", 1)[1].split(
             "\n  sync:\n", 1
         )[0]
-        self.assertIn("path: release-source", guard_job)
-        self.assertIn("git -C release-source show", guard_job)
+        self.assertIn("github.event.workflow_run.id", guard_job)
+        self.assertIn("/jobs", guard_job)
+        self.assertNotIn("head_sha", guard_job)
+        self.assertNotIn("server_update_policy.py", guard_job)
+
+    def test_guard_fails_closed_on_unreadable_or_ambiguous_job_evidence(self):
+        guard_job = self.workflow.split("\n  release-only-guard:\n", 1)[1].split(
+            "\n  sync:\n", 1
+        )[0]
+        # The "API call itself failed" branch and the "ambiguous job
+        # shape" branch must both land on deploy=false, never deploy=true;
+        # only the unambiguous-success branch may emit deploy=true.
+        self.assertEqual(guard_job.count("echo 'deploy=false'"), 3)
+        self.assertEqual(guard_job.count("echo 'deploy=true'"), 1)
+        self.assertIn("actions: read", self.workflow.split("on:", 1)[1].split("jobs:", 1)[0])

@@ -42,17 +42,39 @@ name: Server tuning
 #     fire this live SFTP sync even on a Release-Only release (observed:
 #     https://github.com/brooswit-minecraft/sickos/actions/runs/39049941209
 #     ran right after https://github.com/brooswit-minecraft/sickos/actions/runs/39049928024
-#     skipped its own deploy). The release-only-guard job re-reads the
-#     SAME commit's Release-Only trailer via the SAME script
-#     server-update.yml's deployment-policy job uses, rather than trusting
-#     the upstream run's conclusion to imply its deploy decision. The
-#     sync job's gate below is deliberately `== 'true'` (not `!= 'false'`)
-#     with `!cancelled()` (not `always()`): a guard-job failure, an
-#     infra blip, or an operator cancel must all fail CLOSED (no live
-#     write) rather than fail open, matching server-update.yml's own
-#     `deploy == 'true'` polarity and the fail-closed contract
+#     skipped its own deploy).
+#
+#     FIRST FIX, FOUND WRONG BY REVIEW: re-reading the Release-Only trailer
+#     off `github.event.workflow_run.head_sha` is not safe — that field is
+#     NOT guaranteed to be the commit that actually triggered the chain.
+#     If main moves between "Release" starting and "Server update"
+#     finishing, head_sha can resolve to a LATER commit than the one
+#     deployment-policy actually evaluated, so this workflow would honor
+#     a different commit's trailer than the one "Server update" itself
+#     used — exactly backwards for a second hop in a workflow_run chain.
+#     (GitHub's own workflow_run docs: the event reports the default
+#     branch's current head, not a pinned reference to the triggering
+#     push.) FIX: don't re-derive the decision from a commit at all —
+#     read the ACTUAL job evidence of the specific triggering run, by its
+#     immutable `github.event.workflow_run.id`, via the Actions API. A
+#     literal job named "server-update" (not "server-update / ...") only
+#     ever appears, and only with conclusion skipped, when
+#     deployment-policy decided deploy=false and the reusable-workflow
+#     call itself never ran (confirmed against real runs: 39049928024 for
+#     the skip shape, 38505769236 for the real-deploy shape, whose actual
+#     work appears as "server-update / deploy-method" and
+#     "server-update / Upload and restart server"). This is authoritative
+#     for THAT run specifically — no commit, no trailer, no SHA-drift
+#     possible, since a run's own job list cannot describe any other run.
+#     Ambiguous, missing or partially-failed job evidence fails CLOSED
+#     (no live write), same polarity as server-update.yml's own
+#     `deploy == 'true'` and the fail-closed contract
 #     scripts/server_update_policy.py already asserts for a malformed
 #     trailer (tests/test_server_update_policy.py::test_invalid_value_fails_closed).
+#     The sync job's gate below is `== 'true'` (not `!= 'false'`) with
+#     `!cancelled()` (not `always()`) for the same reason: a guard-job
+#     failure or an operator cancel must not leave the live write
+#     eligible by default.
 on:
   push:
     branches: [main]
@@ -68,6 +90,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: schematic-sftp-${{ github.repository }}
@@ -80,37 +103,37 @@ jobs:
     outputs:
       deploy: ${{ steps.policy.outputs.deploy }}
     steps:
-      # Two checkouts, same shape as server-update.yml's own
-      # deployment-policy job: the default checkout is THIS workflow's own
-      # tree (so scripts/server_update_policy.py is whatever version ci.yml
-      # already tested on this branch, not whatever happens to exist at the
-      # release commit), and release-source/ is only ever read for its
-      # commit message.
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
-          path: release-source
-          persist-credentials: false
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Honor the originating release's Release-Only trailer
+      - name: Read actual deploy evidence from the triggering run's own jobs
         id: policy
         env:
-          UPSTREAM_EVENT: ${{ github.event.workflow_run.event }}
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
-          if [ "$UPSTREAM_EVENT" = "workflow_dispatch" ]; then
-            # "Server update" itself deploys unconditionally on its own
-            # manual-dispatch path (see that workflow's deployment-policy
-            # job) -- mirror that here instead of reading a trailer that
-            # may belong to an unrelated earlier commit at head_sha.
+          set -o pipefail
+          if ! jobs_json="$(gh api "repos/${{ github.repository }}/actions/runs/${RUN_ID}/jobs")"; then
+            echo "::warning::could not read jobs for Server update run $RUN_ID; failing closed"
+            echo 'deploy=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Unambiguous "did not deploy": the reusable-workflow CALL job
+          # itself (named exactly "server-update", never "server-update /
+          # ...") only appears, and only skipped, when deployment-policy
+          # decided deploy=false and the call never ran.
+          skipped_call=$(jq '[.jobs[] | select(.name == "server-update" and .conclusion == "skipped")] | length' <<<"$jobs_json")
+          deploy_jobs=$(jq '[.jobs[] | select(.name | startswith("server-update /"))]' <<<"$jobs_json")
+          succeeded_deploy_jobs=$(jq '[.[] | select(.conclusion == "success")] | length' <<<"$deploy_jobs")
+          # "skipped" among these is a normal internal conditional step
+          # inside the reusable workflow (e.g. "Update server" when a
+          # different deploy method was used) -- not failure evidence.
+          # Only an actually bad outcome disqualifies the deploy.
+          bad_deploy_jobs=$(jq '[.[] | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out" or .conclusion == "action_required")] | length' <<<"$deploy_jobs")
+          if [ "$skipped_call" != "0" ]; then
+            echo 'deploy=false' >> "$GITHUB_OUTPUT"
+          elif [ "$succeeded_deploy_jobs" != "0" ] && [ "$bad_deploy_jobs" = "0" ]; then
             echo 'deploy=true' >> "$GITHUB_OUTPUT"
           else
-            git -C release-source show -s --format=%B > "$RUNNER_TEMP/release-message.txt"
-            python3 scripts/server_update_policy.py "$RUNNER_TEMP/release-message.txt" >> "$GITHUB_OUTPUT"
+            echo "::warning::ambiguous Server update job evidence for run $RUN_ID (jobs: $(jq -c '[.jobs[] | {name, conclusion}]' <<<"$jobs_json")); failing closed"
+            echo 'deploy=false' >> "$GITHUB_OUTPUT"
           fi
 
   sync:
