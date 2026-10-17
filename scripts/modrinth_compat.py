@@ -18,11 +18,16 @@ identity/hash gate (modrinth_metadata.py) and no-downgrade comparator
 (semver_compare.py) are exactly what a resolved candidate would be
 verified against -- not a second, divergent implementation of either.
 
-Dependency validation here is intentionally narrow: it checks the
-candidate version's own declared `game_versions`/`loaders` compatibility.
-It does NOT resolve the mod's `dependencies` list against what else is
-pinned in the pack (a full dependency graph solve) -- that is explicitly
-listed as a remaining gap, not silently assumed.
+Dependency validation here is intentionally narrow: `find_dependency_conflicts`
+only catches a candidate that declares another project `incompatible`
+while that project is currently pinned -- an unambiguous, verifiable
+conflict. It does NOT resolve `required`/`optional` dependencies against
+what else is pinned (a full dependency-graph solve, including version
+ranges and transitively-missing requirements), since Modrinth's own
+dependency entries do not carry enough information for this pack to tell
+a genuinely-missing requirement from one that is local-only/out-of-pack
+by design (see `find_dependency_conflicts`'s docstring). That fuller
+solve remains a documented gap, not silently assumed covered.
 """
 
 from __future__ import annotations
@@ -171,3 +176,39 @@ def decide_update(pin, candidate, *, previous_version_number=None):
     except ValueError:
         return "unparsable_version"
     return "downgrade_refused" if comparison <= 0 else "candidate"
+
+
+def find_dependency_conflicts(candidate, pinned_mod_ids):
+    """Check `candidate.dependencies` (Modrinth's own declared list, as
+    returned by GET /v2/project/{id}/version) against what is currently
+    pinned in the pack, identified only by mod id (project id).
+
+    Returns a list of human-readable conflict strings; empty means no
+    conflict found. Deliberately narrow, not a full dependency-graph
+    solve (see this module's docstring): a Modrinth dependency entry
+    names a project and sometimes an exact version id, never a semver
+    *range* this pack could evaluate without also fetching whatever is
+    pinned for every dependency, transitively -- that solve is out of
+    scope. What IS unambiguous and checked here: a candidate that
+    declares another project `incompatible` while that project is
+    currently pinned in this pack is a real, verifiable conflict,
+    regardless of version. A `required` dependency whose project is not
+    currently pinned is NOT reported as a conflict -- Modrinth has no way
+    to tell this pack whether that project is itself local-only/out of
+    the public pack (like Herobrine API/Baritone) or genuinely missing,
+    so treating every unmet `required` entry as fatal would produce false
+    positives this pass cannot distinguish from true ones.
+    """
+    conflicts = []
+    for dependency in candidate.dependencies:
+        if not isinstance(dependency, dict):
+            continue
+        if dependency.get("dependency_type") != "incompatible":
+            continue
+        conflicting_project_id = dependency.get("project_id")
+        if conflicting_project_id in pinned_mod_ids:
+            conflicts.append(
+                f"{candidate.version_number} declares project {conflicting_project_id!r} "
+                "incompatible, and it is currently pinned in this pack"
+            )
+    return conflicts

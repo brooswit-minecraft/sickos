@@ -19,6 +19,7 @@ ELIGIBILITY_SPEC.loader.exec_module(mod_eligibility)
 
 resolve_latest_compatible_version = modrinth_compat.resolve_latest_compatible_version
 decide_update = modrinth_compat.decide_update
+find_dependency_conflicts = modrinth_compat.find_dependency_conflicts
 CompatResolutionError = modrinth_compat.CompatResolutionError
 EligiblePin = mod_eligibility.EligiblePin
 
@@ -171,6 +172,64 @@ class TestDecideUpdate(unittest.TestCase):
             decide_update(pin, candidate, previous_version_number="not-a-version"),
             "unparsable_version",
         )
+
+
+def make_candidate_with_deps(dependencies, **overrides):
+    defaults = dict(
+        version_id="NEWID", version_number="1.0.0", file_name="mod.jar",
+        sha1="a" * 40, sha512="b" * 128, download_url="https://x",
+        dependencies=tuple(dependencies),
+    )
+    defaults.update(overrides)
+    return modrinth_compat.VersionCandidate(**defaults)
+
+
+class TestFindDependencyConflicts(unittest.TestCase):
+    def test_no_dependencies_no_conflicts(self):
+        candidate = make_candidate_with_deps([])
+        self.assertEqual(find_dependency_conflicts(candidate, {"OTHER1", "OTHER2"}), [])
+
+    def test_incompatible_dependency_not_pinned_is_fine(self):
+        candidate = make_candidate_with_deps(
+            [{"project_id": "NOTPINNED", "dependency_type": "incompatible"}]
+        )
+        self.assertEqual(find_dependency_conflicts(candidate, {"OTHER1"}), [])
+
+    def test_incompatible_dependency_that_is_pinned_is_a_conflict(self):
+        candidate = make_candidate_with_deps(
+            [{"project_id": "OTHER1", "dependency_type": "incompatible"}]
+        )
+        conflicts = find_dependency_conflicts(candidate, {"OTHER1", "OTHER2"})
+        self.assertEqual(len(conflicts), 1)
+        self.assertIn("OTHER1", conflicts[0])
+        self.assertIn("incompatible", conflicts[0])
+
+    def test_required_dependency_not_pinned_is_not_reported(self):
+        # Modrinth cannot tell us whether a missing required dep is
+        # local-only/out-of-pack (like Herobrine API) or genuinely
+        # missing -- this pass deliberately does not guess.
+        candidate = make_candidate_with_deps(
+            [{"project_id": "NOTPINNED", "dependency_type": "required"}]
+        )
+        self.assertEqual(find_dependency_conflicts(candidate, {"OTHER1"}), [])
+
+    def test_optional_dependency_never_a_conflict(self):
+        candidate = make_candidate_with_deps(
+            [{"project_id": "OTHER1", "dependency_type": "optional"}]
+        )
+        self.assertEqual(find_dependency_conflicts(candidate, {"OTHER1"}), [])
+
+    def test_multiple_incompatible_conflicts_all_reported(self):
+        candidate = make_candidate_with_deps([
+            {"project_id": "OTHER1", "dependency_type": "incompatible"},
+            {"project_id": "OTHER2", "dependency_type": "incompatible"},
+        ])
+        conflicts = find_dependency_conflicts(candidate, {"OTHER1", "OTHER2"})
+        self.assertEqual(len(conflicts), 2)
+
+    def test_non_dict_dependency_entries_are_skipped_not_crashed(self):
+        candidate = make_candidate_with_deps(["not-a-dict", 123, None])
+        self.assertEqual(find_dependency_conflicts(candidate, {"OTHER1"}), [])
 
 
 if __name__ == "__main__":

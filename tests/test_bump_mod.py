@@ -34,6 +34,7 @@ STUB_GATES = {"refresh": ["true"], "check": ["true"], "build": ["true"]}
 FAILING_CHECK_GATES = {"refresh": ["true"], "check": ["false"], "build": ["true"]}
 
 MOD_ID = "EXAMPLE1"
+OTHER_MOD_ID = "OTHER1"
 OLD_VERSION_ID = "OLDID1234"
 OLD_HASH = "a" * 128
 
@@ -79,6 +80,22 @@ def build_fixture_repo():
         "[update.modrinth]\n"
         f'mod-id = "{MOD_ID}"\n'
         f'version = "{OLD_VERSION_ID}"\n',
+        encoding="utf-8",
+    )
+    (repo / "mods" / "other-mod.pw.toml").write_text(
+        'name = "Other Mod"\n'
+        'filename = "othermod-1.0.0.jar"\n'
+        'side = "both"\n'
+        "\n"
+        "[download]\n"
+        f'url = "https://cdn.modrinth.com/data/{OTHER_MOD_ID}/versions/OTHEROLD/othermod-1.0.0.jar"\n'
+        'hash-format = "sha512"\n'
+        f'hash = "{"d" * 128}"\n'
+        "\n"
+        "[update]\n"
+        "[update.modrinth]\n"
+        f'mod-id = "{OTHER_MOD_ID}"\n'
+        'version = "OTHEROLD"\n',
         encoding="utf-8",
     )
     (repo / ".gitignore").write_text("/build/\n", encoding="utf-8")
@@ -322,6 +339,52 @@ class TestDirtyTreeRefusal(EngineTestCase):
         with self.assertRaises(bump_mod.EngineError) as ctx:
             self.run_engine(pin, candidate, content=b"x")
         self.assertEqual(ctx.exception.exit_code, bump_mod.EXIT_DIRTY_TREE)
+
+
+class TestDependencyConflict(EngineTestCase):
+    def test_incompatible_with_a_currently_pinned_mod_fails_closed(self):
+        content = b"conflicting jar"
+        candidate = make_candidate(
+            content=content,
+            dependencies=({"project_id": OTHER_MOD_ID, "dependency_type": "incompatible"},),
+        )
+        self.register(candidate.version_id, metadata_for(candidate))
+        self.register(OLD_VERSION_ID, {"id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0"})
+        pin = make_pin()
+
+        before = self.porcelain()
+        with self.assertRaises(bump_mod.EngineError) as ctx:
+            self.run_engine(pin, candidate, content=content)
+        self.assertEqual(ctx.exception.exit_code, bump_mod.EXIT_CONFIG_ERROR)
+        self.assertEqual(ctx.exception.outcome, "dependency_conflict")
+        self.assertIn(OTHER_MOD_ID, ctx.exception.message)
+        self.assertEqual(self.porcelain(), before)
+
+    def test_incompatible_with_a_mod_not_pinned_still_bumps(self):
+        content = b"harmless jar"
+        candidate = make_candidate(
+            content=content,
+            dependencies=({"project_id": "SOME_UNRELATED_MOD", "dependency_type": "incompatible"},),
+        )
+        self.register(candidate.version_id, metadata_for(candidate))
+        pin = make_pin()
+
+        summary, exit_code, _ = self.run_engine(pin, candidate, content=content)
+        self.assertEqual(exit_code, bump_mod.EXIT_OK)
+        self.assertTrue(summary["changed"])
+
+    def test_required_dependency_not_pinned_does_not_block_the_bump(self):
+        content = b"needs something jar"
+        candidate = make_candidate(
+            content=content,
+            dependencies=({"project_id": "SOME_UNRELATED_MOD", "dependency_type": "required"},),
+        )
+        self.register(candidate.version_id, metadata_for(candidate))
+        pin = make_pin()
+
+        summary, exit_code, _ = self.run_engine(pin, candidate, content=content)
+        self.assertEqual(exit_code, bump_mod.EXIT_OK)
+        self.assertTrue(summary["changed"])
 
 
 if __name__ == "__main__":

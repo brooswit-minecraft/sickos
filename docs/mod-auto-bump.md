@@ -52,10 +52,16 @@ and splits them into:
   `dynamicatmosphere-<version>.jar` scheme.
 
 **Explicit scope limit**: compatibility here means the candidate's own
-declared `game_versions`/`loaders`. It does **not** resolve the
-candidate's `dependencies` list against what else is currently pinned in
-the pack (a full dependency-graph solve across potentially many mods at
-once). That is a real gap, not an oversight -- see "Status."
+declared `game_versions`/`loaders`. `modrinth_compat.py` also has
+`find_dependency_conflicts(candidate, pinned_mod_ids)`, wired into
+`scripts/bump_mod.py`'s write path: it refuses a candidate that declares
+another *currently-pinned* project `incompatible` -- an unambiguous
+conflict. It does **not** attempt a full dependency-graph solve (version
+ranges, or treating a `required` dependency on a project that is not
+currently pinned as a conflict -- Modrinth's data cannot tell this pass
+whether that absence is a genuinely missing requirement or a
+local-only/out-of-pack mod by design, like Herobrine API/Baritone). That
+fuller solve is a real gap, not an oversight -- see "Status."
 
 ## Identity/hash verification -- shared with DA, not duplicated
 
@@ -195,11 +201,17 @@ whatever the earlier run already pushed.
 - `scripts/poll-mod-updates.py` + `.github/workflows/mod-auto-bump-poll.yml`
   -- the generalized trigger (7 tests).
 - The shared `mod-auto-bump` concurrency group, covering both mechanisms.
+- `modrinth_compat.find_dependency_conflicts` -- refuses a candidate that
+  declares a currently-pinned project `incompatible` (6 tests, plus 3
+  integration tests through `bump_mod.run_engine`).
 
 **Not implemented -- real gaps, not oversights:**
-- **Dependency-graph validation** across what's pinned (only each
-  candidate's own declared game-version/loader compatibility is checked,
-  not a full solve against other pins' own dependency lists).
+- **Full dependency-graph validation**: `find_dependency_conflicts` only
+  catches the unambiguous `incompatible`-and-currently-pinned case (see
+  above). It does not resolve a `required` dependency's version range,
+  and a `required` dependency on a project that is not currently pinned
+  is not treated as a conflict (this pass cannot tell a genuinely missing
+  requirement from a local-only/out-of-pack mod by design).
 - The two GitHub-release-only mods (`dynamic-despawn`, `magicavoxel-loader`)
   have no verified-identity mechanism at all yet -- a different source
   (GitHub's release-asset API, not Modrinth's version-file metadata) would

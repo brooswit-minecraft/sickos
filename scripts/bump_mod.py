@@ -29,10 +29,16 @@ docs/mod-auto-bump.md's "Status" section for the full list):
   flagged.
 - The Modrinth "vouch check" (AC8) was a DA-specific sanity check against
   a control mod; it has no generic analogue and is not attempted here.
-- No dependency-graph validation against other pinned mods -- only the
-  candidate's own declared game-version/loader compatibility
-  (already checked by modrinth_compat.resolve_latest_compatible_version
-  before a candidate ever reaches this engine).
+- No FULL dependency-graph validation against other pinned mods (version
+  ranges, transitively-missing requirements). This engine does refuse a
+  candidate that declares another currently-pinned project
+  `incompatible` (modrinth_compat.find_dependency_conflicts, checked
+  below against the pack's current on-disk pins) -- an unambiguous
+  conflict Modrinth's own data can answer with no guessing. A `required`
+  dependency on a project that is not currently pinned is NOT treated as
+  a conflict, for the reason find_dependency_conflicts documents: this
+  pass cannot distinguish a genuinely missing requirement from one that
+  is local-only/out-of-pack by design.
 """
 
 from __future__ import annotations
@@ -48,7 +54,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import modrinth_metadata  # noqa: E402 - needs sys.path set up first
-from modrinth_compat import decide_update  # noqa: E402
+import mod_eligibility  # noqa: E402
+from modrinth_compat import decide_update, find_dependency_conflicts  # noqa: E402
 
 
 def _load_da_engine():
@@ -352,6 +359,20 @@ def run_engine(repo_root, pin, candidate, *, category=None,
                 f"cannot compare non-semver version(s) for {pin.name}: "
                 f"{candidate.version_number!r}, {previous_version_number!r}",
             )
+
+    # Dependency check (narrow, see modrinth_compat.find_dependency_conflicts):
+    # refuse a candidate that declares another currently-pinned project
+    # incompatible. Reads the pack's CURRENT on-disk pins, before this
+    # run writes anything.
+    eligible_pins, _untracked = mod_eligibility.discover_eligible_pins(repo_root)
+    pinned_mod_ids = {eligible_pin.mod_id for eligible_pin in eligible_pins}
+    conflicts = find_dependency_conflicts(candidate, pinned_mod_ids)
+    if conflicts:
+        raise EngineError(
+            EXIT_CONFIG_ERROR, "dependency_conflict",
+            f"{pin.name} candidate {candidate.version_number} has dependency conflicts: "
+            + "; ".join(conflicts),
+        )
 
     previous_pack_version = load_pack_version(repo_root)
     new_pack_version, mapping_rule = bump_pack_version(previous_pack_version, category)
