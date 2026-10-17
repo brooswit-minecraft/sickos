@@ -30,6 +30,8 @@ def verify_version_file_metadata(
     expected_sha512,
     expected_sha1,
     expected_download_url,
+    expected_game_version=None,
+    expected_loader=None,
 ):
     """Return the matched Modrinth file entry, or raise MetadataVerificationError.
 
@@ -38,6 +40,21 @@ def verify_version_file_metadata(
     (so valid older bytes can never be represented as a newer version),
     exactly one file entry by filename, and sha512/sha1/url equality
     against that entry -- in that order, fail closed on the first mismatch.
+
+    `expected_game_version`/`expected_loader` are optional (MINECRAFT-362
+    review, seventeenth round): when BOTH are given, this metadata's own
+    declared `game_versions`/`loaders` must include them, or this refuses
+    too. This is a METADATA-level check -- the same fields this function
+    already reads -- not a second, divergent compatibility filter: the
+    generalized poll path's `modrinth_compat.resolve_latest_compatible_version`
+    already filters on these same two fields before a candidate ever
+    reaches here, so passing them through here is defense in depth for
+    that path; for `bump-dynamic-atmosphere.py`'s dispatch path, which has
+    no earlier compatibility filter AT ALL (it trusts an external
+    webhook's payload directly), this is the ONLY place such a check can
+    happen before a write -- omitting them here (the previous behavior)
+    meant a dispatch for a build declaring the wrong Minecraft version or
+    loader would still pin and publish successfully.
     """
 
     def refuse(reason):
@@ -54,6 +71,17 @@ def verify_version_file_metadata(
             f"metadata version_number {metadata.get('version_number')!r} does not equal "
             f"expected version {expected_version_number!r}"
         )
+    if expected_game_version is not None and expected_loader is not None:
+        if expected_game_version not in (metadata.get("game_versions") or ()):
+            refuse(
+                f"metadata game_versions {metadata.get('game_versions')!r} does not include "
+                f"this pack's target {expected_game_version!r}"
+            )
+        if expected_loader not in (metadata.get("loaders") or ()):
+            refuse(
+                f"metadata loaders {metadata.get('loaders')!r} does not include this pack's "
+                f"target {expected_loader!r}"
+            )
 
     files = metadata.get("files")
     if not isinstance(files, list):

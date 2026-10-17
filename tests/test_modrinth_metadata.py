@@ -105,5 +105,53 @@ class TestVerifyVersionFileMetadata(unittest.TestCase):
         verify_version_file_metadata(metadata, **EXPECTED_KWARGS)  # does not raise
 
 
+class TestVerifyVersionFileMetadataCompatibility(unittest.TestCase):
+    """MINECRAFT-362 review, seventeenth round: expected_game_version/
+    expected_loader are optional and, when omitted (both None, the
+    default), skip this check entirely -- existing callers (and
+    TestVerifyVersionFileMetadata above, via EXPECTED_KWARGS) are
+    unaffected. When BOTH are given, the metadata's own declared
+    game_versions/loaders must include them."""
+
+    def test_omitted_compatibility_args_skip_the_check_entirely(self):
+        metadata = make_metadata()  # no game_versions/loaders keys at all
+        verify_version_file_metadata(metadata, **EXPECTED_KWARGS)  # does not raise
+
+    def test_matching_game_version_and_loader_passes(self):
+        metadata = make_metadata(game_versions=["1.21.1"], loaders=["neoforge"])
+        verify_version_file_metadata(
+            metadata, **EXPECTED_KWARGS, expected_game_version="1.21.1", expected_loader="neoforge",
+        )  # does not raise
+
+    def test_wrong_game_version_refused(self):
+        metadata = make_metadata(game_versions=["1.20.1"], loaders=["neoforge"])
+        with self.assertRaisesRegex(MetadataVerificationError, "game_versions"):
+            verify_version_file_metadata(
+                metadata, **EXPECTED_KWARGS, expected_game_version="1.21.1", expected_loader="neoforge",
+            )
+
+    def test_wrong_loader_refused(self):
+        metadata = make_metadata(game_versions=["1.21.1"], loaders=["fabric"])
+        with self.assertRaisesRegex(MetadataVerificationError, "loaders"):
+            verify_version_file_metadata(
+                metadata, **EXPECTED_KWARGS, expected_game_version="1.21.1", expected_loader="neoforge",
+            )
+
+    def test_missing_game_versions_field_refused_when_checked(self):
+        metadata = make_metadata(loaders=["neoforge"])  # no game_versions key at all
+        with self.assertRaisesRegex(MetadataVerificationError, "game_versions"):
+            verify_version_file_metadata(
+                metadata, **EXPECTED_KWARGS, expected_game_version="1.21.1", expected_loader="neoforge",
+            )
+
+    def test_only_game_version_given_without_loader_skips_the_check(self):
+        # Both or neither -- a caller passing only one is treated the
+        # same as passing neither, not as "check only this one field."
+        metadata = make_metadata(game_versions=["1.20.1"], loaders=["fabric"])
+        verify_version_file_metadata(
+            metadata, **EXPECTED_KWARGS, expected_game_version="1.21.1",
+        )  # does not raise -- expected_loader was not also given
+
+
 if __name__ == "__main__":
     unittest.main()

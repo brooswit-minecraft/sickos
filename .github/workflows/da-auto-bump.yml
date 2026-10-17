@@ -91,9 +91,20 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       # --- Everything below is skipped while paused ----------------------
+      # Pinned to `main` explicitly (MINECRAFT-362 review, seventeenth
+      # round, P2): without an explicit `ref`, actions/checkout defaults
+      # to the triggering event's own sha, which a queued or re-run job
+      # keeps even after a later run has already pushed -- so this step
+      # would recompute against a now-stale base instead of the real
+      # current tip of main. `repository_dispatch` always targets the
+      # default branch (there is no attacker-controlled ref to pin
+      # against here the way mod-auto-bump-poll.yml's workflow_dispatch
+      # has -- see that file's own comment on this same fix), so this is
+      # purely the staleness fix, not also a ref-injection fix.
       - uses: actions/checkout@v4
         if: steps.pause.outputs.paused != 'true'
         with:
+          ref: main
           persist-credentials: false
 
       # --- Item 3: credential selection, checked before any push --------

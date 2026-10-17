@@ -19,13 +19,17 @@ identity/hash gate (modrinth_metadata.py) and no-downgrade comparator
 verified against -- not a second, divergent implementation of either.
 
 Dependency validation here is intentionally narrow: `find_dependency_conflicts`
-only catches a candidate that declares another project `incompatible`
-while that project is currently pinned -- an unambiguous, verifiable
-conflict. It does NOT resolve `required`/`optional` dependencies against
-what else is pinned (a full dependency-graph solve, including version
-ranges and transitively-missing requirements), since Modrinth's own
-dependency entries do not carry enough information for this pack to tell
-a genuinely-missing requirement from one that is local-only/out-of-pack
+catches a candidate that declares another project `incompatible` while
+that project is currently pinned, and (seventeenth review round) a
+candidate that declares another project `required` at an EXACT version
+while that project is pinned to a DIFFERENT one -- both unambiguous,
+verifiable conflicts scoped to projects already pinned in this pack. It
+does NOT resolve a `required`/`optional` dependency's semver *range*
+against what else is pinned, nor a `required` dependency on a project
+not pinned at all (a full dependency-graph solve, including
+transitively-missing requirements), since Modrinth's own dependency
+entries do not carry enough information for this pack to tell a
+genuinely-missing requirement from one that is local-only/out-of-pack
 by design (see `find_dependency_conflicts`'s docstring). That fuller
 solve remains a documented gap, not silently assumed covered.
 """
@@ -353,10 +357,14 @@ def decide_update(pin, candidate, *, previous_version_number=None, game_version=
     return "downgrade_refused" if comparison <= 0 else "candidate"
 
 
-def find_dependency_conflicts(candidate, pinned_mod_ids):
+def find_dependency_conflicts(candidate, pinned_versions_by_mod_id):
     """Check `candidate.dependencies` (Modrinth's own declared list, as
     returned by GET /v2/project/{id}/version) against what is currently
-    pinned in the pack, identified only by mod id (project id).
+    pinned in the pack. `pinned_versions_by_mod_id` maps mod_id ->
+    pinned_version_id for every currently-eligible pin (a plain
+    iterable of mod_ids also works for membership-only checks, since
+    `in` behaves the same on a set or a dict's keys -- only the
+    required-dependency check below needs the version values).
 
     Returns a list of human-readable conflict strings; empty means no
     conflict found. Deliberately narrow, not a full dependency-graph
@@ -364,26 +372,52 @@ def find_dependency_conflicts(candidate, pinned_mod_ids):
     names a project and sometimes an exact version id, never a semver
     *range* this pack could evaluate without also fetching whatever is
     pinned for every dependency, transitively -- that solve is out of
-    scope. What IS unambiguous and checked here: a candidate that
-    declares another project `incompatible` while that project is
-    currently pinned in this pack is a real, verifiable conflict,
-    regardless of version. A `required` dependency whose project is not
-    currently pinned is NOT reported as a conflict -- Modrinth has no way
-    to tell this pack whether that project is itself local-only/out of
-    the public pack (like Herobrine API/Baritone) or genuinely missing,
-    so treating every unmet `required` entry as fatal would produce false
-    positives this pass cannot distinguish from true ones.
+    scope. Two things ARE unambiguous and checked here, both scoped to
+    projects already pinned in this pack (never a solve over the whole
+    dependency graph):
+
+    - A candidate that declares another project `incompatible` while
+      that project is currently pinned in this pack is a real,
+      verifiable conflict, regardless of version.
+    - A candidate that declares another project `required` AT AN EXACT
+      version_id, while that project IS currently pinned to a
+      DIFFERENT version, is also a real, verifiable conflict (MINECRAFT-
+      362 review, seventeenth round): Modrinth already told this pack
+      exactly which version it needs, and this pack already has that
+      project pinned to a known, different one -- no transitive lookup
+      needed, unlike a semver-range `required` entry.
+
+    A `required` dependency whose project is not currently pinned AT
+    ALL is still NOT reported as a conflict, nor is a `required`
+    dependency with no exact `version_id` (only a project reference) --
+    Modrinth has no way to tell this pack whether that project is
+    itself local-only/out of the public pack (like Herobrine API/
+    Baritone) or genuinely missing, so treating every unmet `required`
+    entry as fatal would produce false positives this pass cannot
+    distinguish from true ones; this stays exactly as narrow as the
+    docstring above describes.
     """
     conflicts = []
     for dependency in candidate.dependencies:
         if not isinstance(dependency, dict):
             continue
-        if dependency.get("dependency_type") != "incompatible":
-            continue
-        conflicting_project_id = dependency.get("project_id")
-        if conflicting_project_id in pinned_mod_ids:
-            conflicts.append(
-                f"{candidate.version_number} declares project {conflicting_project_id!r} "
-                "incompatible, and it is currently pinned in this pack"
-            )
+        dependency_type = dependency.get("dependency_type")
+        project_id = dependency.get("project_id")
+        if dependency_type == "incompatible":
+            if project_id in pinned_versions_by_mod_id:
+                conflicts.append(
+                    f"{candidate.version_number} declares project {project_id!r} "
+                    "incompatible, and it is currently pinned in this pack"
+                )
+        elif dependency_type == "required":
+            required_version_id = dependency.get("version_id")
+            if not required_version_id or project_id not in pinned_versions_by_mod_id:
+                continue
+            pinned_version_id = pinned_versions_by_mod_id[project_id]
+            if pinned_version_id != required_version_id:
+                conflicts.append(
+                    f"{candidate.version_number} requires project {project_id!r} at exact "
+                    f"version {required_version_id!r}, but this pack has it pinned to "
+                    f"version {pinned_version_id!r}"
+                )
     return conflicts

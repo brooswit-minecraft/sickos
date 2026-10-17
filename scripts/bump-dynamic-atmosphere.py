@@ -497,12 +497,22 @@ def fetch_modrinth_version_metadata(version_id):
         return json.loads(response.read())
 
 
-def verify_against_modrinth_metadata(payload, fetcher):
+def verify_against_modrinth_metadata(payload, fetcher, *, game_version=None, loader=None):
     """Return the matched Modrinth file entry, or raise EngineError (fail closed).
 
     The actual identity/hash checks live in modrinth_metadata.py, shared
     with the generalized multi-mod resolver (MINECRAFT-362) so there is one
     implementation of this gate, not two that could drift.
+
+    `game_version`/`loader` (MINECRAFT-362 review, seventeenth round):
+    this dispatch path trusts an external webhook's `payload` directly
+    and, unlike the generalized poll path, has NO earlier step that
+    filters on (game_version, loader) compatibility at all -- so without
+    threading these through to the shared metadata check below, a
+    dispatch for a build declaring the wrong Minecraft version or loader
+    would still pin and publish successfully (confirmed: a prior version
+    of this function did exactly that). Both are required by the shared
+    check when given, so pass both or neither.
     """
     version_id = payload["modrinth_version_id"]
 
@@ -530,6 +540,8 @@ def verify_against_modrinth_metadata(payload, fetcher):
             expected_sha512=payload["sha512"],
             expected_sha1=payload["sha1"],
             expected_download_url=payload["download_url"],
+            expected_game_version=game_version,
+            expected_loader=loader,
         )
     except modrinth_metadata.MetadataVerificationError as error:
         refuse(str(error))
@@ -925,7 +937,10 @@ def run_engine(repo_root, payload_raw, *, release_body_override=None,
                 "own section of the DA GitHub release body",
             )
 
-    verify_against_modrinth_metadata(payload, metadata_fetcher or fetch_modrinth_version_metadata)
+    verify_against_modrinth_metadata(
+        payload, metadata_fetcher or fetch_modrinth_version_metadata,
+        game_version=da_game_version, loader=da_loader,
+    )
     download_and_verify(payload["download_url"], payload["sha1"], payload["sha512"], downloader)
 
     vouch = run_vouch_check(repo_root, payload["sha512"])

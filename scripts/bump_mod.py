@@ -29,16 +29,19 @@ docs/mod-auto-bump.md's "Status" section for the full list):
   flagged.
 - The Modrinth "vouch check" (AC8) was a DA-specific sanity check against
   a control mod; it has no generic analogue and is not attempted here.
-- No FULL dependency-graph validation against other pinned mods (version
-  ranges, transitively-missing requirements). This engine does refuse a
-  candidate that declares another currently-pinned project
-  `incompatible` (modrinth_compat.find_dependency_conflicts, checked
-  below against the pack's current on-disk pins) -- an unambiguous
-  conflict Modrinth's own data can answer with no guessing. A `required`
-  dependency on a project that is not currently pinned is NOT treated as
-  a conflict, for the reason find_dependency_conflicts documents: this
-  pass cannot distinguish a genuinely missing requirement from one that
-  is local-only/out-of-pack by design.
+- No FULL dependency-graph validation against other pinned mods (semver
+  *ranges*, transitively-missing requirements). This engine does refuse
+  a candidate that declares another currently-pinned project
+  `incompatible`, and (seventeenth review round) one that `required`s a
+  currently-pinned project at an EXACT version this pack has pinned to
+  something else (modrinth_compat.find_dependency_conflicts, checked
+  below against the pack's current on-disk pins and versions) -- both
+  unambiguous conflicts Modrinth's own data can answer with no guessing.
+  A `required` dependency on a project that is not currently pinned at
+  all, or with no exact version_id, is NOT treated as a conflict, for
+  the reason find_dependency_conflicts documents: this pass cannot
+  distinguish a genuinely missing requirement from one that is
+  local-only/out-of-pack by design.
 """
 
 from __future__ import annotations
@@ -374,6 +377,14 @@ def run_engine(repo_root, pin, candidate, *, category=None,
             expected_sha512=candidate.sha512,
             expected_sha1=candidate.sha1,
             expected_download_url=candidate.download_url,
+            # Defense in depth (MINECRAFT-362 review, seventeenth round):
+            # resolve_latest_compatible_version already filtered on these
+            # same two fields before this candidate was ever selected, so
+            # this is a re-check against the freshly-refetched metadata,
+            # not the only check -- same principle as this module's own
+            # "never trust a filter you did not verify" comment elsewhere.
+            expected_game_version=game_version,
+            expected_loader=loader,
         )
     except modrinth_metadata.MetadataVerificationError as error:
         raise EngineError(
@@ -512,11 +523,14 @@ def run_engine(repo_root, pin, candidate, *, category=None,
 
     # Dependency check (narrow, see modrinth_compat.find_dependency_conflicts):
     # refuse a candidate that declares another currently-pinned project
-    # incompatible. Reads the pack's CURRENT on-disk pins, before this
-    # run writes anything.
+    # incompatible, OR that requires a currently-pinned project at an
+    # exact version this pack has pinned to something else (seventeenth
+    # review round). Reads the pack's CURRENT on-disk pins, before this
+    # run writes anything -- the version, not only the mod_id, is needed
+    # now for the second check.
     eligible_pins, _untracked = mod_eligibility.discover_eligible_pins(repo_root)
-    pinned_mod_ids = {eligible_pin.mod_id for eligible_pin in eligible_pins}
-    conflicts = find_dependency_conflicts(candidate, pinned_mod_ids)
+    pinned_versions_by_mod_id = {eligible_pin.mod_id: eligible_pin.pinned_version_id for eligible_pin in eligible_pins}
+    conflicts = find_dependency_conflicts(candidate, pinned_versions_by_mod_id)
     if conflicts:
         raise EngineError(
             EXIT_CONFIG_ERROR, "dependency_conflict",

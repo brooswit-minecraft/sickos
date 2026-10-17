@@ -20,6 +20,7 @@ on:
       - tests/test_modrinth_compat.py
       - tests/test_bump_mod.py
       - tests/test_poll_mod_updates.py
+      - tests/test_auto_bump_workflow_checkout.py
       - .github/workflows/da-auto-bump-tests.yml
       - .github/workflows/da-auto-bump.yml
       - .github/workflows/mod-auto-bump-poll.yml
@@ -43,6 +44,7 @@ on:
       - tests/test_modrinth_compat.py
       - tests/test_bump_mod.py
       - tests/test_poll_mod_updates.py
+      - tests/test_auto_bump_workflow_checkout.py
       - .github/workflows/da-auto-bump-tests.yml
       - .github/workflows/da-auto-bump.yml
       - .github/workflows/mod-auto-bump-poll.yml
@@ -93,6 +95,8 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_bump_mod.py'
       - name: Run mod auto-bump poll tests (MINECRAFT-362)
         run: python -m unittest discover -s tests -p 'test_poll_mod_updates.py'
+      - name: Run auto-bump workflow checkout-pinning tests (MINECRAFT-362)
+        run: python -m unittest discover -s tests -p 'test_auto_bump_workflow_checkout.py'
 
   actionlint:
     runs-on: ubuntu-latest

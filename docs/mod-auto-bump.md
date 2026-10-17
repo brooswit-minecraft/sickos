@@ -93,15 +93,19 @@ and splits them into:
 
 **Explicit scope limit**: compatibility here means the candidate's own
 declared `game_versions`/`loaders`. `modrinth_compat.py` also has
-`find_dependency_conflicts(candidate, pinned_mod_ids)`, wired into
-`scripts/bump_mod.py`'s write path: it refuses a candidate that declares
-another *currently-pinned* project `incompatible` -- an unambiguous
-conflict. It does **not** attempt a full dependency-graph solve (version
-ranges, or treating a `required` dependency on a project that is not
-currently pinned as a conflict -- Modrinth's data cannot tell this pass
-whether that absence is a genuinely missing requirement or a
-local-only/out-of-pack mod by design, like Herobrine API/Baritone). That
-fuller solve is a real gap, not an oversight -- see "Status."
+`find_dependency_conflicts(candidate, pinned_versions_by_mod_id)`, wired
+into `scripts/bump_mod.py`'s write path: it refuses a candidate that
+declares another *currently-pinned* project `incompatible`, and
+(seventeenth review round) one that `required`s a currently-pinned
+project at an EXACT version this pack has pinned to something else --
+both unambiguous conflicts. It does **not** attempt a full
+dependency-graph solve (a `required`/`optional` dependency's semver
+*range*, or treating a `required` dependency on a project that is not
+currently pinned at all -- or pinned with no exact `version_id` named --
+as a conflict; Modrinth's data cannot tell this pass whether that
+absence is a genuinely missing requirement or a local-only/out-of-pack
+mod by design, like Herobrine API/Baritone). That fuller solve is a real
+gap, not an oversight -- see "Status."
 
 ## Identity/hash verification -- shared with DA, not duplicated
 
@@ -113,6 +117,23 @@ generalized write-path call the same implementation. `scripts/bump_mod.py`
 re-fetches `GET /v2/version/{id}` fresh and verifies it against exactly
 the candidate `modrinth_compat.py` picked from the version-LIST response,
 before any pin is ever written.
+
+It also optionally checks `(game_version, loader)` compatibility
+(`expected_game_version`/`expected_loader`, both-or-neither; seventeenth
+review round) against the metadata's own declared `game_versions`/
+`loaders` fields -- the same two fields `resolve_latest_compatible_version`
+already filtered the version-LIST response on before this candidate was
+ever selected. For `bump_mod.py`'s generalized path this is defense in
+depth over that earlier filter ("never trust a filter you did not
+verify"). For `bump-dynamic-atmosphere.py`'s dispatch path it is NOT
+defense in depth -- it is the FIRST and ONLY (game_version, loader)
+check anywhere on that path, since a dispatch payload originates outside
+Modrinth and has no earlier compatibility filter at all. Before this
+round, DA's own wrapper (`verify_against_modrinth_metadata`) never
+passed these two parameters, so a dispatch declaring the wrong Minecraft
+version or loader would pin and publish successfully (confirmed live
+with fixture metadata declaring Minecraft 1.20.1/Fabric against the
+1.21.1/NeoForge pack target).
 
 **What this gate does and does not establish**, stated precisely rather
 than by analogy to DA: both the list response and this fresh re-fetch
@@ -161,7 +182,16 @@ so it is the wrong tool for "pin exactly the version this event named."
 Direct-pin writing does not skip packwiz's own validation: `make refresh`,
 `make check`, and `make build` still run over the rewritten pin, for
 every mod, not only DA -- so packwiz itself still enforces the pack's
-index/dependency/hash consistency on the result. The write happens
+index/hash consistency on the result. This is NOT the same claim as
+"packwiz enforces dependency consistency" (MINECRAFT-362 review,
+seventeenth round -- a prior version of this sentence overstated this):
+`make refresh`/`make check`/`make build` regenerate and verify
+`index.toml`'s own hashes against the files on disk; none of them read
+or validate a mod's declared Modrinth dependencies against what else is
+pinned. That check is `modrinth_compat.find_dependency_conflicts`'s own,
+separate, narrower job (see "Compatibility and no-downgrade resolution"
+above), run by `bump_mod.run_engine` before any gate executes, not by
+packwiz at all. The write happens
 before any gate runs, but `git add` (staging) happens between `refresh`
 and `check`, not after `build` -- `make check` is `git diff --quiet --
 pack.toml index.toml mods` against the INDEX, not HEAD, so it only
@@ -305,7 +335,7 @@ notes file the way a verbatim splice did in the prior round, and capped
 at `MAX_CHANGELOG_CHARS` so one mod's long changelog cannot make the
 notes file unbounded.
 
-42 tests in `tests/test_bump_mod.py` cover: a real engine-level
+46 tests in `tests/test_bump_mod.py` cover: a real engine-level
 game-version+loader-prefixed major bump reaching the breaking gate
 (not just `semver_delta_category` in isolation), a previous-pin
 metadata id mismatch failing closed, already-pinned/no-candidate
@@ -655,9 +685,21 @@ and `mod-auto-bump-poll.yml` uses that same group name -- GitHub Actions
 concurrency groups serialize across *different* workflow files that share
 a group name, not only within one file, so a DA dispatch and a scheduled
 poll run now queue against each other, not just against runs of their own
-kind. Both still start from a fresh `actions/checkout` of the
-then-current `main` tip, so a later run always recomputes against
-whatever the earlier run already pushed.
+kind. Both now pin `actions/checkout`'s `ref: main` explicitly
+(seventeenth review round), so a later run always recomputes against
+whatever the earlier run already pushed. Before this round, that was
+true for a run's FIRST attempt but false for a QUEUED run or a RE-RUN:
+`actions/checkout` without an explicit `ref` defaults to the triggering
+event's own ref/sha, which a queued run (held behind an in-progress one
+in this shared concurrency group) or a re-run of a prior job keeps even
+after a later run has already pushed -- so either would silently
+recompute against a stale base rather than the real current tip of
+`main` (confirmed: a stale-based push is safely rejected by git as
+non-fast-forward, not silently accepted, but the documented
+"recomputes from the current tip" claim was still false for those two
+cases specifically). Pinning `ref: main` means the checkout step always
+resolves that named ref at ITS current state when the step actually
+runs, not a captured sha from whenever the job was first queued.
 
 ## Status
 
@@ -684,9 +726,15 @@ whatever the earlier run already pushed.
   comparison; and (tenth round) `NoParseableCandidateError`/
   `OnlyPrereleaseAvailableError`, each raised instead of a silent `None`
   so "nothing newer upstream" cannot be confused with "every candidate
-  was unparseable" or "only prereleases exist") (42 tests).
+  was unparseable" or "only prereleases exist"), and (seventeenth round)
+  `find_dependency_conflicts` extended to catch a `required` dependency
+  at an exact version mismatching a currently-pinned project's own
+  version (46 tests).
 - `scripts/modrinth_metadata.py` -- identity/hash verification, extracted
-  from and still used by the DA engine (12 tests).
+  from and still used by the DA engine, plus (seventeenth round) an
+  optional `(game_version, loader)` compatibility check against the
+  metadata's own declared `game_versions`/`loaders` fields, both-or-
+  neither (18 tests, up from 12).
 - `scripts/semver_compare.py` -- no-downgrade comparator, extracted from
   and still used by the DA engine, plus `semver_delta_category` (the
   real AC4 category source, see below -- including stripping every
@@ -699,8 +747,15 @@ whatever the earlier run already pushed.
   the same DA release got two different answers depending on which
   mechanism processed it. `delta_category`/`more_severe_category` now
   sit between the no-downgrade comparison and `bump_pack_version`, the
-  same shape as `scripts/bump_mod.py`'s own fix (76 tests, up from 74 --
-  2 new, several adjusted to use a genuinely-matching-category version
+  same shape as `scripts/bump_mod.py`'s own fix. Also gained (seventeenth
+  round) the SAME `(game_version, loader)` compatibility check threaded
+  into `verify_against_modrinth_metadata` -- unlike the generalized
+  path's defense-in-depth re-check, this was the FIRST and ONLY such
+  check anywhere on this dispatch path, since a dispatch payload has no
+  earlier compatibility filter at all (79 tests, up from 74 -- 2 new in
+  the eighth round, 3 more in the seventeenth proving a wrong loader,
+  wrong game version, and metadata missing both fields all fail closed;
+  several others adjusted to use a genuinely-matching-category version
   delta rather than relying on the old payload-only default).
 - The direct-pin-vs-packwiz decision above.
 - `Release-Only: true` on DA's generated commits (see `da-auto-bump.md`).
@@ -732,7 +787,11 @@ whatever the earlier run already pushed.
   `make check`'s `git diff --quiet` against the INDEX actually passes --
   one test exercises this with the real `git diff --quiet` predicate in
   place of a stub, and a second (skipped where `packwiz` is not
-  installed) runs the real `packwiz refresh` binary too (42 tests).
+  installed) runs the real `packwiz refresh` binary too, and (seventeenth
+  round) two tests exercising `find_dependency_conflicts`'s new exact-
+  version `required` check through the real engine, and two more
+  exercising the new `(game_version, loader)` defense-in-depth re-check
+  against a freshly-refetched candidate's own metadata (46 tests).
 - `scripts/poll-mod-updates.py` + `.github/workflows/mod-auto-bump-poll.yml`
   -- the generalized trigger, now covering Dynamic Atmosphere's own pin
   too, reading `pack.toml`'s `[versions]` shape strictly (raises rather
@@ -777,17 +836,46 @@ whatever the earlier run already pushed.
   `read_pack_targets` result (see the Compatibility and Write Path
   sections above).
 - The shared `mod-auto-bump` concurrency group, covering both mechanisms.
+- **Checkout pinned to `ref: main`** in both `mod-auto-bump-poll.yml` and
+  `da-auto-bump.yml` (seventeenth review round) -- without it,
+  `actions/checkout` defaults to the triggering event's own ref/sha.
+  For `mod-auto-bump-poll.yml`'s `workflow_dispatch` trigger that is
+  WHATEVER ref the dispatch call named, so a manual dispatch against an
+  ahead-of-main feature branch would fast-forward that branch's own
+  unrelated ancestors onto `main` along with the generated bump commit
+  (confirmed live against an isolated local bare repository, no remote
+  push performed). For both workflows, a queued or re-run job otherwise
+  keeps the ORIGINAL event's sha even after a later run in the same
+  concurrency group has already pushed, recomputing against a stale
+  base rather than the real current tip of `main` (confirmed: local Git
+  reproduction of a rejected push from a stale base). `ref: main` fixes
+  both. `tests/test_auto_bump_workflow_checkout.py` guards this by
+  asserting the YAML itself pins it, since no Python-level test
+  otherwise exercises the real `actions/checkout` behavior (2 tests).
 - `modrinth_compat.find_dependency_conflicts` -- refuses a candidate that
-  declares a currently-pinned project `incompatible` (6 tests, plus 3
+  declares a currently-pinned project `incompatible`, and (seventeenth
+  round) one that `required`s a currently-pinned project at an exact
+  version this pack has pinned to something else (11 tests, plus 5
   integration tests through `bump_mod.run_engine`).
 
 **Not implemented -- real gaps, not oversights:**
 - **Full dependency-graph validation**: `find_dependency_conflicts` only
-  catches the unambiguous `incompatible`-and-currently-pinned case (see
-  above). It does not resolve a `required` dependency's version range,
-  and a `required` dependency on a project that is not currently pinned
-  is not treated as a conflict (this pass cannot tell a genuinely missing
-  requirement from a local-only/out-of-pack mod by design).
+  catches the unambiguous `incompatible`-and-currently-pinned case and
+  the `required`-at-an-exact-version-that-mismatches-the-pin case (see
+  above; seventeenth round added the second). It does not resolve a
+  `required` dependency's semver RANGE, and a `required` dependency on
+  a project that is not currently pinned at all -- or with no exact
+  `version_id` named -- is not treated as a conflict (this pass cannot
+  tell a genuinely missing requirement from a local-only/out-of-pack mod
+  by design).
+- **DA's own dispatch-driven engine** (`scripts/bump-dynamic-atmosphere.py`)
+  does not call `find_dependency_conflicts` at all, unlike the
+  generalized write path (seventeenth review round, noted but not
+  fixed this round: a candidate DA's dispatch resolves could declare
+  another currently-pinned project `incompatible`, or require one at a
+  version this pack does not have, with nothing here catching it on
+  that path -- only the poll's recovery route through the generalized
+  engine would).
 - The 4 GitHub-release-only mods (`dynamic-despawn`, `magicavoxel-loader`,
   `dynamic-battle-axes`, `dynamic-whips`) have no verified-identity
   mechanism at all yet -- a different source (GitHub's release-asset API,

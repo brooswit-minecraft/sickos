@@ -283,11 +283,30 @@ own authority. Before downloading, the engine fetches
 `https://api.modrinth.com/v2/version/<modrinth_version_id>` and requires:
 `id` equals the payload's `modrinth_version_id`; `project_id` is
 `PZV7RorC`; `version_number` equals the payload's `version` (the
-version that drives the downgrade check and the release notes); exactly one file has the payload's `file_name`; and that
-file's `hashes.sha512`, `hashes.sha1` and `url` equal the payload's. The
-downloaded jar is then hashed and must match too. Any failure (including
-HTTP 404 or a transport error) is `EXIT_INTEGRITY_FAILURE` and nothing in
-the repo is touched. The "vouch check" below stays informational only.
+version that drives the downgrade check and the release notes); the
+metadata's own `game_versions`/`loaders` include the pack's pinned
+target (MINECRAFT-362 review, seventeenth round -- see below for why
+this was missing); exactly one file has the payload's `file_name`; and
+that file's `hashes.sha512`, `hashes.sha1` and `url` equal the payload's.
+The downloaded jar is then hashed and must match too. Any failure
+(including HTTP 404 or a transport error) is `EXIT_INTEGRITY_FAILURE`
+and nothing in the repo is touched. The "vouch check" below stays
+informational only.
+
+**The compatibility check is new as of the seventeenth review round.**
+This dispatch path trusts an external webhook's payload directly and,
+unlike the generalized poll path (`modrinth_compat.resolve_latest_compatible_version`,
+which filters on `(game_version, loader)` before a candidate is ever
+selected), had NO compatibility check at all before a write -- a
+dispatch for a build declaring the wrong Minecraft version or loader
+would pin and publish successfully (confirmed live with fixture
+metadata declaring Minecraft 1.20.1/Fabric against the 1.21.1/NeoForge
+pack target: `outcome=bumped, exit=0`). `verify_against_modrinth_metadata`
+now threads the pack's own `(game_version, loader)` target -- already
+read via `mod_eligibility.read_pack_targets` for the semver-delta
+normalization above -- into `modrinth_metadata.verify_version_file_metadata`'s
+own optional compatibility check, the same shared function the
+generalized path's own defense-in-depth re-check uses.
 
 **Authenticated access.** The workflow passes the repository's existing
 `MODRINTH_TOKEN` secret (the one `release.yml` already uses; no secret is

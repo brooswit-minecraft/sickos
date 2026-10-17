@@ -60,9 +60,27 @@ jobs:
         run: |
           echo "::warning::Mod auto-bump poll is paused (repo variable SICKOS_MODBUMP_PAUSED=true). Skipped this run entirely; the next unpaused scheduled run (or a manual workflow_dispatch) will reconcile from scratch."
 
+      # Pinned to `main` explicitly (MINECRAFT-362 review, seventeenth
+      # round, P1) -- without an explicit `ref`, actions/checkout defaults
+      # to the triggering event's own ref/sha. For a `schedule` trigger
+      # that is already main, but for `workflow_dispatch` it is WHATEVER
+      # ref the dispatch call named, which can be an arbitrary feature
+      # branch. This workflow then generates a bump commit on top of
+      # whatever it checked out and pushes that commit to main (see the
+      # push step below) -- a dispatch against a feature branch F ahead of
+      # main would fast-forward F's own, unrelated commits onto main along
+      # with the generated bump, regardless of the push step's explicit
+      # pathspec, since the push is a ref update to the whole commit
+      # graph, not just the bumped paths. Pinning `ref: main` here also
+      # fixes a second defect this same omission caused (P2, this round):
+      # a queued or re-run job otherwise keeps the ORIGINAL event's sha,
+      # so a run that starts after an earlier run in this same
+      # concurrency group already pushed would recompute against a now-
+      # stale base instead of the real current tip of main.
       - uses: actions/checkout@v4
         if: steps.pause.outputs.paused != 'true'
         with:
+          ref: main
           persist-credentials: false
 
       - name: Select push credential

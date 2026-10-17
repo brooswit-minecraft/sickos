@@ -144,11 +144,22 @@ def make_downloader(content):
 MODRINTH_METADATA = {}
 
 
-def modrinth_metadata_for(payload, *, project_id="PZV7RorC", version_id=None):
+def modrinth_metadata_for(payload, *, project_id="PZV7RorC", version_id=None,
+                           game_versions=("1.21.1",), loaders=("neoforge",)):
+    # game_versions/loaders match the fixture pack's own target (see
+    # build_fixture_repo below: minecraft = "1.21.1", neoforge = ...) --
+    # MINECRAFT-362 review, seventeenth round added this check to
+    # verify_against_modrinth_metadata/verify_version_file_metadata, so
+    # every test relying on this default helper for an otherwise-honest
+    # metadata response needs these fields present and matching, or the
+    # new check fails them closed for a reason unrelated to what they
+    # actually test.
     return {
         "id": version_id or payload["modrinth_version_id"],
         "project_id": project_id,
         "version_number": payload["version"],
+        "game_versions": list(game_versions),
+        "loaders": list(loaders),
         "files": [{
             "filename": payload["file_name"],
             "url": payload["download_url"],
@@ -952,6 +963,36 @@ class TestModrinthMetadataGate(EngineTestCase):
         payload = make_payload(category="patch", content=self.CONTENT)
         del MODRINTH_METADATA[payload["modrinth_version_id"]]
         self.assertIn("HTTP 404", self.attempt(payload))
+
+    # MINECRAFT-362 review, seventeenth round: this dispatch path trusts
+    # an external webhook's payload directly and, unlike the generalized
+    # poll path, had NO (game_version, loader) compatibility check at
+    # all before a write -- a dispatch for a build declaring the wrong
+    # Minecraft version or loader would still pin and publish
+    # successfully. These three tests prove the fix: wrong loader, wrong
+    # game version, and metadata missing the fields entirely all fail
+    # closed, same as every other metadata mismatch above.
+
+    def test_wrong_loader_fails_closed(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        MODRINTH_METADATA[payload["modrinth_version_id"]]["loaders"] = ["fabric"]
+        message = self.attempt(payload)
+        self.assertIn("loaders", message)
+        self.assertIn("neoforge", message)
+
+    def test_wrong_game_version_fails_closed(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        MODRINTH_METADATA[payload["modrinth_version_id"]]["game_versions"] = ["1.20.1"]
+        message = self.attempt(payload)
+        self.assertIn("game_versions", message)
+        self.assertIn("1.21.1", message)
+
+    def test_metadata_missing_compatibility_fields_fails_closed(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        del MODRINTH_METADATA[payload["modrinth_version_id"]]["game_versions"]
+        del MODRINTH_METADATA[payload["modrinth_version_id"]]["loaders"]
+        message = self.attempt(payload)
+        self.assertIn("game_versions", message)
 
     def test_lookup_transport_error_fails_closed(self):
         payload = make_payload(category="patch", content=self.CONTENT)

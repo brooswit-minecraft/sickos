@@ -104,6 +104,13 @@ def version_metadata_from_entry(entry, project_id):
     return {
         "id": entry["id"], "project_id": project_id, "version_number": entry["version_number"],
         "version_type": entry.get("version_type", "release"),
+        # Carried through from the list entry (MINECRAFT-362 review,
+        # seventeenth round): run_engine's own metadata re-verification
+        # now checks game_versions/loaders too, so the single-version
+        # identity gate's response needs them present and matching,
+        # same as the list response already has.
+        "game_versions": entry.get("game_versions", []),
+        "loaders": entry.get("loaders", []),
         "files": [primary],
     }
 

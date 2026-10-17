@@ -136,12 +136,22 @@ def make_candidate(*, version_id="NEWID5678", version_number="1.1.0", content=b"
     return VersionCandidate(**defaults)
 
 
-def metadata_for(candidate, *, project_id=MOD_ID, version_type="release"):
+def metadata_for(candidate, *, project_id=MOD_ID, version_type="release",
+                  game_versions=("1.21.1",), loaders=("neoforge",)):
+    # game_versions/loaders match build_fixture_repo's own pack.toml
+    # target (minecraft = "1.21.1", neoforge = ...) -- MINECRAFT-362
+    # review, seventeenth round added this check to run_engine's own
+    # metadata re-verification, so every test relying on this default
+    # helper for an otherwise-honest metadata response needs these
+    # fields present and matching the game_version/loader it runs
+    # under, or the new check fails them closed for an unrelated reason.
     return {
         "id": candidate.version_id,
         "project_id": project_id,
         "version_number": candidate.version_number,
         "version_type": version_type,
+        "game_versions": list(game_versions),
+        "loaders": list(loaders),
         "files": [{
             "filename": candidate.file_name,
             "url": candidate.download_url,
@@ -467,6 +477,37 @@ class TestMetadataGate(EngineTestCase):
         self.assertIn("HTTP 404", ctx.exception.message)
         self.assertEqual(self.porcelain(), before)
 
+    # MINECRAFT-362 review, seventeenth round: defense-in-depth re-check
+    # of (game_version, loader) against the freshly-refetched metadata,
+    # on top of resolve_latest_compatible_version's earlier filter on
+    # the same two fields -- "never trust a filter you did not verify."
+    # Only exercised when the caller actually passes game_version/loader
+    # (poll_and_bump always does; these tests mirror that explicitly).
+
+    def test_metadata_wrong_loader_fails_closed(self):
+        content = b"wrong loader jar"
+        candidate = make_candidate(content=content)
+        self.register(candidate.version_id, metadata_for(candidate, loaders=("fabric",)))
+        pin = make_pin()
+        before = self.porcelain()
+        with self.assertRaises(bump_mod.EngineError) as ctx:
+            self.run_engine(pin, candidate, content=content, game_version="1.21.1", loader="neoforge")
+        self.assertEqual(ctx.exception.exit_code, bump_mod.EXIT_INTEGRITY_FAILURE)
+        self.assertIn("loaders", ctx.exception.message)
+        self.assertEqual(self.porcelain(), before)
+
+    def test_metadata_wrong_game_version_fails_closed(self):
+        content = b"wrong game version jar"
+        candidate = make_candidate(content=content)
+        self.register(candidate.version_id, metadata_for(candidate, game_versions=("1.20.1",)))
+        pin = make_pin()
+        before = self.porcelain()
+        with self.assertRaises(bump_mod.EngineError) as ctx:
+            self.run_engine(pin, candidate, content=content, game_version="1.21.1", loader="neoforge")
+        self.assertEqual(ctx.exception.exit_code, bump_mod.EXIT_INTEGRITY_FAILURE)
+        self.assertIn("game_versions", ctx.exception.message)
+        self.assertEqual(self.porcelain(), before)
+
 
 def _find_packwiz():
     """Same resolution order as the Makefile's own `PACKWIZ ?=` line: a
@@ -610,6 +651,48 @@ class TestDependencyConflict(EngineTestCase):
         self.assertEqual(ctx.exception.outcome, "dependency_conflict")
         self.assertIn(OTHER_MOD_ID, ctx.exception.message)
         self.assertEqual(self.porcelain(), before)
+
+    def test_required_at_exact_version_mismatching_the_pin_fails_closed(self):
+        # MINECRAFT-362 review, seventeenth round, required item: a
+        # candidate that requires another currently-pinned project at an
+        # EXACT version this pack has pinned to something else must
+        # refuse, the same as the incompatible case above -- Modrinth
+        # already told this pack exactly which version it needs.
+        # other-mod.pw.toml is pinned at OTHEROLD (build_fixture_repo);
+        # this candidate requires a different, specific version id.
+        content = b"requires exact other-mod version jar"
+        candidate = make_candidate(
+            content=content,
+            dependencies=({"project_id": OTHER_MOD_ID, "dependency_type": "required",
+                           "version_id": "SOME_OTHER_VERSION_ID"},),
+        )
+        self.register(candidate.version_id, metadata_for(candidate))
+        self.register(OLD_VERSION_ID, {"id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0"})
+        pin = make_pin()
+
+        before = self.porcelain()
+        with self.assertRaises(bump_mod.EngineError) as ctx:
+            self.run_engine(pin, candidate, content=content)
+        self.assertEqual(ctx.exception.exit_code, bump_mod.EXIT_CONFIG_ERROR)
+        self.assertEqual(ctx.exception.outcome, "dependency_conflict")
+        self.assertIn(OTHER_MOD_ID, ctx.exception.message)
+        self.assertIn("SOME_OTHER_VERSION_ID", ctx.exception.message)
+        self.assertEqual(self.porcelain(), before)
+
+    def test_required_at_exact_version_matching_the_pin_still_bumps(self):
+        content = b"requires matching other-mod version jar"
+        candidate = make_candidate(
+            content=content,
+            dependencies=({"project_id": OTHER_MOD_ID, "dependency_type": "required",
+                           "version_id": "OTHEROLD"},),
+        )
+        self.register(candidate.version_id, metadata_for(candidate))
+        self.register(OLD_VERSION_ID, {"id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0"})
+        pin = make_pin()
+
+        summary, exit_code, _ = self.run_engine(pin, candidate, content=content)
+        self.assertEqual(exit_code, bump_mod.EXIT_OK)
+        self.assertTrue(summary["changed"])
 
     def test_incompatible_with_a_mod_not_pinned_still_bumps(self):
         content = b"harmless jar"

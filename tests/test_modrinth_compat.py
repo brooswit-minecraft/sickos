@@ -428,6 +428,49 @@ class TestFindDependencyConflicts(unittest.TestCase):
         )
         self.assertEqual(find_dependency_conflicts(candidate, {"OTHER1"}), [])
 
+    def test_required_dependency_with_no_exact_version_and_pinned_is_not_reported(self):
+        # A `required` entry naming only a project (no version_id) is a
+        # semver-RANGE requirement this pass cannot evaluate without a
+        # full solve -- still out of scope even when the project IS
+        # pinned (MINECRAFT-362 review, seventeenth round: only an EXACT
+        # version_id mismatch against an already-pinned project is
+        # unambiguous enough to report).
+        candidate = make_candidate_with_deps(
+            [{"project_id": "OTHER1", "dependency_type": "required"}]
+        )
+        self.assertEqual(find_dependency_conflicts(candidate, {"OTHER1": "V1"}), [])
+
+    def test_required_dependency_at_exact_version_matching_pin_is_fine(self):
+        candidate = make_candidate_with_deps(
+            [{"project_id": "OTHER1", "dependency_type": "required", "version_id": "V1"}]
+        )
+        self.assertEqual(find_dependency_conflicts(candidate, {"OTHER1": "V1"}), [])
+
+    def test_required_dependency_at_exact_version_not_matching_pin_is_a_conflict(self):
+        # MINECRAFT-362 review, seventeenth round, required item: this is
+        # the one case `find_dependency_conflicts` previously missed
+        # entirely -- Modrinth already told this pack exactly which
+        # version it needs, and this pack already has that project
+        # pinned to a known, DIFFERENT one. No transitive solve needed,
+        # unlike a semver-range `required` entry.
+        candidate = make_candidate_with_deps(
+            [{"project_id": "OTHER1", "dependency_type": "required", "version_id": "V2"}]
+        )
+        conflicts = find_dependency_conflicts(candidate, {"OTHER1": "V1"})
+        self.assertEqual(len(conflicts), 1)
+        self.assertIn("OTHER1", conflicts[0])
+        self.assertIn("V1", conflicts[0])
+        self.assertIn("V2", conflicts[0])
+
+    def test_required_dependency_at_exact_version_not_pinned_at_all_is_not_reported(self):
+        # Same ambiguity as the unpinned-required-dependency case above
+        # -- an exact version_id does not change whether the project is
+        # local-only/out-of-pack vs. genuinely missing.
+        candidate = make_candidate_with_deps(
+            [{"project_id": "NOTPINNED", "dependency_type": "required", "version_id": "V2"}]
+        )
+        self.assertEqual(find_dependency_conflicts(candidate, {"OTHER1": "V1"}), [])
+
     def test_optional_dependency_never_a_conflict(self):
         candidate = make_candidate_with_deps(
             [{"project_id": "OTHER1", "dependency_type": "optional"}]
