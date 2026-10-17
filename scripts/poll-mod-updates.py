@@ -81,7 +81,13 @@ import modrinth_compat  # noqa: E402
 
 # No pin is excluded (see this module's docstring): dedup-by-version-id
 # already makes it safe for this poll and da-auto-bump.yml's dispatch to
-# both resolve Dynamic Atmosphere's pin.
+# both resolve Dynamic Atmosphere's pin. Empty today, but a path added
+# here still gets its own "excluded_pin_path" outcome below (MINECRAFT-
+#362 review, fifteenth round) rather than a bare `continue` that drops
+# it with no outcome at all -- the latent version of the exact
+# silently-dropped-pin shape rounds twelve and thirteen fixed for
+# `untracked`/`excluded_local_only`, caught before any path was ever
+# actually added here.
 EXCLUDED_PIN_PATHS = frozenset()
 
 # Outcomes that are a PERMANENT, per-pin property this poll cannot fix by
@@ -233,7 +239,7 @@ KNOWN_UNTRACKED_PIN_NAMES = tuple(
 # outcome string alone.
 _UNLISTABLE_EXPECTED_GAP_OUTCOMES = frozenset({
     "breaking_change_requires_human_review", "downgrade_refused", "dependency_conflict",
-    "excluded_local_only",
+    "excluded_local_only", "excluded_pin_path",
 })
 
 
@@ -364,6 +370,11 @@ def poll_and_bump(repo_root, *, token=None, fetcher=None, run_command=subprocess
 
     for pin in eligible:
         if pin.pin_path in EXCLUDED_PIN_PATHS:
+            outcomes.append({
+                "mod_name": pin.name, "mod_id": pin.mod_id, "pin_path": pin.pin_path,
+                "outcome": "excluded_pin_path", "changed": False,
+                "error": "pin_path explicitly excluded via EXCLUDED_PIN_PATHS",
+            })
             continue
 
         outcome = {"mod_name": pin.name, "mod_id": pin.mod_id, "pin_path": pin.pin_path}
@@ -475,6 +486,16 @@ def main(argv=None):
                     f"::warning::{outcome['mod_name']} ({outcome['pin_path']}) deliberately "
                     f"excluded from auto-update (see EXCLUDED_MOD_NAMES in mod_eligibility.py), "
                     f"not a coverage gap: error={outcome.get('error')}"
+                )
+            elif outcome["outcome"] == "excluded_pin_path":
+                # Same reasoning as excluded_local_only above: a path on
+                # EXCLUDED_PIN_PATHS is deliberately excluded by this
+                # module itself, not a coverage gap (fifteenth review
+                # round).
+                print(
+                    f"::warning::{outcome['mod_name']} ({outcome['pin_path']}) deliberately "
+                    f"excluded from this poll (see EXCLUDED_PIN_PATHS in this module), not a "
+                    f"coverage gap: error={outcome.get('error')}"
                 )
             else:
                 print(

@@ -603,7 +603,7 @@ an unexpected failure elsewhere in the same run never blocks pushing a
 bump this run already made -- the job still fails afterward (so the
 failure is visible), but only after that push.
 
-33 tests in `tests/test_poll_mod_updates.py` cover: the same
+35 tests in `tests/test_poll_mod_updates.py` cover: the same
 game-version+loader threading reaching the category gate end-to-end
 through `poll_and_bump` (not only `run_engine` directly), Dynamic Atmosphere's
 pin considered like any other (no-op when nothing is newer for it, bumped
@@ -752,7 +752,11 @@ whatever the earlier run already pushed.
   refuses the bump outcome yet commits anyway, and (thirteenth round)
   `EXCLUDED_MOD_NAMES` pins reported as their own unconditionally-
   expected `"excluded_local_only"` outcome rather than reconciled by
-  `pin_path` the way genuinely-untracked pins are) (33 tests).
+  `pin_path` the way genuinely-untracked pins are, and (fifteenth round)
+  `EXCLUDED_PIN_PATHS` gaining the same own-outcome treatment --
+  `"excluded_pin_path"`, also unconditionally expected -- so a path
+  added there in the future gets reported rather than silently dropped
+  by the bare `continue` this replaced) (35 tests).
   `run_engine`'s category determination and no-downgrade
   check both now take/use a `game_version` hint and an identity-checked
   previous-pin metadata, threaded through from this script's own

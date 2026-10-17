@@ -434,21 +434,28 @@ still finishes green) when it isn't configured.
 
 | Name | Kind | Used by | Purpose |
 |---|---|---|---|
-| `MODRINTH_TOKEN` | secret | `release.yml`, `server-update.yml` | Auth token for publishing to Modrinth and updating a Modrinth-hosted server |
+| `MODRINTH_TOKEN` | secret | `release.yml`, `server-update.yml`, `mod-auto-bump-poll.yml` | Auth token for publishing to Modrinth, updating a Modrinth-hosted server, and resolving a project Modrinth will not serve anonymously during the generalized poll |
 | `MODRINTH_PROJECT_ID` | variable | `release.yml`, `server-update.yml` | Identifies which Modrinth project to publish to / follow |
 | `MODRINTH_SERVER_ID` | variable | `server-update.yml` | The Modrinth-hosted server to keep in sync |
-| `SICKOS_DISPATCH_APP_ID` | variable | `da-auto-bump.yml` | GitHub App ID used to mint the push token for an automated DA bump. Not set today. |
-| `SICKOS_DISPATCH_APP_PRIVATE_KEY` | secret | `da-auto-bump.yml` | Private key for the App above. Not set today. |
-| `SICKOS_DISPATCH_TOKEN` | secret | `da-auto-bump.yml` | Fine-grained PAT fallback push credential, used only if the App pair above is not configured. Not set today. |
-| `SICKOS_AUTOBUMP_PAUSED` | variable | `da-auto-bump.yml` | Pause switch for the automated DA bump. Unset today (automation runs). |
+| `SICKOS_DISPATCH_APP_ID` | variable | `da-auto-bump.yml`, `mod-auto-bump-poll.yml` | GitHub App ID used to mint the push token for an automated mod bump (DA's own dispatch, or the generalized poll). Not set today. |
+| `SICKOS_DISPATCH_APP_PRIVATE_KEY` | secret | `da-auto-bump.yml`, `mod-auto-bump-poll.yml` | Private key for the App above. Not set today. |
+| `SICKOS_DISPATCH_TOKEN` | secret | `da-auto-bump.yml`, `mod-auto-bump-poll.yml` | Fine-grained PAT fallback push credential, used only if the App pair above is not configured. Not set today. |
+| `SICKOS_AUTOBUMP_PAUSED` | variable | `da-auto-bump.yml` | Pause switch for Dynamic Atmosphere's own DISPATCH-driven bump ONLY. Does **not** pause the generalized poll below, which can also bump Dynamic Atmosphere's pin -- see `SICKOS_MODBUMP_PAUSED`. Unset today (automation runs). |
+| `SICKOS_MODBUMP_PAUSED` | variable | `mod-auto-bump-poll.yml` | Pause switch for the generalized scheduled poll, covering every enrolled mod including Dynamic Atmosphere's own pin. A separate switch from `SICKOS_AUTOBUMP_PAUSED` above -- to stop ALL automated Dynamic Atmosphere bumps, both must be set. Unset today (automation runs). |
 
 None of the three `SICKOS_DISPATCH_*` credential entries above exists in
 this repository yet, so every DA dispatch today takes the fail-closed
 no-credential path described in
 [Automated Dynamic Atmosphere bumps](#automated-dynamic-atmosphere-bumps)
-below. `SICKOS_AUTOBUMP_PAUSED` is a separate switch, unrelated to
-credentials: unset (as it is today) or any value other than exactly
-`true` means the automation runs.
+below, and the generalized poll (same credentials) takes the identical
+fail-closed path described in
+[Generalized mod auto-bump poll](#generalized-mod-auto-bump-poll) further
+down. `SICKOS_AUTOBUMP_PAUSED` and `SICKOS_MODBUMP_PAUSED` are separate
+switches, unrelated to credentials and to EACH OTHER: unset (as both are
+today) or any value other than exactly `true` means that mechanism runs.
+Pausing one does not pause the other -- see the dedicated sections below
+for why that matters specifically for Dynamic Atmosphere, which both
+mechanisms can bump.
 
 ## Releasing
 
@@ -510,7 +517,13 @@ triggers, permissions, and step outputs.
 
 **Pause switch.** The Actions repository variable `SICKOS_AUTOBUMP_PAUSED`
 is checked before anything else -- before a token is minted or anything is
-checked out. Exactly `true` pauses; unset or any other value runs.
+checked out. Exactly `true` pauses; unset or any other value runs. This
+pauses ONLY this dispatch-driven path -- it does **not** pause the
+generalized scheduled poll below
+([Generalized mod auto-bump poll](#generalized-mod-auto-bump-poll)),
+which covers Dynamic Atmosphere's own pin too and has its own,
+independent pause switch (`SICKOS_MODBUMP_PAUSED`). To stop every
+automated path that could bump Dynamic Atmosphere, set both.
 
 ```sh
 # Pause: decline every dispatch until unpaused.
@@ -587,6 +600,60 @@ exactly as normal; `listing_review_required` never holds or fails a push.
 After a successful push, the workflow additionally opens one GitHub issue
 listing the exact flagged lines so a human sees it without opening
 Actions. A failure to open that issue only warns; it never fails the run.
+
+### Generalized mod auto-bump poll
+
+The companion to the dispatch-driven path above: `.github/workflows/
+mod-auto-bump-poll.yml` runs on a 20-minute `schedule` (and on manual
+`workflow_dispatch`), asking Modrinth directly, for EVERY enrolled
+pin -- Dynamic Atmosphere's own included, not only "every other mod" --
+whether a newer, compatible release exists. It exists so a mod with no
+dispatch integration at all is still covered, and so a Dynamic Atmosphere
+dispatch that gets dropped (replaced in the shared `mod-auto-bump`
+concurrency group by a poll run -- see
+[docs/mod-auto-bump.md](docs/mod-auto-bump.md)) is still recovered here
+rather than lost. Logic lives in `scripts/poll-mod-updates.py` (engine:
+`scripts/bump_mod.py`); the workflow YAML only wires the schedule, the
+pause switch, credential selection, and the push. Full design, the
+per-outcome gap classification, and an honest "what is and is not
+covered" accounting: see [docs/mod-auto-bump.md](docs/mod-auto-bump.md).
+
+**Pause switch.** The Actions repository variable `SICKOS_MODBUMP_PAUSED`
+is checked before anything else, same convention as
+`SICKOS_AUTOBUMP_PAUSED` above: exactly `true` pauses; unset or any other
+value runs. This is a SEPARATE switch from `SICKOS_AUTOBUMP_PAUSED` --
+pausing one does not pause the other, and this is the one that matters
+for stopping an automated bump of Dynamic Atmosphere's own pin via this
+path specifically.
+
+```sh
+# Pause: skip every scheduled run until unpaused.
+gh variable set SICKOS_MODBUMP_PAUSED --repo brooswit-minecraft/sickos --body true
+
+# Resume:
+gh variable delete SICKOS_MODBUMP_PAUSED --repo brooswit-minecraft/sickos
+```
+
+A paused run is skipped entirely (nothing checked out, nothing
+resolved); the next unpaused scheduled run (or a manual
+`workflow_dispatch`) reconciles from scratch -- there is no dispatch
+payload to lose here, unlike the DA path above, since this mechanism
+polls rather than reacting to an event.
+
+**Credentials.** Shares the exact same three credential names as the DA
+dispatch path above (`SICKOS_DISPATCH_APP_ID` +
+`SICKOS_DISPATCH_APP_PRIVATE_KEY`, falling back to
+`SICKOS_DISPATCH_TOKEN`), with the same fail-closed behaviour: if a run
+produces a real bump and no credential is configured, the job fails with
+an error naming the exact missing variable/secret(s) and nothing is
+pushed.
+
+**One bump per run.** Unlike the DA dispatch path, a single poll run
+makes AT MOST ONE real bump commit, then stops -- see
+[docs/mod-auto-bump.md](docs/mod-auto-bump.md) for why (racing
+`release.yml`'s own concurrency group). Every pin examined before that
+point is still reported in the run's summary; pins after it are picked
+up by the next scheduled run, not reported as any kind of failure.
 
 ## Deploying to a Modrinth Server
 

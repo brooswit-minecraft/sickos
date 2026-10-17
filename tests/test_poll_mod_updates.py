@@ -458,6 +458,22 @@ class TestPollAndBump(unittest.TestCase):
         self.assertEqual(excluded[0]["mod_name"], "Baritone")
         self.assertTrue(poll_mod_updates._is_expected_gap(excluded[0]))
 
+    def test_excluded_pin_path_is_its_own_outcome_not_silently_dropped(self):
+        # MINECRAFT-362 review, fifteenth round, smaller item: EXCLUDED_
+        # PIN_PATHS is empty today, but its `continue` branch previously
+        # dropped a matching pin with no outcome at all -- the latent
+        # version of the exact silently-dropped-pin shape rounds twelve
+        # and thirteen fixed for untracked/excluded_local_only pins. A
+        # pin on this list must now get its own "excluded_pin_path"
+        # outcome, unconditionally expected.
+        with mock.patch.object(poll_mod_updates, "EXCLUDED_PIN_PATHS", frozenset({"mods/alpha-mod.pw.toml"})):
+            outcomes = self.run_poll()
+        excluded = [o for o in outcomes if o["outcome"] == "excluded_pin_path"]
+        self.assertEqual(len(excluded), 1)
+        self.assertEqual(excluded[0]["pin_path"], "mods/alpha-mod.pw.toml")
+        self.assertEqual(excluded[0]["mod_id"], "ALPHA1")
+        self.assertTrue(poll_mod_updates._is_expected_gap(excluded[0]))
+
 
 class TestMainExitCode(unittest.TestCase):
     """Exercises main()'s pass/fail classification directly (item 2,
@@ -683,6 +699,18 @@ class TestMainExitCode(unittest.TestCase):
         exit_code, output = self._run_main_with(outcomes)
         self.assertEqual(exit_code, 0)
         self.assertIn("::warning::Baritone (mods/baritone.pw.toml)", output)
+
+    def test_excluded_pin_path_warns_and_keeps_the_run_green(self):
+        # MINECRAFT-362 review, fifteenth round, smaller item: same
+        # reasoning as excluded_local_only above, for EXCLUDED_PIN_PATHS.
+        outcomes = [
+            self._HEALTHY_PIN,
+            {"mod_id": "ALPHA1", "mod_name": "Alpha Mod", "pin_path": "mods/alpha-mod.pw.toml",
+             "outcome": "excluded_pin_path", "error": "pin_path explicitly excluded via EXCLUDED_PIN_PATHS"},
+        ]
+        exit_code, output = self._run_main_with(outcomes)
+        self.assertEqual(exit_code, 0)
+        self.assertIn("::warning::Alpha Mod (mods/alpha-mod.pw.toml) deliberately excluded from this poll", output)
 
     def test_unlisted_untracked_pin_is_a_coverage_regression(self):
         # MINECRAFT-362 review, twelfth round, required item 2: a pin
