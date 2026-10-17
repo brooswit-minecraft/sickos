@@ -120,6 +120,11 @@ hash = "a9864fae47a35976f26541a53a37fe9272d6da00aaf03310bc848ea211e99802"
 metafile = true
 
 [[files]]
+file = "mods/dynamic-battle-axes.pw.toml"
+hash = "29018524f0751b3dfa23a5c8e8da1c9b7dfda99765adcd4ff1e59ba051eb6a1c"
+metafile = true
+
+[[files]]
 file = "mods/dynamic-despawn.pw.toml"
 hash = "e50f5ce21c45ac01fb286d719e86222bd818c637fbcb540022369522aadd6d28"
 metafile = true
