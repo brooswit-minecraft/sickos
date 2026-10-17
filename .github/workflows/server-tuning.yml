@@ -33,6 +33,19 @@ name: Server tuning
 #     group below is shared with reset-world.yml (see README.md, "Live
 #     server tuning"), not with server-update.yml. The workflow_run trigger
 #     above is what orders this workflow after a deploy — not a shared lock.
+#
+#     MINECRAFT-258 FOLLOW-UP: "Server update" completing with conclusion
+#     success does NOT mean it deployed — its own deployment-policy job
+#     honors a `Release-Only: true` trailer by skipping the restart, but a
+#     skipped job still leaves the workflow's overall conclusion as
+#     success, so the naive `conclusion == 'success'` check below used to
+#     fire this live SFTP sync even on a Release-Only release (observed:
+#     https://github.com/brooswit-minecraft/sickos/actions/runs/39049941209
+#     ran right after https://github.com/brooswit-minecraft/sickos/actions/runs/39049928024
+#     skipped its own deploy). The release-only-guard job re-reads the
+#     SAME commit's Release-Only trailer via the SAME script
+#     server-update.yml's deployment-policy job uses, rather than trusting
+#     the upstream run's conclusion to imply its deploy decision.
 on:
   push:
     branches: [main]
@@ -54,8 +67,32 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  release-only-guard:
+    if: github.event_name == 'workflow_run'
+    runs-on: ubuntu-latest
+    outputs:
+      deploy: ${{ steps.policy.outputs.deploy }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Honor the originating release's Release-Only trailer
+        id: policy
+        run: |
+          git show -s --format=%B HEAD > "$RUNNER_TEMP/release-message.txt"
+          python3 scripts/server_update_policy.py "$RUNNER_TEMP/release-message.txt" >> "$GITHUB_OUTPUT"
+
   sync:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    needs: [release-only-guard]
+    if: >-
+      always() &&
+      (github.event_name != 'workflow_run' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        needs.release-only-guard.outputs.deploy != 'false'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
