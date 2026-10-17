@@ -358,7 +358,12 @@ class TestDirtyTreeGuard(EngineTestCase):
 
 class TestCategoryMapping(EngineTestCase):
     def test_patch_bumps_patch(self):
-        payload = make_payload(category="patch")
+        # 0.19.0-alpha.1 -> 0.19.1-alpha.1 is itself a patch-level delta,
+        # agreeing with the payload's own "patch" category (not merely
+        # not contradicting a higher one -- see
+        # test_payload_category_cannot_downgrade_the_semver_delta for
+        # that case).
+        payload = make_payload(version="0.19.1-alpha.1", category="patch")
         summary, exit_code, _ = self.run_engine(payload)
         self.assertEqual(exit_code, bump.EXIT_OK)
         self.assertEqual(summary["new_pack_version"], "0.22.1")
@@ -432,7 +437,13 @@ class TestCategoryMapping(EngineTestCase):
         self.assertEqual(self.porcelain(), "")
 
     def test_absent_category_defaults_to_minor_and_says_so(self):
-        payload = make_payload(category=None)
+        # Same core (0, 19, 0) as the pin, only the prerelease identifier
+        # advances -- semver_delta_category correctly returns None for
+        # this (no component delta to classify), so this exercises the
+        # genuine "truly undetermined" sentinel path, not a case where
+        # the version delta itself would have said "minor" anyway
+        # (MINECRAFT-362 review, eighth round).
+        payload = make_payload(version="0.19.0-alpha.2", category=None)
         summary, exit_code, _ = self.run_engine(payload)
         self.assertEqual(exit_code, bump.EXIT_OK)
         self.assertEqual(summary["new_pack_version"], "0.23.0")
@@ -441,7 +452,7 @@ class TestCategoryMapping(EngineTestCase):
         self.assertIn("did not include a category", notes)
 
     def test_unrecognised_category_defaults_to_minor_and_says_so(self):
-        payload = make_payload(category="wat")
+        payload = make_payload(version="0.19.0-alpha.2", category="wat")
         summary, exit_code, _ = self.run_engine(payload)
         self.assertEqual(exit_code, bump.EXIT_OK)
         self.assertEqual(summary["new_pack_version"], "0.23.0")
@@ -449,10 +460,36 @@ class TestCategoryMapping(EngineTestCase):
         notes = (self.repo / summary["notes_path"]).read_text(encoding="utf-8")
         self.assertIn("was not one of", notes)
 
+    def test_payload_category_cannot_downgrade_the_semver_delta(self):
+        # 0.19.0-alpha.1 -> 0.20.0-alpha.1 is a minor-component delta;
+        # a payload category of "patch" must not downgrade that --
+        # the more severe of the two wins (MINECRAFT-362 review, eighth
+        # round: the DA dispatch path had no semver-delta derivation at
+        # all before this, so AC4's breaking gate could never fire here
+        # even when a major DA release's payload category was absent or
+        # wrong).
+        payload = make_payload(version="0.20.0-alpha.1", category="patch")
+        summary, exit_code, _ = self.run_engine(payload)
+        self.assertEqual(exit_code, bump.EXIT_OK)
+        self.assertEqual(summary["mapping_rule"], "minor")
+
+    def test_major_semver_delta_alone_triggers_the_migration_gate(self):
+        # No category in the payload at all -- the major-version delta
+        # alone must still reach the "## Migration" required check.
+        release_body = "# 1.0.0\n\n## Changes\n\n- stuff\n"
+        body_file = self.repo.parent / "release-body-nomig-major.md"
+        body_file.write_text(release_body, encoding="utf-8")
+        self.addCleanup(body_file.unlink, missing_ok=True)
+
+        payload = make_payload(version="1.0.0", category=None)
+        with self.assertRaises(bump.EngineError) as ctx:
+            self.run_engine(payload, release_body_override=str(body_file))
+        self.assertEqual(ctx.exception.outcome, "migration_missing")
+
 
 class TestNotesFile(EngineTestCase):
     def test_notes_committed_staged_and_path_in_summary(self):
-        payload = make_payload(category="patch")
+        payload = make_payload(version="0.19.1-alpha.1", category="patch")
         summary, exit_code, _ = self.run_engine(payload)
         self.assertEqual(exit_code, bump.EXIT_OK)
         self.assertEqual(summary["notes_path"], "docs/releases/0.22.1.md")
@@ -466,7 +503,7 @@ class TestNotesFile(EngineTestCase):
         existing = releases_dir / "0.22.1.md"
         existing.write_text("already published\n", encoding="utf-8")
 
-        payload = make_payload(category="patch")
+        payload = make_payload(version="0.19.1-alpha.1", category="patch")
         with self.assertRaises(bump.EngineError) as ctx:
             self.run_engine(payload)
         self.assertEqual(ctx.exception.exit_code, bump.EXIT_NOTES_EXISTS)
@@ -475,7 +512,7 @@ class TestNotesFile(EngineTestCase):
 
 class TestListingReviewRequired(EngineTestCase):
     def test_false_on_patch(self):
-        summary, exit_code, _ = self.run_engine(make_payload(category="patch"))
+        summary, exit_code, _ = self.run_engine(make_payload(version="0.19.1-alpha.1", category="patch"))
         self.assertEqual(exit_code, bump.EXIT_OK)
         self.assertFalse(summary["listing_review_required"])
 
@@ -760,7 +797,7 @@ class TestMigrationExtraction(unittest.TestCase):
 class TestCliMain(EngineTestCase):
     def test_main_writes_summary_out_and_returns_exit_code(self):
         content = b"cli test content"
-        payload = make_payload(category="patch", content=content)
+        payload = make_payload(version="0.19.1-alpha.1", category="patch", content=content)
         payload_path = self.repo.parent / "payload.json"
         payload_path.write_text(json.dumps(payload), encoding="utf-8")
         self.addCleanup(payload_path.unlink, missing_ok=True)
@@ -782,7 +819,7 @@ class TestCliMain(EngineTestCase):
 
     def test_main_reports_unexpected_error_with_nonzero_exit(self):
         content = b"cli unexpected"
-        payload = make_payload(category="patch", content=content)
+        payload = make_payload(version="0.19.1-alpha.1", category="patch", content=content)
         payload_path = self.repo.parent / "payload-unexpected.json"
         payload_path.write_text(json.dumps(payload), encoding="utf-8")
         self.addCleanup(payload_path.unlink, missing_ok=True)

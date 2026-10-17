@@ -178,7 +178,9 @@ def validate_payload(payload):
 # existing callers and tests are unaffected.
 # --------------------------------------------------------------------------
 
-from semver_compare import parse_semver, compare_semver  # noqa: E402 - needs sys.path set up first
+from semver_compare import (  # noqa: E402 - needs sys.path set up first
+    parse_semver, compare_semver, semver_delta_category, more_severe_category,
+)
 
 
 # --------------------------------------------------------------------------
@@ -821,12 +823,7 @@ def run_engine(repo_root, payload_raw, *, release_body_override=None,
     assert_restore_targets_clean(repo_root, run_command=run_command)
     payload = validate_payload(payload_raw)
     category_received = payload["category"]
-    if category_received in KNOWN_CATEGORIES:
-        category = category_received
-    elif category_received is None:
-        category = None
-    else:
-        category = "__unrecognised__"
+    caller_category = category_received if category_received in KNOWN_CATEGORIES else None
 
     pin = load_da_pin(repo_root)
     previous_pack_version = load_pack_version(repo_root)
@@ -874,6 +871,29 @@ def run_engine(repo_root, payload_raw, *, release_body_override=None,
             f"{pin['modrinth_version_id']!r})",
         )
 
+    # AC4 category determination (MINECRAFT-362 review, eighth round):
+    # this path previously trusted the trigger payload's own `category`
+    # field alone -- a breaking DA release whose payload omits category,
+    # or mislabels it (e.g. "fix" on a major version bump), would
+    # default to minor with no BREAKING heading and no Migration check,
+    # since the gate below is gated entirely on mapping_rule ==
+    # "breaking_as_minor". `payload["version"]` and `pin["pinned_version"]`
+    # are both already confirmed valid semver by `compare_semver` above,
+    # so the delta between them is derived the same way
+    # scripts/bump_mod.py's generalized engine does, and can only
+    # ESCALATE the payload's own category, never downgrade it -- the
+    # same one-directional rule, for the same reason: a payload category
+    # claiming "breaking" is still trusted over a merely-patch-looking
+    # version bump.
+    delta_category = semver_delta_category(pin["pinned_version"], payload["version"])
+    category = more_severe_category(caller_category, delta_category)
+    if category is None and category_received is not None and category_received not in KNOWN_CATEGORIES:
+        # Preserve the "payload category was present but not recognised"
+        # sentinel distinctly from "no category was determined at all" --
+        # existing behaviour/tests distinguish the two messages, even
+        # though both still default to minor.
+        category = "__unrecognised__"
+
     new_pack_version, mapping_rule = bump_pack_version(previous_pack_version, category)
 
     releases_dir = repo_root / "docs" / "releases"
@@ -900,13 +920,26 @@ def run_engine(repo_root, payload_raw, *, release_body_override=None,
     vouch = run_vouch_check(repo_root, payload["sha512"])
 
     listing_review_required = mapping_rule != "patch"
-    category_note = None
-    if mapping_rule == "minor_default_absent_category":
-        category_note = ("The trigger payload did not include a category. Minor was used as the default bump.")
-    elif mapping_rule == "minor_default_unrecognised_category":
+    if mapping_rule in ("minor_default_absent_category", "minor_default_unrecognised_category"):
+        if category_received is None:
+            category_note = (
+                "The trigger payload did not include a category, and the version delta "
+                f"{pin['pinned_version']} -> {payload['version']} changed no semver component. "
+                "Minor was used as the default bump."
+            )
+        else:
+            category_note = (
+                f"The trigger payload's category ({category_received!r}) was not one of "
+                f"patch/minor/breaking, and the version delta {pin['pinned_version']} -> "
+                f"{payload['version']} changed no semver component. Minor was used as the "
+                "default bump."
+            )
+    else:
         category_note = (
-            f"The trigger payload's category ({category_received!r}) was not one of "
-            "patch/minor/breaking. Minor was used as the default bump."
+            f"Category: {category!r} -- semver delta {pin['pinned_version']} -> "
+            f"{payload['version']} => {delta_category!r}; trigger payload category => "
+            f"{category_received!r}. The more severe of the two is used; the payload category "
+            "can only escalate the semver-delta classification, never downgrade it."
         )
 
     notes_dir_existed_before = releases_dir.exists()

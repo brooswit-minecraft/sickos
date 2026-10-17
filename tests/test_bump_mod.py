@@ -136,11 +136,12 @@ def make_candidate(*, version_id="NEWID5678", version_number="1.1.0", content=b"
     return VersionCandidate(**defaults)
 
 
-def metadata_for(candidate, *, project_id=MOD_ID):
+def metadata_for(candidate, *, project_id=MOD_ID, version_type="release"):
     return {
         "id": candidate.version_id,
         "project_id": project_id,
         "version_number": candidate.version_number,
+        "version_type": version_type,
         "files": [{
             "filename": candidate.file_name,
             "url": candidate.download_url,
@@ -171,12 +172,13 @@ class EngineTestCase(unittest.TestCase):
         return _git(self.repo, "status", "--porcelain").stdout
 
     def run_engine(self, pin, candidate, *, content=b"new mod jar", category=None, gate_commands=None,
-                   allow_breaking=False, migration_text=None):
+                   allow_breaking=False, migration_text=None, game_version=None, loader=None):
         return bump_mod.run_engine(
             self.repo, pin, candidate, category=category,
             downloader=make_downloader(content), run_command=subprocess.run,
             gate_commands=gate_commands or STUB_GATES, metadata_fetcher=self.fetch_mock,
             allow_breaking=allow_breaking, migration_text=migration_text,
+            game_version=game_version, loader=loader,
         )
 
 
@@ -264,6 +266,29 @@ class TestSuccessfulBump(EngineTestCase):
 
         with self.assertRaises(bump_mod.EngineError) as ctx:
             self.run_engine(pin, candidate, content=content)
+        self.assertEqual(ctx.exception.outcome, "breaking_change_requires_human_review")
+
+    def test_game_version_and_loader_threading_actually_reaches_the_category_gate(self):
+        # MINECRAFT-362 review, eighth round: a prior round's fix
+        # (semver_delta_category accepting game_version/loader) was
+        # covered only by direct unit tests of that function -- nothing
+        # asserted run_engine actually PASSES them through. This is the
+        # real "YungsApi-1.21.1-NeoForge-5.1.9.jar" scheme: without both
+        # game_version AND loader reaching semver_delta_category, this
+        # major bump would classify as None and auto-publish as minor.
+        content = b"yungs-style breaking jar"
+        candidate = make_candidate(
+            content=content, version_number="1.21.1-NeoForge-6.0.0",
+            file_name="YungsApi-1.21.1-NeoForge-6.0.0.jar",
+        )
+        self.register(candidate.version_id, metadata_for(candidate))
+        self.register(OLD_VERSION_ID, {
+            "id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.21.1-NeoForge-5.1.9",
+        })
+        pin = make_pin()
+
+        with self.assertRaises(bump_mod.EngineError) as ctx:
+            self.run_engine(pin, candidate, content=content, game_version="1.21.1", loader="neoforge")
         self.assertEqual(ctx.exception.outcome, "breaking_change_requires_human_review")
 
     def test_changelog_category_cannot_downgrade_a_major_semver_delta(self):

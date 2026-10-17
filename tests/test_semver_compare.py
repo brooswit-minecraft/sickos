@@ -111,6 +111,62 @@ class TestSemverDeltaCategory(unittest.TestCase):
             semver_compare.semver_delta_category("1.20.1-4.0.1", "1.20.1-5.0.0", game_version="1.21.1")
         )
 
+    def test_game_version_then_loader_prefix_stripped(self):
+        # The whole YUNG's family: "<game_version>-<loader>-<mod_version>".
+        self.assertEqual(
+            semver_compare.semver_delta_category(
+                "1.21.1-NeoForge-5.1.9", "1.21.1-NeoForge-6.0.0",
+                game_version="1.21.1", loader="neoforge",
+            ),
+            "breaking",
+        )
+
+    def test_loader_then_game_version_prefix_stripped(self):
+        # Cristel Lib: "<loader>-<game_version>-<mod_version>".
+        self.assertEqual(
+            semver_compare.semver_delta_category(
+                "neoforge-1.21.1-3.1.7", "neoforge-1.21.1-3.1.8",
+                game_version="1.21.1", loader="neoforge",
+            ),
+            "patch",
+        )
+
+    def test_real_yungs_family_pins_classify_correctly(self):
+        # The 12 real pins named in the review: yungs-api,
+        # yungs-better-{caves,desert-temples,dungeons,end-island,
+        # jungle-temples,mineshafts,nether-fortresses,ocean-monuments,
+        # witch-huts}, yungs-cave-biomes, yungs-extras -- all share
+        # YungsApi's exact versioning scheme and version "5.1.9".
+        self.assertEqual(
+            semver_compare.semver_delta_category(
+                "1.21.1-NeoForge-5.1.9", "1.21.1-NeoForge-6.0.0",
+                game_version="1.21.1", loader="neoforge",
+            ),
+            "breaking",
+        )
+        self.assertEqual(
+            semver_compare.semver_delta_category(
+                "1.21.1-NeoForge-5.1.9", "1.21.1-NeoForge-5.2.0",
+                game_version="1.21.1", loader="neoforge",
+            ),
+            "minor",
+        )
+        self.assertEqual(
+            semver_compare.semver_delta_category(
+                "1.21.1-NeoForge-5.1.9", "1.21.1-NeoForge-5.1.10",
+                game_version="1.21.1", loader="neoforge",
+            ),
+            "patch",
+        )
+
+    def test_strip_known_version_prefixes_is_idempotent_with_only_one_matching(self):
+        # loader doesn't match here -- only the game_version prefix
+        # should come off, and only once.
+        self.assertEqual(
+            semver_compare.strip_known_version_prefixes("1.21.1-4.0.1", game_version="1.21.1", loader="fabric"),
+            "4.0.1",
+        )
+
 
 class TestMoreSevereCategory(unittest.TestCase):
     def test_breaking_beats_minor_and_patch(self):

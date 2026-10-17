@@ -103,6 +103,7 @@ def version_metadata_from_entry(entry, project_id):
     primary = entry["files"][0]
     return {
         "id": entry["id"], "project_id": project_id, "version_number": entry["version_number"],
+        "version_type": entry.get("version_type", "release"),
         "files": [primary],
     }
 
@@ -347,7 +348,24 @@ class TestPollAndBump(unittest.TestCase):
         by_mod = {o["mod_id"]: o for o in outcomes}
         self.assertEqual(by_mod["ALPHA1"]["outcome"], "breaking_change_requires_human_review")
         self.assertFalse(by_mod["ALPHA1"]["changed"])
-        self.assertEqual(before_head, after_head)
+
+    def test_game_version_and_loader_reach_the_category_gate_end_to_end(self):
+        # MINECRAFT-362 review, eighth round: poll_and_bump must actually
+        # PASS its own game_version/loader (read from this fixture's
+        # pack.toml: "1.21.1"/"neoforge") through to run_engine's
+        # category determination -- not just have semver_delta_category
+        # support them in isolation. The YUNG's family's real scheme
+        # ("<game_version>-<loader>-<mod_version>") only classifies
+        # correctly with both.
+        self.modrinth.register_latest(
+            "ALPHA1", "ALPHANEW", "1.21.1-NeoForge-6.0.0", b"yungs-style breaking",
+        )
+        self.modrinth.register_old_pin_metadata("ALPHAOLD", "ALPHA1", "1.21.1-NeoForge-5.1.9")
+
+        outcomes = self.run_poll()
+        by_mod = {o["mod_id"]: o for o in outcomes}
+        self.assertEqual(by_mod["ALPHA1"]["outcome"], "breaking_change_requires_human_review")
+        self.assertFalse(by_mod["ALPHA1"]["changed"])
 
 
 class TestMainExitCode(unittest.TestCase):

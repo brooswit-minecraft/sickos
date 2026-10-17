@@ -270,7 +270,10 @@ notes file the way a verbatim splice did in the prior round, and capped
 at `MAX_CHANGELOG_CHARS` so one mod's long changelog cannot make the
 notes file unbounded.
 
-39 tests in `tests/test_bump_mod.py` cover: already-pinned/no-candidate
+40 tests in `tests/test_bump_mod.py` cover: a real engine-level
+game-version+loader-prefixed major bump reaching the breaking gate
+(not just `semver_delta_category` in isolation), a previous-pin
+metadata id mismatch failing closed, already-pinned/no-candidate
 no-ops, a real bump classified by semver delta (not the old
 "_default_absent_category" sentinel), a patch-level real-world
 fix-only-changelog bump, a major semver delta alone reaching the
@@ -354,24 +357,36 @@ the version number itself already declares. The generated notes file's
 category note now always states both signals and which one was used,
 replacing the old silent "defaulted to minor" wording.
 
-**The semver delta must strip a leading game-version prefix, or it
-never fires for that scheme (seventh review round).** Some mods version
-their Modrinth releases as `"<game_version>-<mod_version>"` (e.g.
-`"1.21.1-4.0.1"`) -- semver's own grammar then parses `"1.21.1"` as the
-CORE and `"4.0.1"` as a prerelease identifier, so the mod's own version
-lives entirely in the field `semver_delta_category` otherwise ignores:
-the core never changes between releases on this scheme, so it returned
-`None` for every update, including a major one. Confirmed live across
-the 4 pins using it (Supplementaries, Moonlight Lib, Project: Vibrant
-Journeys, Create: Diesel Generators) -- this was last round's item 1
-reduced from 100% of pins to these 4, not actually closed.
-`semver_delta_category` now takes an optional `game_version` and strips
-a matching leading `"<game_version>-"` before parsing
-(`_strip_game_version_prefix`); `run_engine` gained a `game_version`
-parameter threaded through from both callers'
-`mod_eligibility.read_pack_targets` result, so the classification now
-operates on the mod's own version, not the game version sharing its
-string.
+**The semver delta must strip a leading game-version AND/OR loader
+prefix, or it never fires for those schemes (seventh and eighth review
+rounds).** Some mods version their Modrinth releases with the game
+version and/or loader name baked in as a leading component: 4 pins use
+`"<game_version>-<mod_version>"` (e.g. `"1.21.1-4.0.1"` -- Supplementaries,
+Moonlight Lib, Project: Vibrant Journeys, Create: Diesel Generators,
+seventh round); the whole YUNG's family (12 pins: `yungs-api` and all
+11 `yungs-better-*`/`yungs-cave-biomes`/`yungs-extras` pins) uses
+`"<game_version>-<loader>-<mod_version>"` (e.g. `"1.21.1-NeoForge-5.1.9"`);
+Cristel Lib uses the reverse order, `"<loader>-<game_version>-<mod_version>"`
+(e.g. `"neoforge-1.21.1-3.1.7"`) (both eighth round). semver's own
+grammar parses the leading numeric-looking component as the CORE and
+everything after as a single prerelease identifier, so the mod's own
+version lives entirely in a field `semver_delta_category` otherwise
+ignores -- the core never changes between releases on these schemes, so
+it returned `None` for every update, including a major one. Each round
+fixing only the pins it found live reduced, but did not close, this gap
+-- 100% of pins, then 4, now 0 confirmed after this round's fix, though
+a yet-undiscovered scheme is not ruled out. `semver_delta_category` now
+takes optional `game_version`/`loader` and strips every leading
+`"<component>-"` that case-insensitively matches either, in any order,
+repeating until neither matches (`strip_known_version_prefixes`, the
+old private `_strip_game_version_prefix`'s replacement); `run_engine`
+gained a `loader` parameter alongside `game_version`, both threaded
+through from every caller's own `mod_eligibility.read_pack_targets`
+result, so the classification operates on the mod's own version, not
+the game version/loader components sharing its string. The generated
+notes' "no category could be determined" note also now distinguishes
+"changed no semver component" from "could not be parsed as semver after
+stripping" -- the two cases a prior round's note conflated.
 
 **The previous-pin's metadata is now identity-checked too (seventh
 review round).** `run_engine` verifies the CANDIDATE's metadata hard
@@ -389,7 +404,30 @@ checks `previous_metadata`'s `project_id` against `pin.mod_id` and fails
 closed (`EXIT_INTEGRITY_FAILURE`) on a mismatch, symmetric with the
 candidate's own gate. Confirmed latent, not active, by checking all 78
 pins live at review time -- the same "unchecked field, no live
-mismatch today" shape as the fifth round's `--mod-id` finding.
+mismatch today" shape as the fifth round's `--mod-id` finding. Eighth
+round: `previous_metadata`'s own `id` is checked too, against
+`pin.pinned_version_id` -- the `project_id` check alone confirmed the
+right PROJECT but not the right VERSION within it, asymmetric with the
+candidate gate's own `expected_version_id` check.
+
+**Only `version_type == "release"` may ever be pinned, enforced inside
+`run_engine` itself, not only the poll's resolver (eighth review
+round).** `modrinth_compat.resolve_latest_compatible_version` filters to
+`version_type == "release"` before a candidate ever reaches
+`run_engine` -- but that filter lives in the POLL path's own resolver,
+which `scripts/bump_mod.py`'s CLI never calls (it is handed a version id
+directly). A human could pin a beta/alpha by id with no check refusing
+it; that pin would then be permanently `downgrade_refused` by every
+future poll run once a real release surpasses it -- and since the sixth
+round, `downgrade_refused` is an expected per-pin gap, so the mis-pin
+would read as a quiet `::warning::` forever, not a failure anyone
+notices. `run_engine` now re-checks the candidate's OWN freshly-fetched
+metadata (the same one the identity/hash gate already fetches) for
+`version_type == "release"` and fails closed otherwise -- "never trust a
+filter this call did not itself verify," the same principle
+`modrinth_compat`'s own docstring states, closing the gap for both
+callers at once rather than only the one that happened to call the
+resolver.
 
 **At most one real bump per run, by design (second review round).** A
 first implementation committed every eligible mod's bump in the same run
@@ -487,7 +525,9 @@ an unexpected failure elsewhere in the same run never blocks pushing a
 bump this run already made -- the job still fails afterward (so the
 failure is visible), but only after that push.
 
-18 tests in `tests/test_poll_mod_updates.py` cover: Dynamic Atmosphere's
+19 tests in `tests/test_poll_mod_updates.py` cover: the same
+game-version+loader threading reaching the category gate end-to-end
+through `poll_and_bump` (not only `run_engine` directly), Dynamic Atmosphere's
 pin considered like any other (no-op when nothing is newer for it, bumped
 when something is), no-op when nothing is newer for a mod, a single bump
 actually committing with the right trailers, a changelog category unable
@@ -543,14 +583,22 @@ whatever the earlier run already pushed.
   `_version_to_candidate`, made public so a version-id-only caller like
   the CLI below can build a fully-populated candidate too) (35 tests).
 - `scripts/modrinth_metadata.py` -- identity/hash verification, extracted
-  from and still used by the DA engine (12 tests, plus DA's own 74 still
-  pass unchanged).
+  from and still used by the DA engine (12 tests).
 - `scripts/semver_compare.py` -- no-downgrade comparator, extracted from
   and still used by the DA engine, plus `semver_delta_category` (the
-  real AC4 category source, see below -- including stripping a leading
-  `"<game_version>-"` prefix for the 4 pins that version as
-  `"<game_version>-<mod_version>"`) and `more_severe_category`
-  (24 tests).
+  real AC4 category source, see below -- including stripping every
+  leading game-version/loader component for the 16 pins that bake one or
+  both into their version string) and `more_severe_category` (28 tests).
+- `bump-dynamic-atmosphere.py`'s own dispatch path gained the SAME
+  semver-delta category derivation (eighth round): it previously took
+  category only from the trigger payload, so AC4's breaking gate could
+  never fire there regardless of what the generalized poll path did --
+  the same DA release got two different answers depending on which
+  mechanism processed it. `delta_category`/`more_severe_category` now
+  sit between the no-downgrade comparison and `bump_pack_version`, the
+  same shape as `scripts/bump_mod.py`'s own fix (76 tests, up from 74 --
+  2 new, several adjusted to use a genuinely-matching-category version
+  delta rather than relying on the old payload-only default).
 - The direct-pin-vs-packwiz decision above.
 - `Release-Only: true` on DA's generated commits (see `da-auto-bump.md`).
 - `scripts/bump_mod.py` -- the generalized write path, with the

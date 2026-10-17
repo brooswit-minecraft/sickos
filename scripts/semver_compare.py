@@ -76,34 +76,50 @@ def compare_semver(left, right):
 CATEGORY_RANK = {"patch": 1, "minor": 2, "breaking": 3}
 
 
-def _strip_game_version_prefix(version, game_version):
-    """Some mods version their Modrinth releases as "<game_version>-
-    <mod_version>" (e.g. "1.21.1-4.0.1") -- semver's own grammar then
-    parses "1.21.1" as the CORE and "4.0.1" as a prerelease identifier,
-    so the mod's own version lives entirely in the field this module
-    otherwise ignores for delta purposes. Strip a leading
-    "<game_version>-" (the pack's own pinned game_version, already known
-    to every caller via mod_eligibility.read_pack_targets) so the
-    REMAINING string -- the mod's own version -- is what gets classified
-    (MINECRAFT-362 review, seventh round: without this,
-    semver_delta_category's core never changes between releases for
-    this scheme, so it returns None for every update, including a major
-    one, confirmed live for Supplementaries/Moonlight Lib/Project:
-    Vibrant Journeys/Create: Diesel Generators)."""
-    if game_version and version.startswith(game_version + "-"):
-        return version[len(game_version) + 1:]
+def strip_known_version_prefixes(version, game_version=None, loader=None):
+    """Some mods version their Modrinth releases with the game version
+    and/or loader name baked into the string as a leading component --
+    e.g. "1.21.1-4.0.1" (game version only), "1.21.1-NeoForge-5.1.9"
+    (game version then loader, the whole YUNG's family), or
+    "neoforge-1.21.1-3.1.7" (loader then game version, Cristel Lib).
+    semver's own grammar then parses the first numeric-looking component
+    as the CORE and everything after as a single prerelease identifier,
+    so the mod's own version lives entirely in a field this module
+    otherwise ignores for delta purposes -- strip every leading
+    "<component>-" that case-insensitively matches the pack's own pinned
+    game_version or loader name (both already known to every caller via
+    mod_eligibility.read_pack_targets), in any order, repeating until
+    neither matches, so the REMAINING string -- the mod's own version --
+    is what gets classified (MINECRAFT-362 review: seventh round added
+    the game_version-only case; eighth round generalized it to also
+    strip a loader component, after measuring live that the "<game_
+    version>-<loader>-<mod_version>"/"<loader>-<game_version>-<mod_
+    version>" orderings cover 12 more real pins -- the whole YUNG's
+    family plus Cristel Lib -- for which the game_version-only strip
+    left a non-semver remainder, e.g. "NeoForge-5.1.9", so
+    semver_delta_category returned None for every update on this scheme
+    too, including a major one)."""
+    prefixes = [p for p in (game_version, loader) if p]
+    changed = True
+    while changed:
+        changed = False
+        for prefix in prefixes:
+            if version.lower().startswith(prefix.lower() + "-"):
+                version = version[len(prefix) + 1:]
+                changed = True
     return version
 
 
-def semver_delta_category(previous_version, candidate_version, *, game_version=None):
+def semver_delta_category(previous_version, candidate_version, *, game_version=None, loader=None):
     """Classify an update by which (major, minor, patch) component
     changed between two version strings: major changed -> "breaking",
     else minor changed -> "minor", else patch changed -> "patch". Returns
-    None if either string (after stripping a leading "<game_version>-",
-    see `_strip_game_version_prefix`) is not valid semver, or if the
-    (major, minor, patch) core is identical between the two (e.g. only a
-    prerelease identifier changed, or build metadata) -- there is no
-    component delta to classify in that case, not an error.
+    None if either string (after stripping any leading game-version/
+    loader component, see `strip_known_version_prefixes`) is not valid
+    semver, or if the (major, minor, patch) core is identical between
+    the two (e.g. only a prerelease identifier changed, or build
+    metadata) -- there is no component delta to classify in that case,
+    not an error.
 
     Added (MINECRAFT-362 review, sixth round) because a changelog-text
     heading (modrinth_compat.derive_category_from_changelog) measured
@@ -113,8 +129,8 @@ def semver_delta_category(previous_version, candidate_version, *, game_version=N
     in practice and a genuine breaking change announced in a bullet
     would silently default to minor. The version numbers themselves are
     an always-available signal a mod author already committed to."""
-    previous_version = _strip_game_version_prefix(previous_version, game_version)
-    candidate_version = _strip_game_version_prefix(candidate_version, game_version)
+    previous_version = strip_known_version_prefixes(previous_version, game_version, loader)
+    candidate_version = strip_known_version_prefixes(candidate_version, game_version, loader)
     previous_parsed = parse_semver(previous_version)
     candidate_parsed = parse_semver(candidate_version)
     if previous_parsed is None or candidate_parsed is None:

@@ -297,7 +297,7 @@ def _no_candidate_summary(pin):
 def run_engine(repo_root, pin, candidate, *, category=None,
                 downloader=default_downloader, run_command=subprocess.run,
                 gate_commands=None, metadata_fetcher=None, token=None, allow_breaking=False,
-                migration_text=None, game_version=None):
+                migration_text=None, game_version=None, loader=None):
     """Bump `pin` (scripts/mod_eligibility.EligiblePin) to `candidate`
     (scripts/modrinth_compat.VersionCandidate, already filtered for
     game-version/loader compatibility by the caller). Returns
@@ -381,6 +381,26 @@ def run_engine(repo_root, pin, candidate, *, category=None,
             f"Modrinth version metadata check failed for {candidate.version_id}: {error}",
         )
 
+    # modrinth_compat.resolve_latest_compatible_version already filters
+    # to version_type == "release" -- but that filter lives in the POLL
+    # path's own resolver, not here, so scripts/bump_mod.py's CLI (which
+    # is handed a version id directly and never calls that resolver) had
+    # no equivalent check at all: it could pin a beta/alpha by id, which
+    # would then be permanently downgrade_refused by every future poll
+    # run (itself an expected per-pin gap since this round, so a
+    # mis-pinned prerelease would read as a quiet ::warning:: forever,
+    # not a failure anyone notices). Re-checking the FRESH metadata here
+    # -- never trusting a filter this call did not itself verify, same
+    # principle as modrinth_compat's own docstring -- closes that gap
+    # for both callers at once (MINECRAFT-362 review, eighth round).
+    if metadata.get("version_type") != "release":
+        raise EngineError(
+            EXIT_INTEGRITY_FAILURE, "integrity_failure",
+            f"Modrinth version {candidate.version_id} for {pin.name} has version_type "
+            f"{metadata.get('version_type')!r}, not 'release' -- refusing to pin a "
+            "prerelease/alpha/beta build",
+        )
+
     # Strong no-downgrade check: a pin only stores the previously-pinned
     # Modrinth version ID, not its semver string, so look that version's
     # own version_number up before judging whether the candidate is
@@ -431,6 +451,21 @@ def run_engine(repo_root, pin, candidate, *, category=None,
             f"{pin.pinned_version_id!r}'s metadata belongs to project {previous_project_id!r}, "
             f"not {pin.mod_id!r} (pin.mod_id) -- refusing to trust its version_number",
         )
+    # Symmetric with the project_id check above and with the candidate's
+    # own gate (expected_version_id=candidate.version_id): confirm the
+    # metadata actually fetched is for the version id asked for, not
+    # merely the right project (MINECRAFT-362 review, eighth round,
+    # smaller item).
+    previous_metadata_id = (
+        previous_metadata.get("id") if isinstance(previous_metadata, dict) else None
+    )
+    if previous_metadata_id != pin.pinned_version_id:
+        raise EngineError(
+            EXIT_INTEGRITY_FAILURE, "integrity_failure",
+            f"could not verify {pin.name} is not a downgrade: looking up version "
+            f"{pin.pinned_version_id!r} returned metadata for a different version id "
+            f"({previous_metadata_id!r}) -- refusing to trust its version_number",
+        )
 
     downgrade_decision = decide_update(pin, candidate, previous_version_number=previous_version_number)
     if downgrade_decision == "downgrade_refused":
@@ -468,7 +503,7 @@ def run_engine(repo_root, pin, candidate, *, category=None,
     # changelogs are bullet lists), so the semver delta -- not the
     # changelog -- is the one signal that is actually always available.
     delta_category = semver_compare.semver_delta_category(
-        previous_version_number, candidate.version_number, game_version=game_version,
+        previous_version_number, candidate.version_number, game_version=game_version, loader=loader,
     )
     category = semver_compare.more_severe_category(caller_category, delta_category)
 
@@ -534,12 +569,28 @@ def run_engine(repo_root, pin, candidate, *, category=None,
         )
 
     if category is None:
+        stripped_previous = semver_compare.strip_known_version_prefixes(
+            previous_version_number, game_version, loader,
+        )
+        stripped_candidate = semver_compare.strip_known_version_prefixes(
+            candidate.version_number, game_version, loader,
+        )
+        if semver_compare.parse_semver(stripped_previous) is None or semver_compare.parse_semver(stripped_candidate) is None:
+            delta_reason = (
+                f"could not be parsed as semver after stripping any leading game-version/"
+                f"loader component ({previous_version_number!r} -> {stripped_previous!r}, "
+                f"{candidate.version_number!r} -> {stripped_candidate!r})"
+            )
+        else:
+            delta_reason = (
+                f"changed no semver component ({previous_version_number} -> "
+                f"{candidate.version_number})"
+            )
         category_note = (
-            f"No category could be determined -- the version delta "
-            f"{previous_version_number} -> {candidate.version_number} changed no semver "
-            f"component, and no changelog/explicit category was supplied or recognised "
-            f"(received {category_received!r}); defaulted to minor per {pin.name}'s mapping "
-            f"rule ({mapping_rule})."
+            f"No category could be determined -- the version delta {delta_reason}, and no "
+            f"changelog/explicit category was supplied or recognised (received "
+            f"{category_received!r}); defaulted to minor per {pin.name}'s mapping rule "
+            f"({mapping_rule})."
         )
     else:
         category_note = (
@@ -826,7 +877,7 @@ def _check_compatibility_or_die(repo_root, candidate):
             f"declares game_versions={candidate.game_versions!r}, loaders={candidate.loaders!r}. "
             "Refusing to pin an incompatible build."
         )
-    return game_version
+    return game_version, loader
 
 
 def cli_main(argv=None):
@@ -853,13 +904,13 @@ def cli_main(argv=None):
 
     pin = _pin_from_cli(args)
     candidate = _candidate_from_cli(args, token=token)
-    game_version = _check_compatibility_or_die(args.repo_root, candidate)
+    game_version, loader = _check_compatibility_or_die(args.repo_root, candidate)
 
     try:
         summary, exit_code, message = run_engine(
             args.repo_root, pin, candidate, category=args.category, token=token,
             allow_breaking=args.allow_breaking, migration_text=migration_text,
-            game_version=game_version,
+            game_version=game_version, loader=loader,
         )
     except EngineError as error:
         print(f"::error::{error.message}", file=sys.stderr)
