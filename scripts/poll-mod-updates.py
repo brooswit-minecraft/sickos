@@ -93,6 +93,23 @@ EXCLUDED_PIN_PATHS = frozenset()
 #   this generic engine refuses to auto-publish a breaking change with no
 #   migration notes (see bump_mod.run_engine's allow_breaking gate) --
 #   also established per-pin, every time, by the same gate.
+# - "downgrade_refused": a pin ahead of the latest resolvable RELEASE
+#   (e.g. pinned to a prerelease the `version_type == "release"` filter
+#   then permanently out-resolves) hits this identically every run until
+#   something upstream changes (a new, genuinely newer release is
+#   published) -- the same repeatable-until-external-change shape as the
+#   two outcomes above, confirmed live: mods/ice-and-fire-community-
+#   edition.pw.toml pinned at a prerelease ahead of its newest actual
+#   release reaches this, not unsupported_version_scheme, the moment its
+#   pinned version string happens to be valid semver (MINECRAFT-362
+#   review, sixth round).
+# - "dependency_conflict": the SAME resolved "latest compatible"
+#   candidate is re-resolved every run until a newer one is published,
+#   and find_dependency_conflicts is a pure function of that candidate's
+#   own declared dependencies plus the pack's current pins -- so this
+#   recurs identically every run for the same reason the three outcomes
+#   above do, until the conflicting dependency declaration or pin changes
+#   upstream.
 # "resolution_failed" is deliberately NOT unconditionally in this set
 # (MINECRAFT-362 review, third round): modrinth_compat.py's version-list
 # fetch catches bare `Exception`, so "resolution_failed" is a catch-all
@@ -105,7 +122,10 @@ EXCLUDED_PIN_PATHS = frozenset()
 # individually-confirmed project ids below get the "expected" treatment
 # for that outcome; see `_is_expected_gap` and the aggregate guard in
 # `main()` for the rest of the fix.
-EXPECTED_GAP_OUTCOMES = frozenset({"unsupported_version_scheme", "breaking_change_requires_human_review"})
+EXPECTED_GAP_OUTCOMES = frozenset({
+    "unsupported_version_scheme", "breaking_change_requires_human_review",
+    "downgrade_refused", "dependency_conflict",
+})
 
 # The 4 projects individually confirmed (by a live, read-only, authorized
 # resolution against all 78 eligible pins, done under this ticket's
@@ -236,12 +256,16 @@ def poll_and_bump(repo_root, *, token=None, fetcher=None, run_command=subprocess
             outcomes.append(outcome)
             continue
 
-        # AC4: derive the pack-version category from the candidate's own
-        # Modrinth changelog (fix -> patch, feature -> minor, breaking ->
-        # minor-during-0.x) -- there is no trigger payload here to supply
-        # one, unlike DA's dispatch path. None (unrecognised/absent) falls
-        # through to bump_mod.run_engine's own documented default-minor
-        # behaviour (MINECRAFT-362 review).
+        # AC4: this is only a HINT now, not the deciding factor -- real
+        # Modrinth changelogs are bullet lists, not the "## Breaking" /
+        # "## Features" / "## Fixes" headings this regex looks for, so
+        # it matched 0 of 15 real candidates when last measured live.
+        # run_engine derives the real category from the semver delta
+        # between the currently-pinned and candidate version numbers,
+        # and only lets this changelog-derived hint ESCALATE that
+        # (never downgrade it) -- see run_engine's own category
+        # determination, right after its no-downgrade check
+        # (MINECRAFT-362 review, sixth round).
         category = modrinth_compat.derive_category_from_changelog(candidate.changelog)
 
         try:

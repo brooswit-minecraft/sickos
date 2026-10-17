@@ -202,7 +202,12 @@ class TestAlreadyPinnedAndNoCandidate(EngineTestCase):
 
 
 class TestSuccessfulBump(EngineTestCase):
-    def test_matching_metadata_bumps_and_bumps_pack_minor_by_default(self):
+    def test_matching_metadata_bumps_and_classifies_by_semver_delta(self):
+        # 1.0.0 -> 1.1.0 is a minor-component change, so this is real
+        # "minor" (not the old "minor_default_absent_category" sentinel)
+        # even though no category/changelog was supplied -- the semver
+        # delta is now the determining signal (MINECRAFT-362 review,
+        # sixth round).
         content = b"new mod jar"
         candidate = make_candidate(content=content)
         self.register(candidate.version_id, metadata_for(candidate))
@@ -214,7 +219,7 @@ class TestSuccessfulBump(EngineTestCase):
         self.assertTrue(summary["changed"])
         self.assertEqual(summary["outcome"], "bumped")
         self.assertEqual(summary["new_pack_version"], "0.23.0")
-        self.assertEqual(summary["mapping_rule"], "minor_default_absent_category")
+        self.assertEqual(summary["mapping_rule"], "minor")
         self.assertTrue(summary["listing_review_required"])
 
         pin_text = (self.repo / "mods" / "example-mod.pw.toml").read_text(encoding="utf-8")
@@ -231,6 +236,63 @@ class TestSuccessfulBump(EngineTestCase):
         staged = _git(self.repo, "diff", "--cached", "--name-only").stdout.splitlines()
         self.assertIn("mods/example-mod.pw.toml", staged)
         self.assertIn("pack.toml", staged)
+
+    def test_patch_level_semver_delta_with_a_real_fix_only_changelog(self):
+        # The exact shape of a real Modrinth changelog that never
+        # matches derive_category_from_changelog's heading-only regex --
+        # classified correctly anyway, from the version numbers alone.
+        content = b"patch jar"
+        candidate = make_candidate(content=content, version_number="1.4.3")
+        self.register(candidate.version_id, metadata_for(candidate))
+        self.register(OLD_VERSION_ID, {"id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.4.2"})
+        pin = make_pin()
+
+        summary, exit_code, _ = self.run_engine(pin, candidate, content=content)
+        self.assertEqual(exit_code, bump_mod.EXIT_OK)
+        self.assertEqual(summary["mapping_rule"], "patch")
+
+    def test_major_semver_delta_alone_triggers_the_breaking_gate(self):
+        # No category/changelog supplied at all -- the major-version
+        # delta alone must still reach the allow_breaking fail-closed
+        # gate; a breaking change announced only via version number,
+        # not a changelog heading, must not slip through as "minor".
+        content = b"breaking jar"
+        candidate = make_candidate(content=content, version_number="2.0.0")
+        self.register(candidate.version_id, metadata_for(candidate))
+        self.register(OLD_VERSION_ID, {"id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.4.2"})
+        pin = make_pin()
+
+        with self.assertRaises(bump_mod.EngineError) as ctx:
+            self.run_engine(pin, candidate, content=content)
+        self.assertEqual(ctx.exception.outcome, "breaking_change_requires_human_review")
+
+    def test_changelog_category_cannot_downgrade_a_major_semver_delta(self):
+        # category="patch" (e.g. misread from a changelog) must not
+        # suppress the breaking classification a major version bump
+        # itself declares -- escalation is one-directional.
+        content = b"breaking jar undersold as a fix"
+        candidate = make_candidate(content=content, version_number="3.0.0")
+        self.register(candidate.version_id, metadata_for(candidate))
+        self.register(OLD_VERSION_ID, {"id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "2.5.1"})
+        pin = make_pin()
+
+        with self.assertRaises(bump_mod.EngineError) as ctx:
+            self.run_engine(pin, candidate, content=content, category="patch")
+        self.assertEqual(ctx.exception.outcome, "breaking_change_requires_human_review")
+
+    def test_changelog_category_can_escalate_a_minor_semver_delta(self):
+        # 1.0.0 -> 1.1.0 is only a minor-component delta, but an explicit
+        # category="breaking" (e.g. a real changelog heading) must still
+        # escalate it to breaking.
+        content = b"minor-looking but actually breaking"
+        candidate = make_candidate(content=content, version_number="1.1.0")
+        self.register(candidate.version_id, metadata_for(candidate))
+        self.register(OLD_VERSION_ID, {"id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0"})
+        pin = make_pin()
+
+        with self.assertRaises(bump_mod.EngineError) as ctx:
+            self.run_engine(pin, candidate, content=content, category="breaking")
+        self.assertEqual(ctx.exception.outcome, "breaking_change_requires_human_review")
 
     def test_breaking_category_fails_closed_without_allow_breaking(self):
         # AC4 requires real migration/reset instructions on a breaking
@@ -672,6 +734,13 @@ class TestCliMain(unittest.TestCase):
             with self.assertRaises(SystemExit) as ctx:
                 bump_mod.cli_main(self._base_args())
         self.assertIn("MODRINTH_TOKEN", str(ctx.exception))
+
+    def test_transport_failure_is_a_clean_exit_not_a_bare_traceback(self):
+        error = urllib.error.URLError("timed out")
+        with mock.patch.object(bump_mod, "fetch_version_metadata", side_effect=error):
+            with self.assertRaises(SystemExit) as ctx:
+                bump_mod.cli_main(self._base_args())
+        self.assertIn("timed out", str(ctx.exception))
 
     def test_engine_error_is_reported_with_its_own_exit_code(self):
         with mock.patch.object(bump_mod, "fetch_version_metadata", return_value=cli_version_metadata("NEWID")):

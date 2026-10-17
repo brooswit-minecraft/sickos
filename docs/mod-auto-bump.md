@@ -263,16 +263,21 @@ notes file the way a verbatim splice did in the prior round, and capped
 at `MAX_CHANGELOG_CHARS` so one mod's long changelog cannot make the
 notes file unbounded.
 
-32 tests in `tests/test_bump_mod.py` cover: already-pinned/no-candidate
-no-ops, a real bump (pin rewrite, pack-version bump, notes, staging),
-the breaking-change fail-closed gate, its `allow_breaking=True` +
+37 tests in `tests/test_bump_mod.py` cover: already-pinned/no-candidate
+no-ops, a real bump classified by semver delta (not the old
+"_default_absent_category" sentinel), a patch-level real-world
+fix-only-changelog bump, a major semver delta alone reaching the
+breaking gate with no changelog/category involved, a changelog category
+unable to downgrade a major semver delta and able to escalate a minor
+one, the breaking-change fail-closed gate, its `allow_breaking=True` +
 `migration_text` override (and refusal when `migration_text` is
 missing), the CLI entry point's own argument validation, side- and
 mod-id-defaulting/disagreement-refusal, incompatible-candidate refusal,
 real compatibility/dependency data reaching `run_engine`, an anonymous
-404 naming `MODRINTH_TOKEN` rather than a bare traceback, and the commit
-step carrying the Release-Only/Mod-Auto-Bump trailers (`TestCliMain`),
-an unrelated staged file surviving a CLI-triggered commit untouched
+404 naming `MODRINTH_TOKEN` and a transport failure (URLError/timeout)
+exiting cleanly, neither as a bare traceback, and the commit step
+carrying the Release-Only/Mod-Auto-Bump trailers (`TestCliMain`), an
+unrelated staged file surviving a CLI-triggered commit untouched
 (`TestCliCommitBump`), `_fenced`'s defanging/truncation (`TestFenced`),
 downgrade refusal, the identity/hash gate's failure modes (wrong
 project, forged bytes, a 404 lookup), and gate-failure/dirty-tree
@@ -299,10 +304,44 @@ dedup-by-version-id already makes running both mechanisms against the
 same pin safe, and excluding it left a DA dispatch that gets dropped by
 the shared concurrency group with nothing to recover it), resolves each
 pin's latest compatible candidate, and runs `bump_mod.run_engine` on any
-real candidate. The category passed to `bump_mod.run_engine` is derived
-from the candidate's own Modrinth changelog
-(`modrinth_compat.derive_category_from_changelog` -- AC4; there is no
-trigger payload here to supply one the way DA's dispatch gets).
+real candidate. A category hint, derived from the candidate's own
+Modrinth changelog (`modrinth_compat.derive_category_from_changelog`),
+is passed to `bump_mod.run_engine` -- but see "AC4 category
+determination is the semver delta, not the changelog" below for why
+this is only a hint now, not the deciding factor.
+
+**AC4 category determination is the semver delta, not the changelog
+(sixth review round).** `derive_category_from_changelog` only matches a
+conventional "## Breaking" / "## Features" / "## Fixes" markdown
+heading. Measured against a live, read-only resolution of all 78
+eligible pins: 0 of 15 real update candidates matched it at all -- real
+Modrinth changelogs are bullet lists ("- Fixed memory leak in
+BlockEntityOnLoadCallback", "fix #88 #92 #95 #101"), not headings. Every
+one of those 15 would previously have defaulted to minor regardless of
+what it actually changed, and a genuine breaking change announced only
+in bullets (no heading) would classify as `None`, reach
+`bump_pack_version` as `minor_default_absent_category`, never set
+`mapping_rule == "breaking_as_minor"`, and so never reach the
+`allow_breaking` fail-closed gate at all -- bypassing the exact
+protection that gate exists to provide, simply because the detector
+upstream of it never saw the breaking change.
+
+The fix: `run_engine` now derives the REAL category from the semver
+delta between the currently-pinned and candidate version numbers (both
+already confirmed valid semver by the no-downgrade check that runs just
+before this) -- `semver_compare.semver_delta_category`: major component
+changed -> `"breaking"`, else minor changed -> `"minor"`, else patch
+changed -> `"patch"`. This is an always-available signal a mod author
+already committed to, unlike changelog prose. The caller-supplied
+category (the changelog hint above, or an explicit `--category` on
+`scripts/bump_mod.py`'s CLI) can only ESCALATE the semver-delta
+classification, never downgrade it (`semver_compare.more_severe_category`)
+-- a changelog heading claiming "breaking" is trusted over a
+merely-patch-looking version bump, but a heading that says "fix" on a
+major version bump does not get to suppress the breaking classification
+the version number itself already declares. The generated notes file's
+category note now always states both signals and which one was used,
+replacing the old silent "defaulted to minor" wording.
 
 **At most one real bump per run, by design (second review round).** A
 first implementation committed every eligible mod's bump in the same run
@@ -374,26 +413,49 @@ need `MODRINTH_TOKEN` to be set (still held, see "Status"), and the 6
 non-semver ones need either a human bump or a different comparator this
 document does not attempt.
 
+**`downgrade_refused` and `dependency_conflict` are expected gaps too
+(sixth review round).** Both were still landing in `failed`, the
+red-by-construction defect's third occurrence: each recurs IDENTICALLY
+every run for a given pin until something upstream changes, the same
+shape as the two outcomes above. `downgrade_refused` fires every run for
+a pin whose currently-pinned version is ahead of the latest version
+`resolve_latest_compatible_version`'s `version_type == "release"` filter
+will ever return (e.g. pinned to a prerelease) -- confirmed live:
+`mods/ice-and-fire-community-edition.pw.toml` is pinned ahead of its
+newest actual release today, and lands on `unsupported_version_scheme`
+only incidentally, because its pinned version string happens not to be
+valid semver; a pin in the same situation with a valid-semver pinned
+version would hit `downgrade_refused` every run instead, unclassified.
+`dependency_conflict` is a pure function of the SAME re-resolved "latest
+compatible" candidate's own declared dependencies against the pack's
+current pins, so it recurs for the same structural reason. Both are now
+in `EXPECTED_GAP_OUTCOMES` unconditionally (no per-mod-id allowlist
+needed, unlike `resolution_failed` -- each is already established
+per-pin by one deterministic check, not a catch-all).
+
 Push-gating and credential-checking are driven by whether the run's
 summary recorded a real bump, not by the script's overall exit code, so
 an unexpected failure elsewhere in the same run never blocks pushing a
 bump this run already made -- the job still fails afterward (so the
 failure is visible), but only after that push.
 
-15 tests in `tests/test_poll_mod_updates.py` cover: Dynamic Atmosphere's
+18 tests in `tests/test_poll_mod_updates.py` cover: Dynamic Atmosphere's
 pin considered like any other (no-op when nothing is newer for it, bumped
 when something is), no-op when nothing is newer for a mod, a single bump
-actually committing with the right trailers, a changelog-derived category
-reaching the engine, only the FIRST of two simultaneously-eligible mods
-bumping in one run (the second is left for the next run), an incompatible
-candidate correctly read as no-candidate, a downgrade reported (not
-crashed), one mod's failure not blocking another mod's success in the
-same run, a breaking candidate refused rather than auto-published, and
-`main()`'s exit-code classification itself: expected gaps alone (via the
-allowlist) keep the run green, a `resolution_failed` for a mod_id NOT on
-the allowlist still fails it, a genuine unexpected failure still fails
-it, and the aggregate "every pin failed to resolve" guard fails the run
-even when every one of those failures is individually allowlisted.
+actually committing with the right trailers, a changelog category unable
+to downgrade the semver-delta classification and a real bullet-list
+changelog still classifying correctly from the semver delta alone, only
+the FIRST of two simultaneously-eligible mods bumping in one run (the
+second is left for the next run), an incompatible candidate correctly
+read as no-candidate, a downgrade reported (not crashed), one mod's
+failure not blocking another mod's success in the same run, a breaking
+candidate refused rather than auto-published, and `main()`'s exit-code
+classification itself: expected gaps alone (via the allowlist, now
+including `downgrade_refused`/`dependency_conflict`) keep the run green,
+a `resolution_failed` for a mod_id NOT on the allowlist still fails it, a
+genuine unexpected failure still fails it, and the aggregate "every pin
+failed to resolve" guard fails the run even when every one of those
+failures is individually allowlisted.
 `commit_bump` committing an explicit pathspec (not a bare `git commit`)
 is covered separately (`TestCommitBump`), for symmetry with
 `scripts/bump_mod.py`'s own `cli_commit_bump` fix.
@@ -436,7 +498,9 @@ whatever the earlier run already pushed.
   from and still used by the DA engine (12 tests, plus DA's own 74 still
   pass unchanged).
 - `scripts/semver_compare.py` -- no-downgrade comparator, extracted from
-  and still used by the DA engine (10 tests).
+  and still used by the DA engine, plus `semver_delta_category` (the
+  real AC4 category source, see below) and `more_severe_category`
+  (20 tests).
 - The direct-pin-vs-packwiz decision above.
 - `Release-Only: true` on DA's generated commits (see `da-auto-bump.md`).
 - `scripts/bump_mod.py` -- the generalized write path, with the
@@ -452,21 +516,32 @@ whatever the earlier run already pushed.
   pin on disk (refusing a disagreeing explicit flag rather than
   overriding), and commits with the same trailers the automated path
   uses, the candidate's own changelog now included in generated notes
-  (fenced and length-capped via `_fenced`), and
-  `assert_only_pin_changed_under_mods` checking its own `git diff` call's
-  exit code instead of passing vacuously on a git failure, and `--mod-id` now resolved through the same on-disk-defaulting/disagreement-refusal as the other pin-identity fields (32 tests).
+  (fenced and length-capped via `_fenced`), `assert_only_pin_changed_under_mods`
+  checking its own `git diff` call's exit code instead of passing
+  vacuously on a git failure, `--mod-id` now resolved through the same
+  on-disk-defaulting/disagreement-refusal as the other pin-identity
+  fields, `cli_commit_bump` committing an explicit pathspec rather than
+  a bare `git commit`, a real AC4 category determination from the
+  semver delta between the currently-pinned and candidate version
+  numbers (escalatable, never downgradable, by a changelog/explicit
+  category), and a transport failure (DNS/timeout/connection refused)
+  now exiting cleanly instead of a bare traceback (37 tests).
 - `scripts/poll-mod-updates.py` + `.github/workflows/mod-auto-bump-poll.yml`
   -- the generalized trigger, now covering Dynamic Atmosphere's own pin
   too, reading `pack.toml`'s `[versions]` shape strictly (raises rather
-  than silently defaulting to `None, None`), threading `MODRINTH_TOKEN`
-  into the version-list query, deriving category from each candidate's
-  changelog, making AT MOST ONE bump commit per run (so it never asks
-  `release.yml` to run twice before the first run finishes), and
+  than silently defaulting to `None, None`), passing a changelog-derived
+  category HINT (not the deciding factor -- see above) to each
+  candidate's bump, making AT MOST ONE bump commit per run (so it never
+  asks `release.yml` to run twice before the first run finishes),
   classifying outcomes against an explicit allowlist
   (`KNOWN_ANONYMOUS_404_MOD_IDS`) plus an aggregate "did anything resolve
-  at all" guard -- not a blanket exemption for the whole
-  `"resolution_failed"` outcome class -- so the scheduled job is neither
-  red by construction nor silently green through an outage, and `commit_bump` committing an explicit pathspec rather than a bare `git commit` (15 tests).
+  at all" guard for `resolution_failed` -- not a blanket exemption for
+  that whole outcome class -- so the scheduled job is neither red by
+  construction nor silently green through an outage, `downgrade_refused`/
+  `dependency_conflict` now also classified as expected per-pin gaps
+  (the same repeatable-until-external-change shape), and `commit_bump`
+  committing an explicit pathspec rather than a bare `git commit`
+  (18 tests).
 - The shared `mod-auto-bump` concurrency group, covering both mechanisms.
 - `modrinth_compat.find_dependency_conflicts` -- refuses a candidate that
   declares a currently-pinned project `incompatible` (6 tests, plus 3

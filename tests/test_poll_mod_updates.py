@@ -259,8 +259,15 @@ class TestPollAndBump(unittest.TestCase):
         self.assertFalse(by_mod["ALPHA1"]["changed"])
 
     def test_category_derived_from_changelog_is_passed_to_the_engine(self):
+        # A patch-level semver delta (1.0.0 -> 1.0.1) with an agreeing
+        # changelog heading -- both signals say "patch", so that's what
+        # reaches the engine. (A disagreeing changelog cannot downgrade
+        # a more severe semver delta -- see test_poll_mod_updates'
+        # sibling tests in tests/test_bump_mod.py for that escalation
+        # behaviour; this test only checks the changelog hint reaches
+        # run_engine at all.)
         self.modrinth.register_latest(
-            "ALPHA1", "ALPHANEW", "1.1.0", b"alpha v2",
+            "ALPHA1", "ALPHANEW", "1.0.1", b"alpha v2",
         )
         self.modrinth.version_lists["ALPHA1"][0]["changelog"] = "## Fixes\n- fixed a crash\n"
         self.modrinth.register_old_pin_metadata("ALPHAOLD", "ALPHA1", "1.0.0")
@@ -270,6 +277,34 @@ class TestPollAndBump(unittest.TestCase):
         self.assertEqual(by_mod["ALPHA1"]["outcome"], "bumped")
         self.assertEqual(by_mod["ALPHA1"]["mapping_rule"], "patch")
         self.assertEqual(by_mod["ALPHA1"]["new_pack_version"], "0.22.1")
+
+    def test_changelog_category_cannot_downgrade_the_semver_delta(self):
+        # 1.0.0 -> 1.1.0 is a minor-component delta; a "## Fixes" heading
+        # (patch) must not downgrade that -- the more severe of the two
+        # wins.
+        self.modrinth.register_latest("ALPHA1", "ALPHANEW", "1.1.0", b"alpha v2")
+        self.modrinth.version_lists["ALPHA1"][0]["changelog"] = "## Fixes\n- fixed a crash\n"
+        self.modrinth.register_old_pin_metadata("ALPHAOLD", "ALPHA1", "1.0.0")
+
+        outcomes = self.run_poll()
+        by_mod = {o["mod_id"]: o for o in outcomes}
+        self.assertEqual(by_mod["ALPHA1"]["outcome"], "bumped")
+        self.assertEqual(by_mod["ALPHA1"]["mapping_rule"], "minor")
+        self.assertEqual(by_mod["ALPHA1"]["new_pack_version"], "0.23.0")
+
+    def test_real_bullet_list_changelog_still_classifies_from_semver_delta(self):
+        # The exact shape of a real Modrinth changelog -- a bullet list,
+        # not a heading -- which derive_category_from_changelog cannot
+        # match (measured live: 0 of 15 real candidates matched). The
+        # semver delta alone must still classify this correctly.
+        self.modrinth.register_latest("ALPHA1", "ALPHANEW", "1.0.1", b"alpha v2")
+        self.modrinth.version_lists["ALPHA1"][0]["changelog"] = "- Fixed memory leak in BlockEntityOnLoadCallback"
+        self.modrinth.register_old_pin_metadata("ALPHAOLD", "ALPHA1", "1.0.0")
+
+        outcomes = self.run_poll()
+        by_mod = {o["mod_id"]: o for o in outcomes}
+        self.assertEqual(by_mod["ALPHA1"]["outcome"], "bumped")
+        self.assertEqual(by_mod["ALPHA1"]["mapping_rule"], "patch")
 
     def test_one_mod_failing_does_not_block_the_others(self):
         # Alpha's candidate forges hashes that don't match its own
@@ -283,7 +318,7 @@ class TestPollAndBump(unittest.TestCase):
         corrupted_metadata["files"][0]["hashes"] = {"sha1": "0" * 40, "sha512": "0" * 128}
         self.modrinth.single_versions["ALPHANEW"] = corrupted_metadata
 
-        self.modrinth.register_latest("BETA1", "BETANEW", "2.0.0", b"beta v2")
+        self.modrinth.register_latest("BETA1", "BETANEW", "1.1.0", b"beta v2")
         self.modrinth.register_old_pin_metadata("BETAOLD", "BETA1", "1.0.0")
 
         outcomes = self.run_poll()
@@ -347,6 +382,21 @@ class TestMainExitCode(unittest.TestCase):
         self.assertIn("::warning::A (mods/a.pw.toml)", output)
         self.assertIn("::warning::B (mods/b.pw.toml)", output)
         self.assertIn("::warning::C (mods/c.pw.toml)", output)
+
+    def test_downgrade_refused_and_dependency_conflict_are_expected_gaps(self):
+        # MINECRAFT-362 review, sixth round: both recur identically every
+        # run for a given pin until something upstream changes (a newer
+        # real release, or a changed dependency declaration) -- the same
+        # repeatable-until-external-change shape as the two outcomes
+        # above, so they must not be red-by-construction either.
+        outcomes = [
+            {"mod_id": "F", "mod_name": "F", "pin_path": "mods/f.pw.toml", "outcome": "downgrade_refused", "error": "x"},
+            {"mod_id": "G", "mod_name": "G", "pin_path": "mods/g.pw.toml", "outcome": "dependency_conflict", "error": "y"},
+        ]
+        exit_code, output = self._run_main_with(outcomes)
+        self.assertEqual(exit_code, 0)
+        self.assertIn("::warning::F (mods/f.pw.toml)", output)
+        self.assertIn("::warning::G (mods/g.pw.toml)", output)
 
     def test_a_real_unexpected_failure_still_fails_the_run(self):
         known_404_mod_id = next(iter(poll_mod_updates.KNOWN_ANONYMOUS_404_MOD_IDS))

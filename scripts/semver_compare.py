@@ -71,3 +71,51 @@ def compare_semver(left, right):
     if len(left_pre) != len(right_pre):
         return -1 if len(left_pre) < len(right_pre) else 1
     return 0
+
+
+CATEGORY_RANK = {"patch": 1, "minor": 2, "breaking": 3}
+
+
+def semver_delta_category(previous_version, candidate_version):
+    """Classify an update by which (major, minor, patch) component
+    changed between two version strings: major changed -> "breaking",
+    else minor changed -> "minor", else patch changed -> "patch". Returns
+    None if either string is not valid semver, or if the (major, minor,
+    patch) core is identical between the two (e.g. only a prerelease
+    identifier changed, or build metadata) -- there is no component
+    delta to classify in that case, not an error.
+
+    Added (MINECRAFT-362 review, sixth round) because a changelog-text
+    heading (modrinth_compat.derive_category_from_changelog) measured
+    live against real Modrinth changelogs: 0 of 15 real candidates
+    matched any heading (real changelogs are bullet lists, not "##
+    Breaking"/"## Fixes" sections), so it was never the deciding factor
+    in practice and a genuine breaking change announced in a bullet
+    would silently default to minor. The version numbers themselves are
+    an always-available signal a mod author already committed to."""
+    previous_parsed = parse_semver(previous_version)
+    candidate_parsed = parse_semver(candidate_version)
+    if previous_parsed is None or candidate_parsed is None:
+        return None
+    (p_major, p_minor, p_patch), _ = previous_parsed
+    (c_major, c_minor, c_patch), _ = candidate_parsed
+    if c_major != p_major:
+        return "breaking"
+    if c_minor != p_minor:
+        return "minor"
+    if c_patch != p_patch:
+        return "patch"
+    return None
+
+
+def more_severe_category(*categories):
+    """Return whichever of `categories` ranks highest in CATEGORY_RANK
+    (breaking > minor > patch), ignoring any that are None or not a
+    known category. Returns None if none qualify. Used to let a
+    changelog/explicit category ESCALATE a semver-delta classification
+    (or vice versa) without ever letting either one downgrade the other
+    (MINECRAFT-362 review, sixth round)."""
+    ranked = [c for c in categories if c in CATEGORY_RANK]
+    if not ranked:
+        return None
+    return max(ranked, key=lambda c: CATEGORY_RANK[c])

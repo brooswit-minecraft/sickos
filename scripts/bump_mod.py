@@ -59,6 +59,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import modrinth_metadata  # noqa: E402 - needs sys.path set up first
 import mod_eligibility  # noqa: E402
 import server_update_policy  # noqa: E402
+import semver_compare  # noqa: E402
 from modrinth_compat import (  # noqa: E402
     VersionCandidate, decide_update, find_dependency_conflicts, version_candidate_from_json,
 )
@@ -309,9 +310,12 @@ def run_engine(repo_root, pin, candidate, *, category=None,
 
     assert_restore_targets_clean(repo_root, pin.pin_path, run_command=run_command)
 
+    # Raw caller-supplied category, kept only for the notes text below --
+    # the FINAL category is resolved later, once previous_version_number
+    # is known (see the no-downgrade check), by combining this with the
+    # semver delta (MINECRAFT-362 review, sixth round).
     category_received = category
-    if category is not None and category not in KNOWN_CATEGORIES:
-        category = "__unrecognised__"
+    caller_category = category if category in KNOWN_CATEGORIES else None
 
     dedup_decision = decide_update(pin, candidate)
     if dedup_decision == "no_candidate":
@@ -425,6 +429,24 @@ def run_engine(repo_root, pin, candidate, *, category=None,
             f"{candidate.version_number!r}, {previous_version_number!r}",
         )
 
+    # AC4 category determination (MINECRAFT-362 review, sixth round):
+    # the semver delta between the currently-pinned and candidate version
+    # numbers (both confirmed parseable above) is an always-available
+    # signal the mod author already committed to -- major changed ->
+    # breaking, minor changed -> minor, patch changed -> patch. A
+    # caller-supplied category (a changelog heading, or an explicit
+    # --category on scripts/bump_mod.py's CLI) can only ESCALATE this,
+    # never downgrade it: a heading that says "breaking" is trusted over
+    # a merely-patch-looking version bump, but a heading that says "fix"
+    # on a major version bump does not get to suppress the breaking
+    # classification the version number itself declares. Measured live
+    # against real Modrinth changelogs: 0 of 15 real candidates matched
+    # derive_category_from_changelog's heading-only regex (real
+    # changelogs are bullet lists), so the semver delta -- not the
+    # changelog -- is the one signal that is actually always available.
+    delta_category = semver_compare.semver_delta_category(previous_version_number, candidate.version_number)
+    category = semver_compare.more_severe_category(caller_category, delta_category)
+
     # Dependency check (narrow, see modrinth_compat.find_dependency_conflicts):
     # refuse a candidate that declares another currently-pinned project
     # incompatible. Reads the pack's CURRENT on-disk pins, before this
@@ -463,10 +485,10 @@ def run_engine(repo_root, pin, candidate, *, category=None,
                 "generic engine cannot auto-generate migration/reset instructions. Refusing to "
                 "auto-publish a placeholder in their place -- a human must review this release "
                 "and publish it by hand: `python3 scripts/bump_mod.py --repo-root . --pin-path "
-                f"{pin.pin_path} --mod-id {pin.mod_id} --version-id {candidate.version_id} "
-                "--category breaking --allow-breaking --migration-text-file <path> ...` "
-                "(run `python3 scripts/bump_mod.py --help` for the full set of required "
-                "candidate fields) once real migration/reset instructions are written.",
+                f"{pin.pin_path} --version-id {candidate.version_id} --category breaking "
+                "--allow-breaking --migration-text-file <path>` (run `python3 scripts/"
+                "bump_mod.py --help` for the remaining optional flags) once real "
+                "migration/reset instructions are written.",
             )
         if not migration_text or not migration_text.strip():
             raise EngineError(
@@ -486,16 +508,21 @@ def run_engine(repo_root, pin, candidate, *, category=None,
             "published release's notes",
         )
 
-    category_note = None
     if category is None:
         category_note = (
-            f"No category was supplied; defaulted to minor per {pin.name}'s mapping rule "
-            f"({mapping_rule})."
+            f"No category could be determined -- the version delta "
+            f"{previous_version_number} -> {candidate.version_number} changed no semver "
+            f"component, and no changelog/explicit category was supplied or recognised "
+            f"(received {category_received!r}); defaulted to minor per {pin.name}'s mapping "
+            f"rule ({mapping_rule})."
         )
-    elif category == "__unrecognised__":
+    else:
         category_note = (
-            f"Category {category_received!r} was not one of {KNOWN_CATEGORIES}; defaulted to "
-            f"minor per {pin.name}'s mapping rule ({mapping_rule})."
+            f"Category: {category!r} -- semver delta {previous_version_number} -> "
+            f"{candidate.version_number} => {delta_category!r}; changelog/explicit category "
+            f"=> {category_received!r}. The more severe of the two is used; a changelog/"
+            "explicit category can only escalate the semver-delta classification, never "
+            "downgrade it."
         )
 
     download_and_verify(candidate.download_url, candidate.sha1, candidate.sha512, downloader)
@@ -733,6 +760,16 @@ def _candidate_from_cli(args, *, token=None):
             "KNOWN_ANONYMOUS_404_MOD_IDS), set MODRINTH_TOKEN in the environment before running "
             "this CLI and try again."
         ) from error
+    except urllib.error.URLError as error:
+        # Distinct from HTTPError above: this is a transport-level
+        # failure (DNS, connection refused, timeout) that never reached
+        # Modrinth at all, not an HTTP status Modrinth itself returned --
+        # a token would not help here (MINECRAFT-362 review, sixth
+        # round: only HTTPError was previously handled).
+        raise SystemExit(
+            f"GET /v2/version/{args.version_id} failed before reaching Modrinth: {error.reason}. "
+            "Check your network connection and try again."
+        ) from error
     if metadata.get("id") != args.version_id:
         raise SystemExit(
             f"Modrinth's response for version {args.version_id!r} carries a different id "
@@ -828,12 +865,22 @@ def cli_main(argv=None):
         commit_paths = ("pack.toml", "index.toml", pin.pin_path, summary["notes_path"])
         commit_sha = cli_commit_bump(args.repo_root, commit_message, commit_paths)
         summary["commit_sha"] = commit_sha
-        print(f"Committed {commit_sha} (Release-Only; will not trigger a server deploy/restart).")
+        print(
+            f"Committed {commit_sha} (Release-Only; will not trigger a server deploy/restart). "
+            "This commit is LOCAL ONLY -- push it to main yourself (e.g. `git push origin "
+            "main`) for release.yml to fire; nothing here pushes on your behalf."
+        )
     elif summary["changed"]:
-        print("--no-commit: bump staged but not committed. Commit it yourself with "
-              "build_generic_commit_message's output (see scripts/da-auto-bump-dispatch.py) so "
-              "the Release-Only/Mod-Auto-Bump trailers are present -- a commit message without "
-              "them is read as permission to deploy/restart the live server.")
+        print(
+            "--no-commit: bump staged but not committed. Do NOT run a bare `git commit` -- "
+            "that would also commit anything else you already had staged, and a commit with "
+            "no Release-Only trailer is read as permission to deploy/restart the live server. "
+            "Commit explicitly: `git commit -F <message-file> -- $(git diff --cached --name-only"
+            ")`, where <message-file> holds a message carrying `Release-Only: true` and "
+            f"`Mod-Auto-Bump: {pin.mod_id} {candidate.version_id}` alone in its final paragraph "
+            "(see scripts/da-auto-bump-dispatch.py's build_generic_commit_message for the exact "
+            "shape git's trailer parser requires)."
+        )
 
     summary_text = json.dumps(summary, indent=2, sort_keys=True)
     print(summary_text)
