@@ -45,23 +45,25 @@ MISSING_CREDENTIAL_NAMES = (
 
 
 # --------------------------------------------------------------------------
-# Load apply-da-release-notes.py's has_da_auto_bump_trailer by file path,
-# the same way its own test suite does -- the filename has hyphens, so it
-# cannot be imported by a normal `import` statement. Imported (not
-# reimplemented) so build_commit_message is tested against the real gate
-# function SICKOS-79's workflow actually runs, not a re-derived copy of it.
+# Load release_decisions.py's generic has_trailer(name, message) by file
+# path, the same way its own test suite does -- the filename has no
+# hyphens, but loading by path (not a normal `import`) keeps this script
+# runnable as a standalone file, same as release_decisions.py itself is
+# invoked from release.yml. Imported (not reimplemented) so
+# build_commit_message is tested against the real trailer-detection
+# function MINECRAFT-49's release.yml (check-hold) actually runs, not a
+# re-derived copy of it. Previously loaded apply-da-release-notes.py's own
+# has_da_auto_bump_trailer, deleted by MINECRAFT-49 in favor of this
+# already-generic helper.
 # --------------------------------------------------------------------------
 
 def _load_has_da_auto_bump_trailer():
-    module_path = Path(__file__).resolve().parent / "apply-da-release-notes.py"
-    spec = importlib.util.spec_from_file_location("apply_da_release_notes", module_path)
+    module_path = Path(__file__).resolve().parent / "release_decisions.py"
+    spec = importlib.util.spec_from_file_location("release_decisions", module_path)
     module = importlib.util.module_from_spec(spec)
-    # Must be registered in sys.modules before exec_module(): the target
-    # module defines a @dataclass, whose decorator looks itself up via
-    # sys.modules[cls.__module__] while the class body is still executing.
-    sys.modules["apply_da_release_notes"] = module
+    sys.modules["release_decisions"] = module
     spec.loader.exec_module(module)
-    return module.has_da_auto_bump_trailer
+    return lambda message: module.has_trailer("DA-Auto-Bump", message)
 
 
 # --------------------------------------------------------------------------
@@ -222,10 +224,10 @@ def render_paused_summary(da_version: str | None) -> str:
 # --------------------------------------------------------------------------
 # Commit message construction (item 5). The DA-Auto-Bump trailer must sit
 # alone in the commit message's final paragraph, separated from everything
-# above it by a blank line -- git's trailer parser (and SICKOS-79's gate)
-# silently ignores a trailer-shaped line glued directly under prose or a
-# bullet list. See has_da_auto_bump_trailer's docstring in
-# apply-da-release-notes.py.
+# above it by a blank line -- git's trailer parser (and release.yml's
+# check-hold-style gate) silently ignores a trailer-shaped line glued
+# directly under prose or a bullet list. See has_trailer's docstring in
+# release_decisions.py.
 # --------------------------------------------------------------------------
 
 _FEAT_MAPPING_RULES = {

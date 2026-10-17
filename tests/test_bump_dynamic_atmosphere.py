@@ -736,6 +736,17 @@ class TestMigrationExtraction(unittest.TestCase):
         self.assertIn("Done.", extracted)
         self.assertNotIn("- x", extracted)
 
+    def test_crlf_body_extracts_same_as_lf_normalized(self):
+        lf_body = (
+            "category: breaking\n\n# 0.20.0-alpha.1\n\n## Migration\n\nBack up.\n"
+        )
+        crlf_body = lf_body.replace("\n", "\r\n")
+        self.assertEqual(
+            bump.extract_migration_section(crlf_body),
+            bump.extract_migration_section(lf_body),
+        )
+        self.assertEqual(bump.extract_migration_section(crlf_body), "Back up.")
+
     def test_own_section_boundary_ignores_hash_inside_fence(self):
         body = (
             "# 0.20.0\n\n```\n# not the next release\n```\n\nSome text.\n\n"

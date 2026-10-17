@@ -44,29 +44,55 @@ class MemorySftp:
         return SimpleNamespace(st_mode=stat.S_IFREG | 0o600)
 
 
+def full_valid_data():
+    """A complete server-config.json shaped object covering every ALLOWED field, at
+    DA's own default for each (so it round-trips through load_tuning unchanged)."""
+    data = {}
+    for (section, key), (_minimum, _maximum, _kind, default) in sync.ALLOWED.items():
+        data.setdefault(section, {})[key] = default
+    return data
+
+
 class ServerConfigSyncTest(unittest.TestCase):
     def test_tuning_schema_accepts_only_bounded_owned_field(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.json"
-            data = {"integrations": {"createFanTransportPerRpm": 1, "createFanIntervalTicks": 100, "maxFanChunksPerTick": 32}, "runtime": {"simulationSkipChance": 0.75}, "enderGas": {"portalBlockEmission": 100}}
+            data = full_valid_data()
             path.write_text(json.dumps(data))
-            self.assertEqual(
-                {("integrations", "createFanTransportPerRpm"): 1.0, ("integrations", "createFanIntervalTicks"): 100, ("integrations", "maxFanChunksPerTick"): 32, ("runtime", "simulationSkipChance"): 0.75, ("enderGas", "portalBlockEmission"): 100}, sync.load_tuning(path))
-            for field in ("createFanIntervalTicks", "maxFanChunksPerTick"):
-                original = data["integrations"][field]
-                for invalid in (0, 72001, 1.5, True):
-                    data["integrations"][field] = invalid
+            expected = {
+                field: (value if kind is int else float(value))
+                for field, (_minimum, _maximum, kind, value) in sync.ALLOWED.items()
+            }
+            self.assertEqual(expected, sync.load_tuning(path))
+
+            for field, (minimum, maximum, kind, _default) in sync.ALLOWED.items():
+                section, key = field
+                original = data[section][key]
+                invalid_values = [minimum - 1 if kind is int else minimum - 1.0,
+                                   maximum + 1 if kind is int else maximum + 1.0,
+                                   True]
+                if kind is int:
+                    invalid_values.append(original + 0.5)
+                for invalid in invalid_values:
+                    data[section][key] = invalid
                     path.write_text(json.dumps(data))
                     with self.assertRaises(ValueError):
                         sync.load_tuning(path)
-                data["integrations"][field] = original
-            path.write_text(json.dumps({"integrations": {"createFanTransportPerRpm": 1}, "runtime": {"simulationSkipChance": 1.01}, "enderGas": {"portalBlockEmission": 100}}))
-            with self.assertRaises(ValueError):
-                sync.load_tuning(path)
+                data[section][key] = original
+
             path.write_text(json.dumps({"integrations": {"other": 1}}))
             with self.assertRaises(ValueError):
                 sync.load_tuning(path)
-            path.write_text(json.dumps({"integrations": {"createFanTransportPerRpm": 1001}}))
+
+            incomplete = full_valid_data()
+            del incomplete["runtime"]["simulationSkipChance"]
+            path.write_text(json.dumps(incomplete))
+            with self.assertRaises(ValueError):
+                sync.load_tuning(path)
+
+            client_side = full_valid_data()
+            client_side.setdefault("smoke", {})["smokeOpticalDensity"] = 1.0
+            path.write_text(json.dumps(client_side))
             with self.assertRaises(ValueError):
                 sync.load_tuning(path)
 
@@ -123,6 +149,40 @@ class ServerConfigSyncTest(unittest.TestCase):
             sync.level_name("level-name=../world\n")
         with self.assertRaises(ValueError):
             sync.safe_root("/srv/../root")
+
+    def test_regenerated_fields_detects_value_sitting_at_da_default(self):
+        original = "[enderGas]\nportalBlockEmission = 100\n"
+        found = sync.regenerated_fields(
+            original, {("enderGas", "portalBlockEmission"): 250})
+        self.assertEqual([("enderGas", "portalBlockEmission", 100, 250)], found)
+
+    def test_regenerated_fields_ignores_a_field_already_at_the_tuned_value(self):
+        original = "[enderGas]\nportalBlockEmission = 250\n"
+        found = sync.regenerated_fields(
+            original, {("enderGas", "portalBlockEmission"): 250})
+        self.assertEqual([], found)
+
+    def test_regenerated_fields_treats_a_missing_section_as_default(self):
+        found = sync.regenerated_fields(
+            "", {("enderGas", "portalBlockEmission"): 250})
+        self.assertEqual([("enderGas", "portalBlockEmission", 100, 250)], found)
+
+    def test_sync_reports_regeneration_in_job_summary_and_still_patches(self):
+        target = "/srv/minecraft/config/dynamicatmosphere-server.toml"
+        sftp = MemorySftp({
+            "/srv/minecraft/server.properties": b"level-name=world\n",
+            target: b"[enderGas]\nportalBlockEmission = 100\n",
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            summary_path = Path(directory) / "summary.md"
+            summary_path.write_text("")
+            regenerated = sync.synchronize(sftp, "/srv/minecraft", {
+                ("enderGas", "portalBlockEmission"): 250,
+            })
+            sync.report_regeneration(regenerated, {"GITHUB_STEP_SUMMARY": str(summary_path)})
+            self.assertIn(b"portalBlockEmission = 250", sftp.files[target])
+            self.assertIn("DA config regeneration detected", summary_path.read_text())
+            self.assertIn("portalBlockEmission", summary_path.read_text())
 
 
 if __name__ == "__main__":

@@ -475,10 +475,12 @@ This builds and uploads the `.mrpack` as a workflow artifact but skips the
 Release-asset step (there is no Release object to attach to) and the Modrinth publish
 step, the same as any run without Modrinth configured.
 
-For an auto-bump push specifically (a commit carrying a `DA-Auto-Bump` trailer),
-`.github/workflows/da-auto-bump-notes.yml` additionally edits that release's GitHub
-body afterward; see [docs/release-notes-plumbing.md](docs/release-notes-plumbing.md)
-for what it does and does not cover.
+For a release whose commit has `docs/releases/<version>.md` (e.g. an
+auto-bump push, but any commit at that version qualifies), `release.yml`
+passes that file to `reusable-release.yml@v1` as `notes-file` -- its
+content fills both the GitHub release body and the Modrinth changelog. A
+release with no such file behaves exactly as before: generated notes, an
+empty Modrinth changelog.
 
 The accepted-change release policy -- eligibility, the durable hold
 mechanism, version-concurrency and retry/idempotency handling, the
@@ -558,8 +560,9 @@ fired, and the pushed commit sha (or why there isn't one).
 **Commit trailer.** A pushed bump's commit message ends with a
 `DA-Auto-Bump: <da_version> <modrinth_version_id>` trailer, alone in its
 own final paragraph (a blank line before it) -- this exact shape is what
-`da-auto-bump-notes.yml` above gates on; see
-[docs/da-auto-bump.md](docs/da-auto-bump.md)'s "Trailer format" section
+`release.yml`'s `check-hold` job's trailer parser (and
+`da-auto-bump-dispatch.py build-commit-message`'s own self-check) key on;
+see [docs/da-auto-bump.md](docs/da-auto-bump.md)'s "Trailer format" section
 for why the shape matters.
 
 **Listing review issue.** When the engine sets `listing_review_required`
@@ -601,23 +604,57 @@ through `bunx`, so nothing needs installing in your repo.
 ### Live server tuning
 
 Repository-owned settings in `server-config.json` are synchronized by
-`.github/workflows/server-tuning.yml` whenever that file changes, or on manual
-dispatch. The workflow reads `level-name` from the hosted `server.properties`, then
-requires exactly one existing Dynamic Atmosphere config: the modern
+`.github/workflows/server-tuning.yml` whenever that file (or the sync script/tests)
+changes, after the "Server update" workflow completes (so a Dynamic Atmosphere
+version bump re-applies automatically — see below), or on manual dispatch. The
+workflow reads `level-name` from the hosted `server.properties`, then requires
+exactly one existing Dynamic Atmosphere config: the modern
 `config/dynamicatmosphere-server.toml` path or the legacy
 `<level-name>/serverconfig/dynamicatmosphere-server.toml` path. It updates only the
-listed fields through strict-host-key SFTP and verifies the atomic upload. It uses the same `SERVER_SFTP_*` repository
-variables and secrets as the SFTP deployment route and shares that route's
-concurrency lock. NeoForge reloads this server config; the tuning workflow does not
-restart Minecraft.
+listed fields through strict-host-key SFTP and verifies the atomic upload. It uses the
+same `SERVER_SFTP_*` repository variables and secrets as the SFTP deployment route
+(`reset-world.yml`) and shares that route's concurrency lock. NeoForge reloads this
+server config; the tuning workflow does not restart Minecraft.
 
-`runtime.simulationSkipChance` applies to every atmospheric material (default
-0.75). `enderGas.portalBlockEmission` sets the integer amount emitted per portal
-block per producer pass (default 100, zero disables it). These join
-`integrations.createFanTransportPerRpm` in the repository-owned tuning file.
-The independent fan pass uses `integrations.createFanIntervalTicks` (100 ticks,
-five seconds) and `integrations.maxFanChunksPerTick` (32). It never uses the
-ordinary simulation skip setting. These values are also synchronized by CI.
+`server-config.json` must define every field in the sync script's `ALLOWED` map
+exactly once — a config missing one, or naming a field outside that map, is refused
+rather than partially applied. The allow-list currently covers:
+
+- `runtime.simulationSkipChance` (default 0.75) — applies to every atmospheric
+  material.
+- `runtime.simulationIntervalTicks` (default 200) and `runtime.producerIntervalTicks`
+  (default 300) — the main simulation/production cadence; lower is faster.
+- `vapor.rainCloudHeight` (default 192) and `heavyGas.dissipationFactor` (default 3) —
+  shared by Void Gas, Ender Gas and Slime's own dissipation.
+- Per-material emission amounts under `enderGas.*`, `voidGas.*`, `dust.*`,
+  `exhaust.*` and `slime.*` (e.g. `enderGas.portalBlockEmission`, default 100, zero
+  disables it).
+- `integrations.createFanTransportPerRpm` (default 1.0), `integrations.createFanIntervalTicks`
+  (100 ticks, five seconds) and `integrations.maxFanChunksPerTick` (32) — the
+  independent Create fan pass; it never uses the ordinary simulation skip setting.
+
+Ranges, types and defaults are taken from Dynamic Atmosphere's own `ModConfigSpec`
+(`DynamicAtmosphereServerConfig.java`) at the version pinned in
+`mods/dynamic-atmosphere.pw.toml` — re-verify against that source, not against this
+list, on a DA bump that changes these fields' bounds.
+
+**Client-side values are out of reach on purpose.** Settings like
+`smokeOpticalDensity` or reach live in `config/dynamicatmosphere-client.toml` on each
+player's own machine, not on the server. A server-side sync structurally cannot
+reach them — that's not a gap in the allow-list, it's a different file on a
+different computer.
+
+**Re-applying after a DA version bump.** DA's rename-aside config versioning
+renames the live toml aside and regenerates it at defaults when its internal
+`configVersion` no longer matches, discarding every key this sync manages. Because
+the sync is chained to run after "Server update" completes (not on a path trigger
+for `mods/dynamic-atmosphere.pw.toml`, which would race ahead of the actual deploy —
+see the comment in `server-tuning.yml`), a DA bump's regeneration gets patched back
+to the repository's tuning on the very next run. The sync already reads the live
+config back before patching; when a field is found sitting at DA's default instead
+of the value this repository last wrote, that's the regeneration signature, and the
+run surfaces it (a `::warning::` and a job-summary section) instead of silently
+re-patching over the evidence.
 
 ## Working on the pack
 
