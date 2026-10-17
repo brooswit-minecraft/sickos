@@ -73,6 +73,44 @@ class TestSemverDeltaCategory(unittest.TestCase):
         # version numbers themselves still say "patch".
         self.assertEqual(semver_compare.semver_delta_category("1.4.2", "1.4.3"), "patch")
 
+    def test_game_version_prefixed_scheme_without_game_version_hint_returns_none(self):
+        # "1.21.1-4.0.1" parses as core (1,21,1) + prerelease "4.0.1" --
+        # the core never changes between releases on this scheme, so
+        # without the game_version hint this is the documented gap
+        # (MINECRAFT-362 review, seventh round).
+        self.assertIsNone(semver_compare.semver_delta_category("1.21.1-4.0.1", "1.21.1-5.0.0"))
+
+    def test_game_version_prefix_stripped_classifies_correctly(self):
+        # The four real pins named in the review, each a major-version
+        # bump of the mod's own version once the "1.21.1-" prefix is
+        # stripped.
+        cases = [
+            ("1.21.1-4.0.1", "1.21.1-5.0.0"),      # Supplementaries
+            ("1.21.1-3.7.2", "1.21.1-4.0.0"),       # Moonlight Lib
+            ("1.21.1-7.0.9", "1.21.1-8.0.0"),       # Project: Vibrant Journeys
+            ("1.21.1-1.3.15", "1.21.1-2.0.0"),      # Create: Diesel Generators
+        ]
+        for previous, candidate in cases:
+            with self.subTest(previous=previous, candidate=candidate):
+                self.assertEqual(
+                    semver_compare.semver_delta_category(previous, candidate, game_version="1.21.1"),
+                    "breaking",
+                )
+
+    def test_game_version_prefix_stripped_patch_level(self):
+        self.assertEqual(
+            semver_compare.semver_delta_category("1.21.1-4.0.1", "1.21.1-4.0.2", game_version="1.21.1"),
+            "patch",
+        )
+
+    def test_mismatched_game_version_prefix_is_not_stripped(self):
+        # Only a prefix matching the SUPPLIED game_version is stripped --
+        # a version pinned under a different game_version string is left
+        # alone rather than guessed at.
+        self.assertIsNone(
+            semver_compare.semver_delta_category("1.20.1-4.0.1", "1.20.1-5.0.0", game_version="1.21.1")
+        )
+
 
 class TestMoreSevereCategory(unittest.TestCase):
     def test_breaking_beats_minor_and_patch(self):

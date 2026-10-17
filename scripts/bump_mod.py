@@ -297,7 +297,7 @@ def _no_candidate_summary(pin):
 def run_engine(repo_root, pin, candidate, *, category=None,
                 downloader=default_downloader, run_command=subprocess.run,
                 gate_commands=None, metadata_fetcher=None, token=None, allow_breaking=False,
-                migration_text=None):
+                migration_text=None, game_version=None):
     """Bump `pin` (scripts/mod_eligibility.EligiblePin) to `candidate`
     (scripts/modrinth_compat.VersionCandidate, already filtered for
     game-version/loader compatibility by the caller). Returns
@@ -408,6 +408,29 @@ def run_engine(repo_root, pin, candidate, *, category=None,
             f"could not verify {pin.name} is not a downgrade: the currently-pinned version "
             f"{pin.pinned_version_id!r}'s metadata had no version_number",
         )
+    # Identity-check the PREVIOUS version's metadata too, symmetric with
+    # the candidate's own gate above (expected_project_id=pin.mod_id):
+    # without this, previous_version_number is an unverified number --
+    # both the no-downgrade guard and the category determination below
+    # trust it blindly. A pin whose recorded version id happens to
+    # resolve to a different project's metadata would compare against
+    # that unrelated project's version number: a low one lets a real
+    # downgrade through, a high one silently freezes the pin forever,
+    # and (since this round) a wrong number can also misclassify a
+    # breaking release as patch and skip the allow_breaking gate
+    # entirely (MINECRAFT-362 review, seventh round -- latent today,
+    # confirmed against no live-mismatched pin, but the same unchecked
+    # shape as the --mod-id finding two rounds ago).
+    previous_project_id = (
+        previous_metadata.get("project_id") if isinstance(previous_metadata, dict) else None
+    )
+    if previous_project_id != pin.mod_id:
+        raise EngineError(
+            EXIT_INTEGRITY_FAILURE, "integrity_failure",
+            f"could not verify {pin.name} is not a downgrade: the currently-pinned version "
+            f"{pin.pinned_version_id!r}'s metadata belongs to project {previous_project_id!r}, "
+            f"not {pin.mod_id!r} (pin.mod_id) -- refusing to trust its version_number",
+        )
 
     downgrade_decision = decide_update(pin, candidate, previous_version_number=previous_version_number)
     if downgrade_decision == "downgrade_refused":
@@ -444,7 +467,9 @@ def run_engine(repo_root, pin, candidate, *, category=None,
     # derive_category_from_changelog's heading-only regex (real
     # changelogs are bullet lists), so the semver delta -- not the
     # changelog -- is the one signal that is actually always available.
-    delta_category = semver_compare.semver_delta_category(previous_version_number, candidate.version_number)
+    delta_category = semver_compare.semver_delta_category(
+        previous_version_number, candidate.version_number, game_version=game_version,
+    )
     category = semver_compare.more_severe_category(caller_category, delta_category)
 
     # Dependency check (narrow, see modrinth_compat.find_dependency_conflicts):
@@ -801,6 +826,7 @@ def _check_compatibility_or_die(repo_root, candidate):
             f"declares game_versions={candidate.game_versions!r}, loaders={candidate.loaders!r}. "
             "Refusing to pin an incompatible build."
         )
+    return game_version
 
 
 def cli_main(argv=None):
@@ -827,12 +853,13 @@ def cli_main(argv=None):
 
     pin = _pin_from_cli(args)
     candidate = _candidate_from_cli(args, token=token)
-    _check_compatibility_or_die(args.repo_root, candidate)
+    game_version = _check_compatibility_or_die(args.repo_root, candidate)
 
     try:
         summary, exit_code, message = run_engine(
             args.repo_root, pin, candidate, category=args.category, token=token,
             allow_breaking=args.allow_breaking, migration_text=migration_text,
+            game_version=game_version,
         )
     except EngineError as error:
         print(f"::error::{error.message}", file=sys.stderr)
@@ -872,11 +899,14 @@ def cli_main(argv=None):
         )
     elif summary["changed"]:
         print(
-            "--no-commit: bump staged but not committed. Do NOT run a bare `git commit` -- "
-            "that would also commit anything else you already had staged, and a commit with "
-            "no Release-Only trailer is read as permission to deploy/restart the live server. "
-            "Commit explicitly: `git commit -F <message-file> -- $(git diff --cached --name-only"
-            ")`, where <message-file> holds a message carrying `Release-Only: true` and "
+            "--no-commit: bump staged but not committed. Do NOT run a bare `git commit`, and do "
+            "NOT pass `$(git diff --cached --name-only)` as the pathspec either -- that "
+            "substitutes every staged path, including anything else you already had staged, "
+            "defeating the point of a pathspec; and a commit with no Release-Only trailer is "
+            "read as permission to deploy/restart the live server. Commit exactly these four "
+            "paths: `git commit -F <message-file> -- pack.toml index.toml "
+            f"{pin.pin_path} {summary['notes_path']}`, where <message-file> holds a message "
+            "carrying `Release-Only: true` and "
             f"`Mod-Auto-Bump: {pin.mod_id} {candidate.version_id}` alone in its final paragraph "
             "(see scripts/da-auto-bump-dispatch.py's build_generic_commit_message for the exact "
             "shape git's trailer parser requires)."

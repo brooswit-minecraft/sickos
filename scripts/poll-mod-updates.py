@@ -271,6 +271,7 @@ def poll_and_bump(repo_root, *, token=None, fetcher=None, run_command=subprocess
         try:
             summary, exit_code, message = bump_mod.run_engine(
                 repo_root, pin, candidate, category=category, run_command=run_command, token=token,
+                game_version=game_version,
             )
         except bump_mod.EngineError as error:
             outcome.update(outcome=error.outcome, changed=False, error=error.message)

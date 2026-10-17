@@ -238,6 +238,13 @@ the commit body no longer claims "via scheduled Modrinth reconciliation"
 on a bump a human made by hand) and checks `should_deploy(message)` is
 `False` before committing (a plain `if`, not `assert` -- an `assert`
 vanishes under `python3 -O`) (`--no-commit` skips this for inspection).
+Its printed follow-up guidance names the four intended paths literally
+(`pack.toml index.toml <pin> <notes file>`) -- an earlier round's
+guidance told the operator to pass `$(git diff --cached --name-only)` as
+the pathspec, which expands to EVERY staged path, including anything
+else already staged, reintroducing the exact whole-index-sweep bug the
+explicit pathspec exists to prevent (seventh review round; confirmed
+against real git in a scratch repo with an unrelated file also staged).
 
 `cli_commit_bump` (and, for symmetry, `scripts/poll-mod-updates.py`'s own
 `commit_bump`) now commit an EXPLICIT PATHSPEC
@@ -263,24 +270,28 @@ notes file the way a verbatim splice did in the prior round, and capped
 at `MAX_CHANGELOG_CHARS` so one mod's long changelog cannot make the
 notes file unbounded.
 
-37 tests in `tests/test_bump_mod.py` cover: already-pinned/no-candidate
+39 tests in `tests/test_bump_mod.py` cover: already-pinned/no-candidate
 no-ops, a real bump classified by semver delta (not the old
 "_default_absent_category" sentinel), a patch-level real-world
 fix-only-changelog bump, a major semver delta alone reaching the
 breaking gate with no changelog/category involved, a changelog category
 unable to downgrade a major semver delta and able to escalate a minor
-one, the breaking-change fail-closed gate, its `allow_breaking=True` +
-`migration_text` override (and refusal when `migration_text` is
-missing), the CLI entry point's own argument validation, side- and
-mod-id-defaulting/disagreement-refusal, incompatible-candidate refusal,
-real compatibility/dependency data reaching `run_engine`, an anonymous
-404 naming `MODRINTH_TOKEN` and a transport failure (URLError/timeout)
-exiting cleanly, neither as a bare traceback, and the commit step
-carrying the Release-Only/Mod-Auto-Bump trailers (`TestCliMain`), an
-unrelated staged file surviving a CLI-triggered commit untouched
-(`TestCliCommitBump`), `_fenced`'s defanging/truncation (`TestFenced`),
-downgrade refusal, the identity/hash gate's failure modes (wrong
-project, forged bytes, a 404 lookup), and gate-failure/dirty-tree
+one, the previous pin's metadata failing closed when its project_id
+does not match the pin, the breaking-change fail-closed gate, its
+`allow_breaking=True` + `migration_text` override (and refusal when
+`migration_text` is missing), the CLI entry point's own argument
+validation, side- and mod-id-defaulting/disagreement-refusal,
+incompatible-candidate refusal, real compatibility/dependency data
+reaching `run_engine`, an anonymous 404 naming `MODRINTH_TOKEN` and a
+transport failure (URLError/timeout) exiting cleanly, neither as a bare
+traceback, the `--no-commit` guidance naming the four intended paths
+literally rather than an unsafe `$(git diff --cached --name-only)`
+substitution, and the commit step carrying the Release-Only/Mod-Auto-
+Bump trailers (`TestCliMain`), an unrelated staged file surviving a
+CLI-triggered commit untouched (`TestCliCommitBump`), `_fenced`'s
+defanging/truncation (`TestFenced`), downgrade refusal, the
+identity/hash gate's failure modes (wrong project, forged bytes, a 404
+lookup), and gate-failure/dirty-tree
 restore. The no-downgrade check's own previous-version lookup fails
 CLOSED, not open: if that lookup itself fails (e.g. a 404 because the
 currently-pinned version was unpublished), the engine refuses to bump
@@ -342,6 +353,43 @@ major version bump does not get to suppress the breaking classification
 the version number itself already declares. The generated notes file's
 category note now always states both signals and which one was used,
 replacing the old silent "defaulted to minor" wording.
+
+**The semver delta must strip a leading game-version prefix, or it
+never fires for that scheme (seventh review round).** Some mods version
+their Modrinth releases as `"<game_version>-<mod_version>"` (e.g.
+`"1.21.1-4.0.1"`) -- semver's own grammar then parses `"1.21.1"` as the
+CORE and `"4.0.1"` as a prerelease identifier, so the mod's own version
+lives entirely in the field `semver_delta_category` otherwise ignores:
+the core never changes between releases on this scheme, so it returned
+`None` for every update, including a major one. Confirmed live across
+the 4 pins using it (Supplementaries, Moonlight Lib, Project: Vibrant
+Journeys, Create: Diesel Generators) -- this was last round's item 1
+reduced from 100% of pins to these 4, not actually closed.
+`semver_delta_category` now takes an optional `game_version` and strips
+a matching leading `"<game_version>-"` before parsing
+(`_strip_game_version_prefix`); `run_engine` gained a `game_version`
+parameter threaded through from both callers'
+`mod_eligibility.read_pack_targets` result, so the classification now
+operates on the mod's own version, not the game version sharing its
+string.
+
+**The previous-pin's metadata is now identity-checked too (seventh
+review round).** `run_engine` verifies the CANDIDATE's metadata hard
+(`expected_project_id=pin.mod_id`, among others) before trusting it, but
+the PREVIOUS version's metadata -- fetched from `pin.pinned_version_id`
+for the no-downgrade check, and (since last round) for the category
+delta too -- had no such check; only its `version_number` was read off
+it. A pin whose recorded version id happened to resolve to a different
+project's metadata would silently trust that unrelated project's
+version number for both the no-downgrade guard (a low number lets a
+real downgrade through; a high one freezes the pin forever) and the
+category determination (a wrong number can misclassify a breaking
+release as patch and skip the `allow_breaking` gate). `run_engine` now
+checks `previous_metadata`'s `project_id` against `pin.mod_id` and fails
+closed (`EXIT_INTEGRITY_FAILURE`) on a mismatch, symmetric with the
+candidate's own gate. Confirmed latent, not active, by checking all 78
+pins live at review time -- the same "unchecked field, no live
+mismatch today" shape as the fifth round's `--mod-id` finding.
 
 **At most one real bump per run, by design (second review round).** A
 first implementation committed every eligible mod's bump in the same run
@@ -499,8 +547,10 @@ whatever the earlier run already pushed.
   pass unchanged).
 - `scripts/semver_compare.py` -- no-downgrade comparator, extracted from
   and still used by the DA engine, plus `semver_delta_category` (the
-  real AC4 category source, see below) and `more_severe_category`
-  (20 tests).
+  real AC4 category source, see below -- including stripping a leading
+  `"<game_version>-"` prefix for the 4 pins that version as
+  `"<game_version>-<mod_version>"`) and `more_severe_category`
+  (24 tests).
 - The direct-pin-vs-packwiz decision above.
 - `Release-Only: true` on DA's generated commits (see `da-auto-bump.md`).
 - `scripts/bump_mod.py` -- the generalized write path, with the
@@ -541,7 +591,11 @@ whatever the earlier run already pushed.
   `dependency_conflict` now also classified as expected per-pin gaps
   (the same repeatable-until-external-change shape), and `commit_bump`
   committing an explicit pathspec rather than a bare `git commit`
-  (18 tests).
+  (18 tests). `run_engine`'s category determination and no-downgrade
+  check both now take/use a `game_version` hint and an identity-checked
+  previous-pin metadata, threaded through from this script's own
+  `read_pack_targets` result (see the Compatibility and Write Path
+  sections above).
 - The shared `mod-auto-bump` concurrency group, covering both mechanisms.
 - `modrinth_compat.find_dependency_conflicts` -- refuses a candidate that
   declares a currently-pinned project `incompatible` (6 tests, plus 3

@@ -399,6 +399,27 @@ class TestMetadataGate(EngineTestCase):
         self.assertIn("project_id", ctx.exception.message)
         self.assertEqual(self.porcelain(), before)
 
+    def test_previous_pin_metadata_wrong_project_id_fails_closed(self):
+        # MINECRAFT-362 review, seventh round: the PREVIOUS version's
+        # metadata (fetched from pin.pinned_version_id for the
+        # no-downgrade check) was never identity-checked, only the
+        # candidate's was -- so a pin whose recorded version id resolves
+        # to a different project's metadata would silently trust that
+        # unrelated project's version_number for both the downgrade
+        # check and the category determination.
+        content = b"jar contents"
+        candidate = make_candidate(content=content)
+        self.register(candidate.version_id, metadata_for(candidate))
+        self.register(OLD_VERSION_ID, {"id": OLD_VERSION_ID, "project_id": "SOME_OTHER_PROJECT", "version_number": "1.0.0"})
+        pin = make_pin()
+        before = self.porcelain()
+
+        with self.assertRaises(bump_mod.EngineError) as ctx:
+            self.run_engine(pin, candidate, content=content)
+        self.assertEqual(ctx.exception.exit_code, bump_mod.EXIT_INTEGRITY_FAILURE)
+        self.assertIn("SOME_OTHER_PROJECT", ctx.exception.message)
+        self.assertEqual(self.porcelain(), before)
+
     def test_forged_bytes_fail_closed(self):
         candidate = make_candidate(content=b"honest bytes")
         self.register(candidate.version_id, metadata_for(candidate))
@@ -716,6 +737,37 @@ class TestCliMain(unittest.TestCase):
         self.assertIn("Release-Only: true", committed_message)
         self.assertIn("Mod-Auto-Bump:", committed_message)
         self.assertFalse(bump_mod.server_update_policy.should_deploy(committed_message))
+
+    def test_no_commit_guidance_names_literal_paths_not_an_unsafe_substitution(self):
+        # MINECRAFT-362 review, seventh round: a prior round's --no-commit
+        # guidance told the operator to pass $(git diff --cached
+        # --name-only) as the pathspec, which expands to EVERY staged
+        # path -- including anything else they already had staged --
+        # reintroducing the exact whole-index-sweep bug the explicit
+        # pathspec was supposed to fix. The printed remedy must name the
+        # four intended paths literally instead.
+        fake_summary = {
+            "changed": True, "outcome": "bumped", "notes_path": "docs/releases/0.23.0.md",
+            "mapping_rule": "minor", "new_pack_version": "0.23.0",
+            "candidate_version_id": "NEWID", "candidate_version_number": "1.1.0",
+        }
+        with mock.patch.object(bump_mod, "fetch_version_metadata", return_value=cli_version_metadata("NEWID")):
+            with mock.patch.object(bump_mod, "run_engine", return_value=(fake_summary, bump_mod.EXIT_OK, "ok")):
+                with mock.patch.object(bump_mod, "cli_commit_bump") as mock_commit:
+                    with mock.patch("sys.stdout") as mock_stdout:
+                        exit_code = bump_mod.cli_main(self._base_args(["--no-commit"]))
+        self.assertEqual(exit_code, bump_mod.EXIT_OK)
+        mock_commit.assert_not_called()
+        printed = "".join(call.args[0] for call in mock_stdout.write.call_args_list if call.args)
+        # The actual commit command recommended must use the four literal
+        # paths, not the unsafe substitution (which may still be
+        # mentioned elsewhere as a "don't do this" warning).
+        self.assertIn(
+            "git commit -F <message-file> -- pack.toml index.toml "
+            "mods/example-mod.pw.toml docs/releases/0.23.0.md",
+            printed,
+        )
+        self.assertNotIn("-- $(git diff --cached --name-only)`", printed)
 
     def test_migration_text_without_breaking_category_warns_not_silently_discards(self):
         migration_path = self.tmpdir / "migration.md"
