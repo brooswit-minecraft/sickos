@@ -5,11 +5,13 @@ name: Mod auto-bump poll
 # docs/mod-auto-bump.md). Dynamic Atmosphere's own dispatch-driven path
 # (.github/workflows/da-auto-bump.yml) reacts to an event; this workflow
 # reacts to nothing and instead asks Modrinth directly, on a schedule, for
-# every OTHER eligible pin -- so a missed/replaced DA dispatch is not this
-# path's concern, but every mod with no dispatch integration at all still
-# gets covered. scripts/poll-mod-updates.py does the actual work; this
-# file only wires triggers, the pause switch, credential selection, and
-# the push -- the same split DA's workflow already uses.
+# EVERY eligible pin, DA included -- so every mod with no dispatch
+# integration at all gets covered, and a DA dispatch that gets dropped
+# (its queued run replaced by a cron run sharing the same concurrency
+# group -- see scripts/poll-mod-updates.py's docstring) is still
+# recovered here, not lost. scripts/poll-mod-updates.py does the actual
+# work; this file only wires triggers, the pause switch, credential
+# selection, and the push -- the same split DA's workflow already uses.
 
 on:
   workflow_dispatch: {}
@@ -100,6 +102,11 @@ jobs:
             --repo-root . \
             --summary-out "$RUNNER_TEMP/summary.json"
           echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          if grep -q '"outcome": "bumped"' "$RUNNER_TEMP/summary.json"; then
+            echo "has_bumps=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_bumps=false" >> "$GITHUB_OUTPUT"
+          fi
           {
             echo "## Mod auto-bump poll"
             echo
@@ -108,35 +115,58 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Fail the run on a poll error
-        if: steps.pause.outputs.paused != 'true' && steps.poll.outputs.exit_code != '0'
-        run: |
-          echo "::error::scripts/poll-mod-updates.py exited ${{ steps.poll.outputs.exit_code }}; see the job summary above for the per-mod outcome that failed. Any mod it already bumped and committed before the failure is still a fast-forward commit on this runner's checkout -- nothing is pushed by this job until the step below, so a failure here pushes nothing at all."
-          exit 1
+      # --- Item 4 (MINECRAFT-362 review): push-gating must not be exit-code
+      # based. One mod failing (anywhere in the loop) must not discard
+      # every other mod's already-committed, verified bump in this same
+      # run -- so the push step below runs regardless of exit_code (it is
+      # instead gated on has_bumps, computed straight from the summary),
+      # and only the final step (after push) turns a nonzero exit_code
+      # into a failed job, once whatever succeeded is already safely on
+      # main.
 
       - name: No push credential configured -- fail closed
-        if: steps.pause.outputs.paused != 'true' && steps.poll.outputs.exit_code == '0' && steps.creds.outputs.method == 'none'
+        if: steps.pause.outputs.paused != 'true' && steps.poll.outputs.has_bumps == 'true' && steps.creds.outputs.method == 'none'
         run: |
-          echo "::error::Mod auto-bump poll produced commits (if any) but no push credential is configured. Set one of: SICKOS_DISPATCH_APP_ID (repo variable) + SICKOS_DISPATCH_APP_PRIVATE_KEY (secret), or SICKOS_DISPATCH_TOKEN (secret) -- the same ones da-auto-bump.yml already uses. Nothing was pushed."
+          echo "::error::Mod auto-bump poll produced at least one real bump but no push credential is configured. Set one of: SICKOS_DISPATCH_APP_ID (repo variable) + SICKOS_DISPATCH_APP_PRIVATE_KEY (secret), or SICKOS_DISPATCH_TOKEN (secret) -- the same ones da-auto-bump.yml already uses. Nothing was pushed."
           exit 1
 
       - name: Mint push token (GitHub App)
         id: mint-app-token
-        if: steps.pause.outputs.paused != 'true' && steps.poll.outputs.exit_code == '0' && steps.creds.outputs.method == 'app'
+        if: steps.pause.outputs.paused != 'true' && steps.poll.outputs.has_bumps == 'true' && steps.creds.outputs.method == 'app'
         uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ vars.SICKOS_DISPATCH_APP_ID }}
           private-key: ${{ secrets.SICKOS_DISPATCH_APP_PRIVATE_KEY }}
           permission-contents: write
 
-      - name: Push any commits to main
-        if: steps.pause.outputs.paused != 'true' && steps.poll.outputs.exit_code == '0' && steps.creds.outputs.method != 'none'
+      # --- Item 2 (MINECRAFT-362 review): push each mod's bump commit
+      # SEPARATELY, in the order poll-mod-updates.py made them, instead of
+      # one push of the final HEAD. A single push would only ever let
+      # release.yml see the LAST commit's pack.toml version: every earlier
+      # bump in the same run would have a real, committed pin change and a
+      # docs/releases/<version>.md file, but no corresponding GitHub push
+      # event to trigger its own release -- an orphaned, never-published
+      # version. Pushing commit-by-commit (each one a fast-forward of the
+      # last) gives each mod's bump its own push event and its own
+      # release.yml run, matching "each bump is its own release" the way a
+      # human pushing one bump at a time would.
+      - name: Push each bump commit to main, one at a time
+        if: steps.pause.outputs.paused != 'true' && steps.poll.outputs.has_bumps == 'true' && steps.creds.outputs.method != 'none'
         env:
           APP_TOKEN: ${{ steps.mint-app-token.outputs.token }}
           PAT_TOKEN: ${{ env.SICKOS_DISPATCH_TOKEN }}
           METHOD: ${{ steps.creds.outputs.method }}
         run: |
-          if [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ]; then
+          mapfile -t SHAS < <(python3 -c "
+          import json
+          with open('$RUNNER_TEMP/summary.json') as f:
+              outcomes = json.load(f)
+          for outcome in outcomes:
+              if outcome.get('outcome') == 'bumped':
+                  print(outcome['commit_sha'])
+          ")
+
+          if [ "${#SHAS[@]}" -eq 0 ]; then
             echo "Nothing to push: no mod had a compatible update this run."
             exit 0
           fi
@@ -150,8 +180,16 @@ jobs:
           # Same auth-header approach as da-auto-bump.yml's push step, and
           # for the same reason: never persist the token into git config.
           AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
-          if ! git -c http.https://github.com/.extraheader="$AUTH_HEADER" \
-              push "https://github.com/${{ github.repository }}.git" HEAD:main; then
-            echo "::error::Push to main was rejected (non-fast-forward, or branch protection). This run is safe to re-run: every engine run in scripts/poll-mod-updates.py is idempotent and will recompute fresh bumps against the current tip of main."
-            exit 1
-          fi
+          for sha in "${SHAS[@]}"; do
+            if ! git -c http.https://github.com/.extraheader="$AUTH_HEADER" \
+                push "https://github.com/${{ github.repository }}.git" "$sha:main"; then
+              echo "::error::Push to main was rejected at commit $sha (non-fast-forward, or branch protection). Any earlier commit in this list already pushed successfully and was already released. This run is safe to re-run: every engine run in scripts/poll-mod-updates.py is idempotent and will recompute fresh bumps against the current tip of main."
+              exit 1
+            fi
+          done
+
+      - name: Fail the run if the poll reported any failures
+        if: always() && steps.pause.outputs.paused != 'true' && steps.poll.outputs.exit_code != '0'
+        run: |
+          echo "::error::scripts/poll-mod-updates.py exited ${{ steps.poll.outputs.exit_code }}; see the job summary above for the per-mod outcome that failed. Any other mod's bump this run already made is still pushed (see the step(s) above) -- this failure is reported after that push, not instead of it, so one unresolvable pin never discards every other mod's verified bump in the same run."
+          exit 1

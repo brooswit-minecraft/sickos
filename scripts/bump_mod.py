@@ -165,6 +165,13 @@ def stage_intended_files(repo_root, pin_path, notes_path, run_command=subprocess
 def assert_only_pin_changed_under_mods(repo_root, pin_path, run_command=subprocess.run):
     result = run_command(["git", "diff", "--name-only", "HEAD", "--", "mods"],
                           cwd=str(repo_root), capture_output=True, text=True)
+    if result.returncode != 0:
+        raise EngineError(
+            EXIT_CONFIG_ERROR, "config_error",
+            f"refusing to commit: 'git diff --name-only HEAD -- mods' failed (exit "
+            f"{result.returncode}); cannot confirm only {pin_path} changed under mods/. "
+            f"stderr: {(result.stderr or '').strip()}",
+        )
     changed = [line for line in result.stdout.splitlines() if line]
     unexpected = [path for path in changed if path != pin_path]
     if unexpected:
@@ -333,32 +340,44 @@ def run_engine(repo_root, pin, candidate, *, category=None,
     # Strong no-downgrade check: a pin only stores the previously-pinned
     # Modrinth version ID, not its semver string, so look that version's
     # own version_number up before judging whether the candidate is
-    # actually newer. A failed lookup here only degrades to the dedup-only
-    # safety already established above (version id mismatch => proceed) --
-    # it does not fail the whole run, since the identity/hash gate above
-    # already fail-closed on the candidate itself.
+    # actually newer. This lookup must fail CLOSED, not degrade to the
+    # weaker dedup-only safety above: if the currently-pinned version is
+    # ever unpublished/deleted on Modrinth, a bare "lookup failed, skip
+    # the check" would let an attacker-controlled or merely stale resolver
+    # response silently pin a real downgrade (MINECRAFT-362 review) --
+    # exactly the "stale-event handling without downgrades" guarantee this
+    # pass exists to provide.
     try:
         previous_metadata = metadata_fetcher(pin.pinned_version_id)
-        previous_version_number = (
-            previous_metadata.get("version_number") if isinstance(previous_metadata, dict) else None
+    except Exception as error:  # noqa: BLE001 - any lookup failure fails closed
+        raise EngineError(
+            EXIT_INTEGRITY_FAILURE, "integrity_failure",
+            f"could not verify {pin.name} is not a downgrade: looking up the currently-pinned "
+            f"version {pin.pinned_version_id!r}'s own metadata failed: {error!r}",
         )
-    except Exception:  # noqa: BLE001 - degrade to dedup-only safety, do not crash
-        previous_version_number = None
+    previous_version_number = (
+        previous_metadata.get("version_number") if isinstance(previous_metadata, dict) else None
+    )
+    if previous_version_number is None:
+        raise EngineError(
+            EXIT_INTEGRITY_FAILURE, "integrity_failure",
+            f"could not verify {pin.name} is not a downgrade: the currently-pinned version "
+            f"{pin.pinned_version_id!r}'s metadata had no version_number",
+        )
 
-    if previous_version_number is not None:
-        downgrade_decision = decide_update(pin, candidate, previous_version_number=previous_version_number)
-        if downgrade_decision == "downgrade_refused":
-            raise EngineError(
-                EXIT_DOWNGRADE_REFUSED, "downgrade_refused",
-                f"candidate version {candidate.version_number} for {pin.name} is not newer than "
-                f"the currently pinned {previous_version_number}; refusing to downgrade",
-            )
-        if downgrade_decision == "unparsable_version":
-            raise EngineError(
-                EXIT_CONFIG_ERROR, "config_error",
-                f"cannot compare non-semver version(s) for {pin.name}: "
-                f"{candidate.version_number!r}, {previous_version_number!r}",
-            )
+    downgrade_decision = decide_update(pin, candidate, previous_version_number=previous_version_number)
+    if downgrade_decision == "downgrade_refused":
+        raise EngineError(
+            EXIT_DOWNGRADE_REFUSED, "downgrade_refused",
+            f"candidate version {candidate.version_number} for {pin.name} is not newer than "
+            f"the currently pinned {previous_version_number}; refusing to downgrade",
+        )
+    if downgrade_decision == "unparsable_version":
+        raise EngineError(
+            EXIT_CONFIG_ERROR, "config_error",
+            f"cannot compare non-semver version(s) for {pin.name}: "
+            f"{candidate.version_number!r}, {previous_version_number!r}",
+        )
 
     # Dependency check (narrow, see modrinth_compat.find_dependency_conflicts):
     # refuse a candidate that declares another currently-pinned project

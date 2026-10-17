@@ -11,12 +11,20 @@ every OTHER eligible pin -- so a missed/replaced dispatch for any mod is
 eventually recovered, and mods with no dispatch integration at all are
 still covered.
 
-Deliberately excludes Dynamic Atmosphere's own pin (see
-`EXCLUDED_PIN_PATHS`): DA already has its dedicated, reviewed,
-dispatch-driven workflow, and running two different mechanisms against
-the same pin would let them race each other. If DA's dispatch is ever
-retired in favor of this poll covering it too, remove it from
-`EXCLUDED_PIN_PATHS` deliberately, as its own change.
+Covers Dynamic Atmosphere's own pin too, not only "every OTHER eligible
+pin": DA already has its dedicated, reviewed, dispatch-driven workflow
+(`.github/workflows/da-auto-bump.yml`), but that workflow and this one
+share a GitHub Actions concurrency group (both push to main), and a
+cron-triggered run arriving while a DA dispatch run is already queued
+(not yet started) REPLACES the queued run in that group -- GitHub Actions
+only keeps one run queued behind the currently in-progress one. If that
+happens, the DA dispatch is gone with nothing left to recover it unless
+this poll also resolves DA's own pin. `decide_update`'s dedup-by-version-id
+already makes running both mechanisms against the same pin safe (whichever
+runs second simply finds "already_pinned" and no-ops), so there is no
+real race to protect against by excluding it -- only a real gap in
+recovering a dropped dispatch, which excluding it would reopen
+(MINECRAFT-362 review).
 
 Each eligible mod with a real update is a SEPARATE commit, made (not just
 staged) before the next mod is considered -- so a second mod's bump reads
@@ -47,7 +55,10 @@ import bump_mod  # noqa: E402 - needs sys.path set up first
 import mod_eligibility  # noqa: E402
 import modrinth_compat  # noqa: E402
 
-EXCLUDED_PIN_PATHS = frozenset({"mods/dynamic-atmosphere.pw.toml"})
+# No pin is excluded (see this module's docstring): dedup-by-version-id
+# already makes it safe for this poll and da-auto-bump.yml's dispatch to
+# both resolve Dynamic Atmosphere's pin.
+EXCLUDED_PIN_PATHS = frozenset()
 
 
 def _load_build_generic_commit_message():
@@ -67,7 +78,14 @@ def read_pack_targets(repo_root):
     the compatibility filter for every mod considered this run.
     pack.toml's [versions] table keys the loader's own name ("neoforge")
     to its version, alongside "minecraft" -- the loader is just "whichever
-    key isn't minecraft", not a convention this needs to hardcode."""
+    key isn't minecraft", not a convention this needs to hardcode.
+
+    Fails loudly, not silently, if pack.toml's [versions] table does not
+    have this expected shape: a silent (None, None) here would make every
+    mod's compatibility check compare against `None`, which never equals
+    anything, so the poll would quietly resolve nothing all run while
+    reporting a clean "no_candidate" for every pin -- indistinguishable
+    from a genuinely quiet run (MINECRAFT-362 review)."""
     pack_toml = Path(repo_root) / "pack.toml"
     import tomllib
     with pack_toml.open("rb") as handle:
@@ -75,8 +93,13 @@ def read_pack_targets(repo_root):
     versions = data.get("versions", {})
     game_version = versions.get("minecraft")
     loader_names = [key for key in versions if key != "minecraft"]
-    loader = loader_names[0] if loader_names else None
-    return game_version, loader
+    if not game_version or len(loader_names) != 1:
+        raise ValueError(
+            "pack.toml's [versions] table is not the expected shape (exactly 'minecraft' plus "
+            f"one loader key); got {sorted(versions)!r}. Refusing to poll with an unverifiable "
+            "compatibility target."
+        )
+    return game_version, loader_names[0]
 
 
 def commit_bump(repo_root, message, run_command=subprocess.run):
@@ -97,7 +120,11 @@ def poll_and_bump(repo_root, *, token=None, fetcher=None, run_command=subprocess
     (alphabetical by pin filename -- deterministic across runs)."""
     repo_root = Path(repo_root)
     game_version, loader = read_pack_targets(repo_root)
-    fetcher = fetcher or modrinth_compat.default_fetcher
+    # Built with `token` (never the bare, unauthenticated default_fetcher)
+    # so the version-LIST query -- not only bump_mod.run_engine's later
+    # single-version metadata lookup -- can resolve a project Modrinth
+    # will not serve anonymously (MINECRAFT-362 review).
+    fetcher = fetcher or modrinth_compat.make_fetcher(token=token)
 
     eligible, _untracked = mod_eligibility.discover_eligible_pins(repo_root)
     outcomes = []
@@ -122,9 +149,17 @@ def poll_and_bump(repo_root, *, token=None, fetcher=None, run_command=subprocess
             outcomes.append(outcome)
             continue
 
+        # AC4: derive the pack-version category from the candidate's own
+        # Modrinth changelog (fix -> patch, feature -> minor, breaking ->
+        # minor-during-0.x) -- there is no trigger payload here to supply
+        # one, unlike DA's dispatch path. None (unrecognised/absent) falls
+        # through to bump_mod.run_engine's own documented default-minor
+        # behaviour (MINECRAFT-362 review).
+        category = modrinth_compat.derive_category_from_changelog(candidate.changelog)
+
         try:
             summary, exit_code, message = bump_mod.run_engine(
-                repo_root, pin, candidate, run_command=run_command, token=token,
+                repo_root, pin, candidate, category=category, run_command=run_command, token=token,
             )
         except bump_mod.EngineError as error:
             outcome.update(outcome=error.outcome, changed=False, error=error.message)

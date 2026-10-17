@@ -25,10 +25,13 @@ EligiblePin = mod_eligibility.EligiblePin
 
 
 def version_entry(version_id, version_number, *, game_versions=("1.21.1",), loaders=("neoforge",),
-                   filename="mod.jar", sha1="a" * 40, sha512="b" * 128, url="https://cdn.modrinth.com/x.jar"):
+                   filename="mod.jar", sha1="a" * 40, sha512="b" * 128, url="https://cdn.modrinth.com/x.jar",
+                   version_type="release", changelog=""):
     return {
         "id": version_id,
         "version_number": version_number,
+        "version_type": version_type,
+        "changelog": changelog,
         "game_versions": list(game_versions),
         "loaders": list(loaders),
         "dependencies": [],
@@ -107,6 +110,91 @@ class TestResolveLatestCompatibleVersion(unittest.TestCase):
         fetcher = mock.Mock(side_effect=OSError("network down"))
         with self.assertRaisesRegex(CompatResolutionError, "failed"):
             resolve_latest_compatible_version("EXAMPLE", game_version="1.21.1", loader="neoforge", fetcher=fetcher)
+
+    def test_prerelease_that_sorts_higher_is_not_picked(self):
+        fetcher = mock.Mock(return_value=[
+            version_entry("V1", "1.2.0"),
+            version_entry("V2", "1.3.0-beta.1", version_type="beta"),
+        ])
+        candidate = resolve_latest_compatible_version("EXAMPLE", game_version="1.21.1", loader="neoforge", fetcher=fetcher)
+        self.assertEqual(candidate.version_id, "V1")
+
+    def test_no_release_versions_returns_none(self):
+        fetcher = mock.Mock(return_value=[version_entry("V1", "1.0.0-alpha.1", version_type="alpha")])
+        candidate = resolve_latest_compatible_version("EXAMPLE", game_version="1.21.1", loader="neoforge", fetcher=fetcher)
+        self.assertIsNone(candidate)
+
+
+class TestMakeFetcher(unittest.TestCase):
+    def test_no_token_sends_no_authorization_header(self):
+        captured = {}
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return b"[]"
+
+        def fake_urlopen(request, timeout):
+            captured["headers"] = dict(request.header_items())
+            return FakeResponse()
+
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            modrinth_compat.make_fetcher()("https://api.modrinth.com/v2/project/X/version")
+        self.assertNotIn("Authorization", captured["headers"])
+
+    def test_token_is_attached_as_authorization_header(self):
+        captured = {}
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return b"[]"
+
+        def fake_urlopen(request, timeout):
+            captured["headers"] = dict(request.header_items())
+            return FakeResponse()
+
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            modrinth_compat.make_fetcher(token="secret-token")("https://api.modrinth.com/v2/project/X/version")
+        self.assertEqual(captured["headers"].get("Authorization"), "secret-token")
+
+
+class TestDeriveCategoryFromChangelog(unittest.TestCase):
+    def test_no_changelog_returns_none(self):
+        self.assertIsNone(modrinth_compat.derive_category_from_changelog(""))
+        self.assertIsNone(modrinth_compat.derive_category_from_changelog(None))
+
+    def test_fix_heading_is_patch(self):
+        self.assertEqual(modrinth_compat.derive_category_from_changelog("## Fixes\n- fixed a crash"), "patch")
+
+    def test_feature_heading_is_minor(self):
+        self.assertEqual(modrinth_compat.derive_category_from_changelog("## Features\n- added a thing"), "minor")
+
+    def test_breaking_heading_is_breaking(self):
+        self.assertEqual(modrinth_compat.derive_category_from_changelog("## Breaking\n- renamed a config key"), "breaking")
+
+    def test_breaking_phrase_without_heading_is_breaking(self):
+        self.assertEqual(
+            modrinth_compat.derive_category_from_changelog("This release has breaking changes to the API."),
+            "breaking",
+        )
+
+    def test_mixed_fix_and_breaking_is_breaking_not_patch(self):
+        changelog = "## Fixes\n- fixed a crash\n\n## Breaking\n- renamed a config key\n"
+        self.assertEqual(modrinth_compat.derive_category_from_changelog(changelog), "breaking")
+
+    def test_unrecognised_text_returns_none(self):
+        self.assertIsNone(modrinth_compat.derive_category_from_changelog("Assorted improvements."))
 
 
 class TestDecideUpdate(unittest.TestCase):

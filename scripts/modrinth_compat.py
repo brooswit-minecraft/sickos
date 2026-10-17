@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -62,6 +63,8 @@ class VersionCandidate:
     game_versions: tuple = field(default_factory=tuple)
     loaders: tuple = field(default_factory=tuple)
     dependencies: tuple = field(default_factory=tuple)
+    version_type: str = ""
+    changelog: str = ""
 
 
 def fetch_project_versions(mod_id, *, game_version, loader, fetcher):
@@ -82,10 +85,30 @@ def fetch_project_versions(mod_id, *, game_version, loader, fetcher):
         raise CompatResolutionError(f"version list lookup for {mod_id} failed: {error!r}") from error
 
 
-def default_fetcher(url):
-    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    with urllib.request.urlopen(request, timeout=30) as response:
-        return json.loads(response.read())
+def make_fetcher(token=None):
+    """Build a fetcher closure for `fetch_project_versions`/
+    `resolve_latest_compatible_version`, optionally attaching
+    MODRINTH_TOKEN as an Authorization header.
+
+    Without this, a caller that has a token has no way to get it onto the
+    version-LIST request: Modrinth will not resolve some projects (e.g.
+    unlisted/private ones) to an anonymous caller at all, so a resolution
+    that never sends the token can fail before the token-gated metadata
+    lookup downstream ever gets a chance to help (MINECRAFT-362 review).
+    """
+
+    def fetcher(url):
+        headers = {"User-Agent": USER_AGENT}
+        if token:
+            headers["Authorization"] = token
+        request = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.loads(response.read())
+
+    return fetcher
+
+
+default_fetcher = make_fetcher()
 
 
 def _version_to_candidate(version_json):
@@ -106,6 +129,8 @@ def _version_to_candidate(version_json):
         game_versions=tuple(version_json.get("game_versions") or ()),
         loaders=tuple(version_json.get("loaders") or ()),
         dependencies=tuple(version_json.get("dependencies") or ()),
+        version_type=str(version_json.get("version_type") or ""),
+        changelog=str(version_json.get("changelog") or ""),
     )
 
 
@@ -118,6 +143,13 @@ def resolve_latest_compatible_version(mod_id, *, game_version, loader, fetcher):
     the highest version_number by semver precedence. A candidate whose
     version_number is not valid semver is skipped, not crashed on -- fail
     closed on that single candidate, not the whole resolution.
+
+    Only `version_type == "release"` entries are considered: Modrinth's
+    `version_type` ("release"/"beta"/"alpha") is independent of
+    `version_number`, so a prerelease that happens to sort higher by
+    semver (e.g. "1.3.0-beta.1" > "1.2.0") must not be auto-pinned into
+    the public pack ahead of its own eventual full release
+    (MINECRAFT-362 review).
     """
     versions_json = fetch_project_versions(mod_id, game_version=game_version, loader=loader, fetcher=fetcher)
     if not isinstance(versions_json, list):
@@ -126,6 +158,8 @@ def resolve_latest_compatible_version(mod_id, *, game_version, loader, fetcher):
     best = None
     for entry in versions_json:
         if not isinstance(entry, dict):
+            continue
+        if entry.get("version_type") != "release":
             continue
         if game_version not in (entry.get("game_versions") or ()):
             continue
@@ -139,6 +173,38 @@ def resolve_latest_compatible_version(mod_id, *, game_version, loader, fetcher):
         if best is None or compare_semver(candidate.version_number, best.version_number) > 0:
             best = candidate
     return best
+
+
+_BREAKING_RE = re.compile(r"^#{1,6}\s*breaking\b", re.IGNORECASE | re.MULTILINE)
+_BREAKING_PHRASE_RE = re.compile(r"\bbreaking changes?\b", re.IGNORECASE)
+_FEATURE_RE = re.compile(r"^#{1,6}\s*features?\b", re.IGNORECASE | re.MULTILINE)
+_FIX_RE = re.compile(r"^#{1,6}\s*fix(?:e[sd])?\b", re.IGNORECASE | re.MULTILINE)
+
+
+def derive_category_from_changelog(changelog):
+    """Best-effort `fix`/`feature`/`breaking` category derivation from a
+    Modrinth version's own changelog text (AC4), for the generalized poll
+    path -- Dynamic Atmosphere's dispatch path instead receives an
+    explicit category in its trigger payload (docs/da-auto-bump.md), which
+    has no equivalent here since nothing dispatches a poll run.
+
+    Looks for a conventional "## Breaking" / "## Feature(s)" / "## Fix(es)"
+    style heading, case-insensitive. The most severe match wins when more
+    than one heading is present (a changelog that mixes fixes with a
+    breaking change must still be treated as breaking, not patch). Returns
+    None -- "unknown", per AC4 -- when no such heading is found, rather
+    than guessing from arbitrary free text; the caller then defaults to
+    minor and says so in the generated notes.
+    """
+    if not changelog:
+        return None
+    if _BREAKING_RE.search(changelog) or _BREAKING_PHRASE_RE.search(changelog):
+        return "breaking"
+    if _FEATURE_RE.search(changelog):
+        return "minor"
+    if _FIX_RE.search(changelog):
+        return "patch"
+    return None
 
 
 def decide_update(pin, candidate, *, previous_version_number=None):

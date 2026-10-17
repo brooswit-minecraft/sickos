@@ -234,6 +234,7 @@ class TestSuccessfulBump(EngineTestCase):
         content = b"breaking jar"
         candidate = make_candidate(content=content, version_number="2.0.0")
         self.register(candidate.version_id, metadata_for(candidate))
+        self.register(OLD_VERSION_ID, {"id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0"})
         pin = make_pin()
 
         summary, exit_code, _ = self.run_engine(pin, candidate, content=content, category="breaking")
@@ -242,18 +243,22 @@ class TestSuccessfulBump(EngineTestCase):
         notes_path = self.repo / summary["notes_path"]
         self.assertIn("BREAKING", notes_path.read_text(encoding="utf-8"))
 
-    def test_unparsable_previous_metadata_degrades_to_dedup_only_not_crash(self):
-        # The previous-version lookup fails (404); the engine must still
-        # bump rather than crash, since the identity/hash gate on the
-        # candidate itself already fail-closed.
+    def test_unparsable_previous_metadata_fails_closed_not_open(self):
+        # The previous-version lookup fails (404) -- e.g. the currently
+        # pinned version was unpublished on Modrinth. The engine must fail
+        # closed, not silently skip the no-downgrade check and bump
+        # anyway: a skipped check here would let a stale/attacker-chosen
+        # "highest compatible" candidate downgrade the pin undetected.
         content = b"jar contents"
         candidate = make_candidate(content=content)
         self.register(candidate.version_id, metadata_for(candidate))
         # Deliberately do NOT register OLD_VERSION_ID -> fetch raises 404.
         pin = make_pin()
-        summary, exit_code, _ = self.run_engine(pin, candidate, content=content)
-        self.assertEqual(exit_code, bump_mod.EXIT_OK)
-        self.assertTrue(summary["changed"])
+        before = self.porcelain()
+        with self.assertRaises(bump_mod.EngineError) as ctx:
+            self.run_engine(pin, candidate, content=content)
+        self.assertEqual(ctx.exception.exit_code, bump_mod.EXIT_INTEGRITY_FAILURE)
+        self.assertEqual(self.porcelain(), before)
 
 
 class TestDowngradeAndAnomaly(EngineTestCase):
@@ -321,6 +326,7 @@ class TestGateFailureRestoresRepo(EngineTestCase):
         content = b"gate failure jar"
         candidate = make_candidate(content=content)
         self.register(candidate.version_id, metadata_for(candidate))
+        self.register(OLD_VERSION_ID, {"id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0"})
         pin = make_pin()
         before = self.porcelain()
         with self.assertRaises(bump_mod.EngineError) as ctx:
@@ -367,6 +373,7 @@ class TestDependencyConflict(EngineTestCase):
             dependencies=({"project_id": "SOME_UNRELATED_MOD", "dependency_type": "incompatible"},),
         )
         self.register(candidate.version_id, metadata_for(candidate))
+        self.register(OLD_VERSION_ID, {"id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0"})
         pin = make_pin()
 
         summary, exit_code, _ = self.run_engine(pin, candidate, content=content)
@@ -380,6 +387,7 @@ class TestDependencyConflict(EngineTestCase):
             dependencies=({"project_id": "SOME_UNRELATED_MOD", "dependency_type": "required"},),
         )
         self.register(candidate.version_id, metadata_for(candidate))
+        self.register(OLD_VERSION_ID, {"id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0"})
         pin = make_pin()
 
         summary, exit_code, _ = self.run_engine(pin, candidate, content=content)

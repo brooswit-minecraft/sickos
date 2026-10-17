@@ -83,10 +83,12 @@ def build_fixture_repo():
     return repo
 
 
-def version_entry(mod_id, version_id, version_number, content, *, game_versions=("1.21.1",), loaders=("neoforge",)):
+def version_entry(mod_id, version_id, version_number, content, *, game_versions=("1.21.1",), loaders=("neoforge",),
+                   version_type="release", changelog=""):
     filename = f"{mod_id.lower()}-{version_number}.jar"
     return {
-        "id": version_id, "version_number": version_number,
+        "id": version_id, "version_number": version_number, "version_type": version_type,
+        "changelog": changelog,
         "game_versions": list(game_versions), "loaders": list(loaders),
         "dependencies": [],
         "files": [{
@@ -166,9 +168,23 @@ class TestPollAndBump(unittest.TestCase):
         with mock.patch.object(poll_mod_updates.bump_mod, "run_engine", side_effect=patched_run_engine):
             return poll_mod_updates.poll_and_bump(self.repo, fetcher=self.modrinth.list_fetcher)
 
-    def test_excludes_dynamic_atmosphere_pin(self):
+    def test_includes_dynamic_atmosphere_pin_too(self):
+        # No excluded pins: this poll is DA's recovery backstop if a
+        # queued dispatch gets replaced by a cron run sharing the same
+        # concurrency group (see this module's docstring). With nothing
+        # newer registered for DA, it is simply a clean no-op like any
+        # other pin -- not silently skipped.
         outcomes = self.run_poll()
-        self.assertNotIn("PZV7RorC", [o["mod_id"] for o in outcomes])
+        by_mod = {o["mod_id"]: o for o in outcomes}
+        self.assertIn("PZV7RorC", by_mod)
+        self.assertEqual(by_mod["PZV7RorC"]["outcome"], "no_candidate")
+
+    def test_dynamic_atmosphere_pin_is_bumped_like_any_other(self):
+        self.modrinth.register_latest("PZV7RorC", "DANEW", "0.20.0", b"da v0.20.0")
+        self.modrinth.register_old_pin_metadata("DAOLD", "PZV7RorC", "0.19.0")
+        outcomes = self.run_poll()
+        by_mod = {o["mod_id"]: o for o in outcomes}
+        self.assertEqual(by_mod["PZV7RorC"]["outcome"], "bumped")
 
     def test_no_candidate_when_nothing_newer(self):
         outcomes = self.run_poll()
@@ -235,6 +251,19 @@ class TestPollAndBump(unittest.TestCase):
         by_mod = {o["mod_id"]: o for o in outcomes}
         self.assertEqual(by_mod["ALPHA1"]["outcome"], "downgrade_refused")
         self.assertFalse(by_mod["ALPHA1"]["changed"])
+
+    def test_category_derived_from_changelog_is_passed_to_the_engine(self):
+        self.modrinth.register_latest(
+            "ALPHA1", "ALPHANEW", "1.1.0", b"alpha v2",
+        )
+        self.modrinth.version_lists["ALPHA1"][0]["changelog"] = "## Fixes\n- fixed a crash\n"
+        self.modrinth.register_old_pin_metadata("ALPHAOLD", "ALPHA1", "1.0.0")
+
+        outcomes = self.run_poll()
+        by_mod = {o["mod_id"]: o for o in outcomes}
+        self.assertEqual(by_mod["ALPHA1"]["outcome"], "bumped")
+        self.assertEqual(by_mod["ALPHA1"]["mapping_rule"], "patch")
+        self.assertEqual(by_mod["ALPHA1"]["new_pack_version"], "0.22.1")
 
     def test_one_mod_failing_does_not_block_the_others(self):
         # Alpha's candidate forges hashes that don't match its own
