@@ -82,9 +82,19 @@ jobs:
           python-version: '3.12'
       - name: Honor the originating release's Release-Only trailer
         id: policy
+        env:
+          UPSTREAM_EVENT: ${{ github.event.workflow_run.event }}
         run: |
-          git show -s --format=%B HEAD > "$RUNNER_TEMP/release-message.txt"
-          python3 scripts/server_update_policy.py "$RUNNER_TEMP/release-message.txt" >> "$GITHUB_OUTPUT"
+          if [ "$UPSTREAM_EVENT" = "workflow_dispatch" ]; then
+            # "Server update" itself deploys unconditionally on its own
+            # manual-dispatch path (see that workflow's deployment-policy
+            # job) -- mirror that here instead of reading a trailer that
+            # may belong to an unrelated earlier commit at head_sha.
+            echo 'deploy=true' >> "$GITHUB_OUTPUT"
+          else
+            git show -s --format=%B HEAD > "$RUNNER_TEMP/release-message.txt"
+            python3 scripts/server_update_policy.py "$RUNNER_TEMP/release-message.txt" >> "$GITHUB_OUTPUT"
+          fi
 
   sync:
     needs: [release-only-guard]
