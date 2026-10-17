@@ -22,8 +22,17 @@ on:
 # third dispatch arriving while one run is in progress and one is already
 # queued REPLACES the queued one -- this prevents interleaving, it does not
 # guarantee delivery. See docs/da-auto-bump.md's "CI wiring" section.
+#
+# Group name is "mod-auto-bump", not "da-auto-bump": GitHub Actions
+# concurrency groups serialize across DIFFERENT workflow files that share
+# a group name, not only within one file, so this run also queues against
+# .github/workflows/mod-auto-bump-poll.yml's runs (MINECRAFT-362) -- both
+# push to main and can touch pack.toml, so they need ONE shared lock, not
+# two independent ones that could still race each other. See
+# docs/mod-auto-bump.md's "Concurrency / shared-lock / latest-main
+# handling" section.
 concurrency:
-  group: da-auto-bump
+  group: mod-auto-bump
   cancel-in-progress: false
 
 permissions:

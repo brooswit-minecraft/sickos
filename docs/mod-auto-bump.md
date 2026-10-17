@@ -44,9 +44,12 @@ and splits them into:
   (dedup by Modrinth version id -- a replayed/retried dispatch is a
   no-op) / `downgrade_refused` / `candidate`. The downgrade check only
   runs when a caller supplies the previously-pinned version *number*
-  (packwiz pins only store the version *id*; a caller needs the prior
-  pin's own version string, e.g. parsed from its filename, exactly as
-  `bump-dynamic-atmosphere.py`'s `load_da_pin` already does for DA).
+  (packwiz pins only store the version *id*). `scripts/bump_mod.py`
+  supplies it by fetching the pinned version id's own metadata from
+  Modrinth (one extra `GET /v2/version/{id}` call) rather than parsing it
+  from the pin's filename -- filenames are not uniform enough across 78
+  different mods to parse reliably, unlike DA's own fixed
+  `dynamicatmosphere-<version>.jar` scheme.
 
 **Explicit scope limit**: compatibility here means the candidate's own
 declared `game_versions`/`loaders`. It does **not** resolve the
@@ -93,19 +96,87 @@ result. If a future mod's Modrinth project becomes anonymously resolvable
 and `packwiz update` can be pointed at an exact version id, re-evaluate;
 nothing here forecloses that.
 
+## Write path: scripts/bump_mod.py
+
+Generalizes `bump-dynamic-atmosphere.py`'s write path to any
+`EligiblePin` + resolved `VersionCandidate`: re-verifies the candidate
+against Modrinth's authoritative version-file metadata right before any
+write (same gate DA uses, via `modrinth_metadata.py`), looks up the
+*currently pinned* version's own `version_number` (a pin only stores its
+version id) to get a real no-downgrade check rather than dedup-only,
+downloads and hash-verifies the jar, rewrites the pin
+(`bump-dynamic-atmosphere.py`'s `render_da_pin` turned out to already be
+fully generic despite its name, so it is reused, not copied), bumps
+`pack.toml`, writes a release-notes file, runs the same `make
+refresh`/`check`/`build` gates, and restores the tree on any failure.
+
+Deliberately simpler than DA's write path, by design: no README-sentence
+rewrite (most mods have no "pins X version Y" sentence to rewrite) and no
+Migration-section extraction (no generic release-body convention exists
+to extract from). A generic bump instead always sets
+`listing_review_required = true` and says so in its own notes file, so
+listing copy is flagged for a human rather than silently assumed current.
+`scripts/bump-dynamic-atmosphere.py`'s other generic helpers (pack-version
+read/bump/write, download+hash verification, gate running) are reused
+directly rather than re-implemented, loaded by path since that filename
+has hyphens -- the same cross-script-reuse pattern
+`da-auto-bump-dispatch.py` already uses for `has_da_auto_bump_trailer`.
+
+12 tests in `tests/test_bump_mod.py` cover: already-pinned/no-candidate
+no-ops, a real bump (pin rewrite, pack-version bump, notes, staging),
+breaking-category handling, downgrade refusal (including when the
+previous-version lookup itself fails, which degrades to dedup-only safety
+rather than crashing), the identity/hash gate's failure modes (wrong
+project, forged bytes, a 404 lookup), and gate-failure/dirty-tree restore.
+
+## Trigger: scripts/poll-mod-updates.py + mod-auto-bump-poll.yml
+
+The scheduled-reconciliation backstop this document designed above is now
+wired: `.github/workflows/mod-auto-bump-poll.yml` runs on a 20-minute
+schedule (and `workflow_dispatch`), with its own pause switch
+(`SICKOS_MODBUMP_PAUSED`, same `== "true"` rule as DA's) and the same
+credential selection (`da-auto-bump-dispatch.py select-credential`, reused
+directly -- no new secrets). `scripts/poll-mod-updates.py` discovers every
+eligible pin, **excludes Dynamic Atmosphere's own pin** (it already has
+its dedicated, reviewed, dispatch-driven workflow -- running both against
+the same pin would let them race each other), resolves each remaining
+mod's latest compatible candidate, and runs `bump_mod.run_engine` on any
+real candidate.
+
+Each successful bump is committed (not just staged) before the next mod
+is considered, so a second mod's bump reads the pack-version the first
+mod's commit just advanced -- two real, compatible updates discovered in
+the same poll become two sequential releases, never a lost or
+overwritten one. One mod failing its identity/hash gate does not stop the
+rest of the run; every mod's outcome (including failures) is in the
+run's JSON summary. The script itself never pushes, matching the engine's
+own convention -- the workflow pushes once, after the whole poll
+finishes.
+
+7 tests in `tests/test_poll_mod_updates.py` cover: DA's pin correctly
+excluded, no-op when nothing is newer, a single bump actually committing
+with the right trailers, two mods bumping and coalescing into two
+sequential pack versions in one run, an incompatible candidate correctly
+read as no-candidate, a downgrade reported (not crashed), and one mod's
+failure not blocking another mod's success in the same run.
+
+`scripts/da-auto-bump-dispatch.py` gained `build_generic_commit_message`
+for this -- same shape as `build_commit_message`, with its own
+`Mod-Auto-Bump: <mod-id> <version-id>` trailer (never `DA-Auto-Bump`, so
+nothing that greps commit history for either trailer specifically can
+confuse a generic bump for a DA one) and the same `Release-Only: true`.
+
 ## Concurrency / shared-lock / latest-main handling
 
-Not newly built for the general case; **reused** from the existing,
-reviewed DA primitive rather than reinvented: `.github/workflows/da-auto-
-bump.yml` already serializes every DA dispatch through one `concurrency:
-group: da-auto-bump` with `cancel-in-progress: false`, and each run starts
-from a fresh `actions/checkout` of the then-current `main` tip. A
-generalized dispatch/poll workflow should use exactly this pattern with
-one shared group covering *every* enrolled mod (not one group per mod),
-so two mods' updates -- or two events for the same mod -- can never
-interleave into competing pushes; a later run always recomputes against
-whatever the earlier run already pushed. **Not yet wired**: no such
-generalized workflow exists yet (see "Status").
+**Wired, not only designed.** `.github/workflows/da-auto-bump.yml`'s
+`concurrency.group` was renamed from `da-auto-bump` to `mod-auto-bump`,
+and `mod-auto-bump-poll.yml` uses that same group name -- GitHub Actions
+concurrency groups serialize across *different* workflow files that share
+a group name, not only within one file, so a DA dispatch and a scheduled
+poll run now queue against each other, not just against runs of their own
+kind. Both still start from a fresh `actions/checkout` of the
+then-current `main` tip, so a later run always recomputes against
+whatever the earlier run already pushed.
 
 ## Status
 
@@ -120,30 +191,26 @@ generalized workflow exists yet (see "Status").
   and still used by the DA engine (10 tests).
 - The direct-pin-vs-packwiz decision above.
 - `Release-Only: true` on DA's generated commits (see `da-auto-bump.md`).
+- `scripts/bump_mod.py` -- the generalized write path (12 tests).
+- `scripts/poll-mod-updates.py` + `.github/workflows/mod-auto-bump-poll.yml`
+  -- the generalized trigger (7 tests).
+- The shared `mod-auto-bump` concurrency group, covering both mechanisms.
 
 **Not implemented -- real gaps, not oversights:**
-- A generalized **write path**: nothing yet turns a `modrinth_compat`
-  candidate into a rewritten pin + pack-version bump + notes + commit for
-  an arbitrary mod. `bump-dynamic-atmosphere.py`'s write path (pin
-  rendering, README-sentence rewriting, listing-line flagging, Migration
-  extraction) is still DA-specific; most other mods have no equivalent
-  "pins X version Y" README sentence to rewrite, so a generic write path
-  needs its own (simpler) notes/listing handling, not a copy of DA's.
-- A generalized **trigger**: no `repository_dispatch` type or scheduled
-  workflow calls `discover_eligible_pins`/`resolve_latest_compatible_version`
-  for anything other than DA today. The scheduled-poll backstop this
-  document assumes (reconciling all 78 eligible pins against Modrinth on a
-  schedule) is designed above but not wired into a workflow file.
-  "no downgrades from stale events" is a live ground to keep testing that
-  wiring against once it exists -- today it exists only as a unit-tested
-  pure function, with no event feeding it.
 - **Dependency-graph validation** across what's pinned (only each
-  candidate's own declared compatibility is checked, not a full solve).
+  candidate's own declared game-version/loader compatibility is checked,
+  not a full solve against other pins' own dependency lists).
 - The two GitHub-release-only mods (`dynamic-despawn`, `magicavoxel-loader`)
-  have no verified-identity mechanism at all yet.
+  have no verified-identity mechanism at all yet -- a different source
+  (GitHub's release-asset API, not Modrinth's version-file metadata) would
+  be needed, and nothing here builds it.
 - **Dynamic Population**: explicitly deferred per this ticket's own
   prerequisite -- it is not added through this or any path until
   MINECRAFT-29's Fillager integration lands and a compatible verified
   release exists.
-- No live dispatch, credential, or publication probe has been run for any
-  of this -- unchanged from the existing DA holds.
+- No live run of either mechanism has happened: no credential has been
+  set, `mod-auto-bump-poll.yml` has never actually fired against the real
+  Modrinth API, and MODRINTH_TOKEN's read-readiness against each mod's
+  project remains untested live -- unchanged from the existing DA holds.
+  Unit tests exercise every decision path against mocked Modrinth
+  responses; they are not live-run evidence.

@@ -267,6 +267,35 @@ def build_commit_message(*, mapping_rule: str, new_pack_version: str, da_version
     return subject + "\n\n" + "\n".join(body) + "\n\n" + trailer + "\n"
 
 
+def build_generic_commit_message(*, mapping_rule: str, new_pack_version: str, mod_name: str,
+                                   mod_id: str, modrinth_version_id: str, version_number: str) -> str:
+    """Same shape as build_commit_message, generalized to any enrolled mod
+    (MINECRAFT-362's scripts/bump_mod.py), with its own trailer
+    (`Mod-Auto-Bump`) instead of `DA-Auto-Bump` -- so a generic bump is
+    never mistaken for a DA one by anything that greps commit history for
+    either trailer specifically."""
+    commit_type = "feat" if mapping_rule in _FEAT_MAPPING_RULES else "fix"
+    if mapping_rule == "breaking_as_minor":
+        subject = (
+            f"{commit_type}!: release Sickos {new_pack_version} "
+            f"pinning {mod_name} {version_number} (BREAKING)"
+        )
+    else:
+        subject = f"{commit_type}: release Sickos {new_pack_version} pinning {mod_name} {version_number}"
+    body = [
+        f"Automated {mod_name} auto-bump via scheduled Modrinth reconciliation.",
+        "",
+        f"- {mod_name} version: {version_number}",
+        f"- Modrinth mod id: {mod_id}",
+        f"- Modrinth version id: {modrinth_version_id}",
+        f"- Mapping rule: {mapping_rule}",
+    ]
+    # Same Release-Only reasoning as build_commit_message above: an
+    # automatic pack commit must never deploy/restart the server.
+    trailer = f"Release-Only: true\nMod-Auto-Bump: {mod_id} {modrinth_version_id}"
+    return subject + "\n\n" + "\n".join(body) + "\n\n" + trailer + "\n"
+
+
 # --------------------------------------------------------------------------
 # Listing-review issue (item 8). Never fails the run.
 # --------------------------------------------------------------------------
