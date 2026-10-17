@@ -44,6 +44,7 @@ docs/mod-auto-bump.md's "Status" section for the full list):
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import importlib.util
 import json
 import os
@@ -57,7 +58,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import modrinth_metadata  # noqa: E402 - needs sys.path set up first
 import mod_eligibility  # noqa: E402
-from modrinth_compat import VersionCandidate, decide_update, find_dependency_conflicts  # noqa: E402
+import server_update_policy  # noqa: E402
+from modrinth_compat import (  # noqa: E402
+    VersionCandidate, decide_update, find_dependency_conflicts, version_candidate_from_json,
+)
 
 
 def _load_da_engine():
@@ -545,6 +549,7 @@ def run_engine(repo_root, pin, candidate, *, category=None,
     return summary, EXIT_OK, f"Bumped {pin.name} to {candidate.version_number} (Sickos {new_pack_version})."
 
 
+
 # --------------------------------------------------------------------------
 # CLI: a real, runnable entry point for the ONE case this module is
 # otherwise import-only for -- a human manually publishing a breaking
@@ -555,60 +560,180 @@ def run_engine(repo_root, pin, candidate, *, category=None,
 # poll-mod-updates.py, which never passes allow_breaking/migration_text
 # and so never needs this; this is strictly for the human-in-the-loop
 # path.
+#
+# Fourth review round found three required defects, all confined to this
+# CLI, all from one root cause: it had been building the pin and the
+# candidate from flags instead of from the pin on disk plus the real
+# Modrinth version metadata run_engine already fetches elsewhere. Fixed
+# by: fetching the candidate's full metadata here too (so it carries real
+# game_versions/loaders/dependencies, not empty defaults, and the
+# operator no longer hand-transcribes hash/url/filename fields at all);
+# checking that metadata against the pack's own compatibility target
+# before ever calling run_engine; defaulting --side (and every other
+# pin-identity field) from the pin actually on disk and refusing an
+# explicit value that disagrees, rather than silently overriding it; and
+# committing with the exact same trailer-carrying commit message
+# poll-mod-updates.py uses, instead of leaving the operator to write
+# their own commit message with no Release-Only/Mod-Auto-Bump trailer
+# (which server_update_policy.should_deploy reads as permission to
+# deploy/restart the live server).
 # --------------------------------------------------------------------------
+
+def _load_build_generic_commit_message():
+    module_path = Path(__file__).resolve().parent / "da-auto-bump-dispatch.py"
+    spec = importlib.util.spec_from_file_location("da_auto_bump_dispatch_shared_cli", module_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["da_auto_bump_dispatch_shared_cli"] = module
+    spec.loader.exec_module(module)
+    return module.build_generic_commit_message
+
+
+build_generic_commit_message = _load_build_generic_commit_message()
+
+
+def cli_commit_bump(repo_root, message, run_command=subprocess.run):
+    """Same shape and bot identity as scripts/poll-mod-updates.py's own
+    commit_bump -- a CLI-published bump is still the generalized
+    mod-auto-bump mechanism, just human-triggered instead of scheduled,
+    so it carries the same trailers and the same committer identity."""
+    run_command(
+        ["git", "-c", "user.name=sickos-mod-auto-bump[bot]",
+         "-c", "user.email=sickos-mod-auto-bump[bot]@users.noreply.github.com",
+         "commit", "-F", "-"],
+        cwd=str(repo_root), input=message, text=True, check=True,
+    )
+    result = run_command(["git", "rev-parse", "HEAD"], cwd=str(repo_root),
+                          capture_output=True, text=True, check=True)
+    return result.stdout.strip()
+
 
 def _build_cli_parser():
     parser = argparse.ArgumentParser(
         description="Manually bump one enrolled mod's pin to a specific, already-known "
                      "Modrinth version id -- primarily for publishing a breaking change by "
                      "hand with real migration/reset instructions (run_engine's allow_breaking "
-                     "gate refuses this unattended). All of a candidate's identity/hash fields "
-                     "must be supplied explicitly; this CLI does not query Modrinth itself.",
+                     "gate refuses this unattended). The candidate's identity, hashes, "
+                     "compatibility and dependency data are all fetched fresh from Modrinth by "
+                     "version id, the same way the unattended poll path does -- this CLI never "
+                     "takes them as flags, so there is nothing here to hand-transcribe.",
     )
     parser.add_argument("--repo-root", default=".")
     parser.add_argument("--pin-path", required=True, help="e.g. mods/example-mod.pw.toml")
-    parser.add_argument("--mod-name", default=None, help="Defaults to the pin's own [name].")
     parser.add_argument("--mod-id", required=True, help="Modrinth project id.")
-    parser.add_argument("--side", default="both", choices=("both", "client", "server"))
-    parser.add_argument("--pinned-version-id", default=None,
-                         help="Defaults to reading the pin's current [update.modrinth] version.")
     parser.add_argument("--version-id", required=True, help="Candidate Modrinth version id.")
-    parser.add_argument("--version-number", required=True)
-    parser.add_argument("--file-name", required=True)
-    parser.add_argument("--sha1", required=True)
-    parser.add_argument("--sha512", required=True)
-    parser.add_argument("--download-url", required=True)
+    parser.add_argument("--mod-name", default=None,
+                         help="Defaults to the pin's own [name]; an explicit value that "
+                              "disagrees with the pin on disk is refused, not overridden.")
+    parser.add_argument("--side", default=None, choices=("both", "client", "server"),
+                         help="Defaults to the pin's own current [side]; an explicit value "
+                              "that disagrees with the pin on disk is refused, not overridden "
+                              "-- a prior round's default of 'both' silently moved 6 client-/"
+                              "server-only pins onto both sides.")
+    parser.add_argument("--pinned-version-id", default=None,
+                         help="Defaults to reading the pin's current [update.modrinth] version; "
+                              "an explicit value that disagrees is refused, not overridden.")
     parser.add_argument("--changelog-file", default=None,
-                         help="Optional: included verbatim (fenced) in the generated notes.")
+                         help="Optional: included verbatim (fenced) in the generated notes. "
+                              "Not needed to satisfy AC4 for a breaking change -- that is "
+                              "--migration-text-file's job.")
     parser.add_argument("--category", default=None, choices=("patch", "minor", "breaking"))
     parser.add_argument("--allow-breaking", action="store_true",
                          help="Required (together with --migration-text-file) to publish a "
                               "--category breaking bump.")
     parser.add_argument("--migration-text-file", default=None,
                          help="Required when --allow-breaking is set: real migration/reset "
-                              "instructions, included in the generated notes.")
+                              "instructions, included in the generated notes. Only used when "
+                              "--category is breaking; supplying it otherwise is a no-op and "
+                              "produces a warning, not silent discarding.")
+    parser.add_argument("--no-commit", action="store_true",
+                         help="Stage the bump but do not commit it (for inspection). Default "
+                              "behaviour commits with the same trailer-carrying message "
+                              "poll-mod-updates.py uses, so server_update_policy.should_deploy "
+                              "reads it as Release-Only, same as the automated path.")
     parser.add_argument("--summary-out", default=None)
     return parser
 
 
+def _discover_pin_or_die(repo_root, pin_path):
+    eligible, _untracked = mod_eligibility.discover_eligible_pins(repo_root)
+    matching = next((p for p in eligible if p.pin_path == pin_path), None)
+    if matching is None:
+        raise SystemExit(
+            f"--pin-path {pin_path!r} is not an eligible, Modrinth-tracked pin under "
+            f"{repo_root} (see scripts/mod_eligibility.py). This CLI only operates on pins "
+            "already enrolled this way; it does not add a new pin."
+        )
+    return matching
+
+
+def _resolve_or_die(field_name, explicit_value, on_disk_value):
+    """Default a pin-identity field from the pin actually on disk; refuse
+    (do not silently override) an explicit value that disagrees. This is
+    the fix for --side's old 'both' default silently moving client-/
+    server-only pins (MINECRAFT-362 review, fourth round), generalized to
+    every such field rather than just the one that was caught."""
+    if explicit_value is None:
+        return on_disk_value
+    if explicit_value != on_disk_value:
+        raise SystemExit(
+            f"--{field_name} {explicit_value!r} disagrees with the pin on disk "
+            f"({on_disk_value!r}). Refusing to override pin identity/membership via a flag -- "
+            f"omit --{field_name} to use the pin's own current value, or fix the pin on disk "
+            "first if it is genuinely wrong."
+        )
+    return explicit_value
+
+
 def _pin_from_cli(args):
-    pinned_version_id = args.pinned_version_id
-    mod_name = args.mod_name
-    if pinned_version_id is None or mod_name is None:
-        eligible, untracked = mod_eligibility.discover_eligible_pins(args.repo_root)
-        matching = next((p for p in eligible if p.pin_path == args.pin_path), None)
-        if matching is None:
-            raise SystemExit(
-                f"--pin-path {args.pin_path!r} is not an eligible, Modrinth-tracked pin under "
-                f"{args.repo_root} (see scripts/mod_eligibility.py); pass --pinned-version-id "
-                "and --mod-name explicitly if this pin is intentionally not yet enrolled."
-            )
-        pinned_version_id = pinned_version_id or matching.pinned_version_id
-        mod_name = mod_name or matching.name
+    on_disk = _discover_pin_or_die(args.repo_root, args.pin_path)
     return mod_eligibility.EligiblePin(
-        pin_path=args.pin_path, name=mod_name, side=args.side,
-        mod_id=args.mod_id, pinned_version_id=pinned_version_id,
+        pin_path=args.pin_path,
+        name=_resolve_or_die("mod-name", args.mod_name, on_disk.name),
+        side=_resolve_or_die("side", args.side, on_disk.side),
+        mod_id=args.mod_id,
+        pinned_version_id=_resolve_or_die("pinned-version-id", args.pinned_version_id, on_disk.pinned_version_id),
     )
+
+
+def _candidate_from_cli(args, *, token=None):
+    """Fetch GET /v2/version/{id} and build a FULLY POPULATED
+    VersionCandidate from it -- real game_versions/loaders/dependencies,
+    not the empty defaults a hand-built VersionCandidate(...) call would
+    carry (MINECRAFT-362 review, fourth round: those empty defaults made
+    the compatibility check and find_dependency_conflicts both no-ops on
+    this path)."""
+    metadata = fetch_version_metadata(args.version_id, token=token)
+    if metadata.get("id") != args.version_id:
+        raise SystemExit(
+            f"Modrinth's response for version {args.version_id!r} carries a different id "
+            f"({metadata.get('id')!r}); refusing to proceed."
+        )
+    candidate = version_candidate_from_json(metadata)
+    if candidate is None:
+        raise SystemExit(f"Modrinth's version {args.version_id!r} has no usable file entry.")
+    if args.changelog_file:
+        candidate = dataclasses.replace(
+            candidate, changelog=Path(args.changelog_file).read_text(encoding="utf-8"),
+        )
+    return candidate
+
+
+def _check_compatibility_or_die(repo_root, candidate):
+    """The only (game_version, loader) check in the system otherwise
+    lives inside modrinth_compat.resolve_latest_compatible_version, which
+    this CLI bypasses by construction (it is given a version id, not
+    asked to resolve one) -- so re-check explicitly here, now that
+    _candidate_from_cli has given this candidate its real
+    game_versions/loaders, before run_engine ever writes anything
+    (MINECRAFT-362 review, fourth round)."""
+    game_version, loader = mod_eligibility.read_pack_targets(repo_root)
+    if game_version not in candidate.game_versions or loader not in candidate.loaders:
+        raise SystemExit(
+            f"Modrinth version {candidate.version_id!r} does not declare compatibility with "
+            f"this pack's target (game_version={game_version!r}, loader={loader!r}) -- it "
+            f"declares game_versions={candidate.game_versions!r}, loaders={candidate.loaders!r}. "
+            "Refusing to pin an incompatible build."
+        )
 
 
 def cli_main(argv=None):
@@ -621,21 +746,21 @@ def cli_main(argv=None):
     migration_text = None
     if args.migration_text_file:
         migration_text = Path(args.migration_text_file).read_text(encoding="utf-8")
+        if args.category != "breaking":
+            print("::warning::--migration-text-file was supplied but --category is not "
+                  "'breaking'; render_notes only emits migration text on a breaking bump, so "
+                  "this file's content will not appear anywhere in the generated notes.",
+                  file=sys.stderr)
     if args.allow_breaking and not (migration_text and migration_text.strip()):
         print("::error::--allow-breaking requires --migration-text-file with real, non-empty "
               "content.", file=sys.stderr)
         return 2
 
-    changelog = ""
-    if args.changelog_file:
-        changelog = Path(args.changelog_file).read_text(encoding="utf-8")
+    token = os.environ.pop("MODRINTH_TOKEN", None) or None
 
     pin = _pin_from_cli(args)
-    candidate = VersionCandidate(
-        version_id=args.version_id, version_number=args.version_number, file_name=args.file_name,
-        sha1=args.sha1, sha512=args.sha512, download_url=args.download_url, changelog=changelog,
-    )
-    token = os.environ.pop("MODRINTH_TOKEN", None) or None
+    candidate = _candidate_from_cli(args, token=token)
+    _check_compatibility_or_die(args.repo_root, candidate)
 
     try:
         summary, exit_code, message = run_engine(
@@ -647,6 +772,33 @@ def cli_main(argv=None):
         return error.exit_code
 
     print(message)
+
+    if summary["changed"] and not args.no_commit:
+        commit_message = build_generic_commit_message(
+            mapping_rule=summary["mapping_rule"], new_pack_version=summary["new_pack_version"],
+            mod_name=pin.name, mod_id=pin.mod_id,
+            modrinth_version_id=summary["candidate_version_id"],
+            version_number=summary["candidate_version_number"],
+        )
+        # Defense in depth, not the only thing standing between this and
+        # a live deploy: build_generic_commit_message already always
+        # attaches Release-Only: true, but assert it holds for the exact
+        # message about to be committed anyway (MINECRAFT-362 review,
+        # fourth round -- a CLI-authored commit with no Release-Only
+        # trailer reads as permission to deploy/restart the live server).
+        assert server_update_policy.should_deploy(commit_message) is False, (
+            "refusing to commit: the generated commit message would not be read as "
+            "Release-Only by server_update_policy.should_deploy"
+        )
+        commit_sha = cli_commit_bump(args.repo_root, commit_message)
+        summary["commit_sha"] = commit_sha
+        print(f"Committed {commit_sha} (Release-Only; will not trigger a server deploy/restart).")
+    elif summary["changed"]:
+        print("--no-commit: bump staged but not committed. Commit it yourself with "
+              "build_generic_commit_message's output (see scripts/da-auto-bump-dispatch.py) so "
+              "the Release-Only/Mod-Auto-Bump trailers are present -- a commit message without "
+              "them is read as permission to deploy/restart the live server.")
+
     summary_text = json.dumps(summary, indent=2, sort_keys=True)
     print(summary_text)
     if args.summary_out:

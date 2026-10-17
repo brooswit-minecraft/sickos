@@ -453,15 +453,47 @@ class TestFenced(unittest.TestCase):
         self.assertLess(len(rendered), bump_mod.MAX_CHANGELOG_CHARS + 100)
 
 
+def cli_version_metadata(version_id, *, game_versions=("1.21.1",), loaders=("neoforge",),
+                          content=b"cli jar contents"):
+    return {
+        "id": version_id, "project_id": MOD_ID, "version_number": "2.0.0",
+        "version_type": "release", "changelog": "",
+        "game_versions": list(game_versions), "loaders": list(loaders),
+        "dependencies": [],
+        "files": [{
+            "primary": True, "filename": "examplemod-2.0.0.jar",
+            "hashes": {"sha1": hashlib.sha1(content).hexdigest(), "sha512": hashlib.sha512(content).hexdigest()},
+            "url": f"https://cdn.modrinth.com/data/{MOD_ID}/versions/{version_id}/examplemod-2.0.0.jar",
+        }],
+    }
+
+
 class TestCliMain(unittest.TestCase):
     """Exercises bump_mod.py's CLI wiring itself (MINECRAFT-362 review,
-    third round: a human must have a real runnable command for the
-    allow_breaking path). run_engine is mocked throughout -- what's under
-    test here is argument parsing/validation and file-reading, not the
-    engine logic already covered above."""
+    third and fourth rounds: a human must have a real runnable command
+    for the allow_breaking path, and that command must build its pin and
+    candidate from the pin on disk plus real Modrinth metadata, not from
+    hand-transcribed flags). run_engine is mocked throughout for the
+    argument-wiring tests -- the engine logic itself is already covered
+    above; what's under test here is CLI-level argument validation,
+    pin/candidate construction, and the commit step it now performs."""
 
     def setUp(self):
         self.tmpdir = Path(tempfile.mkdtemp(prefix="bump-mod-cli-"))
+        self.on_disk_pin = EligiblePin(
+            pin_path="mods/example-mod.pw.toml", name="Example Mod", side="client",
+            mod_id=MOD_ID, pinned_version_id=OLD_VERSION_ID,
+        )
+        self._discover_patch = mock.patch.object(
+            bump_mod.mod_eligibility, "discover_eligible_pins", return_value=([self.on_disk_pin], []),
+        )
+        self._targets_patch = mock.patch.object(
+            bump_mod.mod_eligibility, "read_pack_targets", return_value=("1.21.1", "neoforge"),
+        )
+        self._discover_patch.start()
+        self._targets_patch.start()
+        self.addCleanup(self._discover_patch.stop)
+        self.addCleanup(self._targets_patch.stop)
 
     def tearDown(self):
         import shutil
@@ -470,12 +502,7 @@ class TestCliMain(unittest.TestCase):
     def _base_args(self, extra=()):
         return [
             "--repo-root", str(self.tmpdir),
-            "--pin-path", "mods/example-mod.pw.toml",
-            "--mod-name", "Example Mod", "--mod-id", MOD_ID,
-            "--pinned-version-id", OLD_VERSION_ID,
-            "--version-id", "NEWID", "--version-number", "2.0.0",
-            "--file-name", "examplemod-2.0.0.jar", "--sha1", "a" * 40, "--sha512", "b" * 128,
-            "--download-url", "https://cdn.modrinth.com/x.jar",
+            "--pin-path", "mods/example-mod.pw.toml", "--mod-id", MOD_ID, "--version-id", "NEWID",
             *extra,
         ]
 
@@ -493,19 +520,67 @@ class TestCliMain(unittest.TestCase):
         self.assertEqual(exit_code, 2)
         mock_run_engine.assert_not_called()
 
-    def test_reads_migration_text_and_changelog_files_and_calls_run_engine(self):
+    def test_side_defaults_from_the_pin_on_disk(self):
+        fake_summary = {"changed": False, "outcome": "no_candidate"}
+        with mock.patch.object(bump_mod, "fetch_version_metadata", return_value=cli_version_metadata("NEWID")):
+            with mock.patch.object(bump_mod, "run_engine", return_value=(fake_summary, bump_mod.EXIT_OK, "ok")) as mock_run_engine:
+                exit_code = bump_mod.cli_main(self._base_args())
+        self.assertEqual(exit_code, bump_mod.EXIT_OK)
+        pin_arg = mock_run_engine.call_args[0][1]
+        self.assertEqual(pin_arg.side, "client")  # from self.on_disk_pin, NOT the old "both" default
+
+    def test_explicit_side_disagreeing_with_disk_is_refused(self):
+        with mock.patch.object(bump_mod, "fetch_version_metadata", return_value=cli_version_metadata("NEWID")):
+            with mock.patch.object(bump_mod, "run_engine") as mock_run_engine:
+                with self.assertRaises(SystemExit):
+                    bump_mod.cli_main(self._base_args(["--side", "server"]))
+        mock_run_engine.assert_not_called()
+
+    def test_incompatible_candidate_is_refused_before_touching_the_engine(self):
+        # Candidate declares fabric/1.20.1, not this pack's neoforge/1.21.1
+        # -- the compatibility check resolve_latest_compatible_version
+        # would otherwise have done is re-done explicitly here, since the
+        # CLI is given a version id directly and never calls that resolver.
+        with mock.patch.object(
+            bump_mod, "fetch_version_metadata",
+            return_value=cli_version_metadata("NEWID", game_versions=("1.20.1",), loaders=("fabric",)),
+        ):
+            with mock.patch.object(bump_mod, "run_engine") as mock_run_engine:
+                with self.assertRaises(SystemExit):
+                    bump_mod.cli_main(self._base_args())
+        mock_run_engine.assert_not_called()
+
+    def test_candidate_carries_real_compatibility_and_dependency_data(self):
+        metadata = cli_version_metadata("NEWID")
+        metadata["dependencies"] = [{"project_id": "SOME_OTHER", "dependency_type": "incompatible"}]
+        fake_summary = {"changed": False, "outcome": "no_candidate"}
+        with mock.patch.object(bump_mod, "fetch_version_metadata", return_value=metadata):
+            with mock.patch.object(bump_mod, "run_engine", return_value=(fake_summary, bump_mod.EXIT_OK, "ok")) as mock_run_engine:
+                bump_mod.cli_main(self._base_args())
+        candidate_arg = mock_run_engine.call_args[0][2]
+        self.assertEqual(candidate_arg.game_versions, ("1.21.1",))
+        self.assertEqual(candidate_arg.loaders, ("neoforge",))
+        self.assertEqual(len(candidate_arg.dependencies), 1)
+
+    def test_reads_migration_text_and_changelog_files_and_commits_with_release_only_trailer(self):
         migration_path = self.tmpdir / "migration.md"
         migration_path.write_text("Back up your world first.", encoding="utf-8")
         changelog_path = self.tmpdir / "changelog.md"
         changelog_path.write_text("## Breaking\n- renamed a key", encoding="utf-8")
 
-        fake_summary = {"changed": True, "outcome": "bumped", "notes_path": "docs/releases/0.23.0.md"}
-        with mock.patch.object(bump_mod, "run_engine", return_value=(fake_summary, bump_mod.EXIT_OK, "ok")) as mock_run_engine:
-            exit_code = bump_mod.cli_main(self._base_args([
-                "--category", "breaking", "--allow-breaking",
-                "--migration-text-file", str(migration_path),
-                "--changelog-file", str(changelog_path),
-            ]))
+        fake_summary = {
+            "changed": True, "outcome": "bumped", "notes_path": "docs/releases/0.23.0.md",
+            "mapping_rule": "breaking_as_minor", "new_pack_version": "0.23.0",
+            "candidate_version_id": "NEWID", "candidate_version_number": "2.0.0",
+        }
+        with mock.patch.object(bump_mod, "fetch_version_metadata", return_value=cli_version_metadata("NEWID")):
+            with mock.patch.object(bump_mod, "run_engine", return_value=(fake_summary, bump_mod.EXIT_OK, "ok")) as mock_run_engine:
+                with mock.patch.object(bump_mod, "cli_commit_bump", return_value="deadbeef" * 5) as mock_commit:
+                    exit_code = bump_mod.cli_main(self._base_args([
+                        "--category", "breaking", "--allow-breaking",
+                        "--migration-text-file", str(migration_path),
+                        "--changelog-file", str(changelog_path),
+                    ]))
         self.assertEqual(exit_code, bump_mod.EXIT_OK)
         mock_run_engine.assert_called_once()
         _, kwargs = mock_run_engine.call_args
@@ -515,12 +590,30 @@ class TestCliMain(unittest.TestCase):
         candidate_arg = mock_run_engine.call_args[0][2]
         self.assertEqual(candidate_arg.changelog, "## Breaking\n- renamed a key")
 
+        mock_commit.assert_called_once()
+        committed_message = mock_commit.call_args[0][1]
+        self.assertIn("Release-Only: true", committed_message)
+        self.assertIn("Mod-Auto-Bump:", committed_message)
+        self.assertFalse(bump_mod.server_update_policy.should_deploy(committed_message))
+
+    def test_migration_text_without_breaking_category_warns_not_silently_discards(self):
+        migration_path = self.tmpdir / "migration.md"
+        migration_path.write_text("Some text.", encoding="utf-8")
+        fake_summary = {"changed": False, "outcome": "no_candidate"}
+        with mock.patch.object(bump_mod, "fetch_version_metadata", return_value=cli_version_metadata("NEWID")):
+            with mock.patch.object(bump_mod, "run_engine", return_value=(fake_summary, bump_mod.EXIT_OK, "ok")):
+                with mock.patch("sys.stderr") as mock_stderr:
+                    bump_mod.cli_main(self._base_args(["--migration-text-file", str(migration_path)]))
+        warned = "".join(call.args[0] for call in mock_stderr.write.call_args_list if call.args)
+        self.assertIn("will not appear", warned)
+
     def test_engine_error_is_reported_with_its_own_exit_code(self):
-        with mock.patch.object(
-            bump_mod, "run_engine",
-            side_effect=bump_mod.EngineError(bump_mod.EXIT_DOWNGRADE_REFUSED, "downgrade_refused", "nope"),
-        ):
-            exit_code = bump_mod.cli_main(self._base_args())
+        with mock.patch.object(bump_mod, "fetch_version_metadata", return_value=cli_version_metadata("NEWID")):
+            with mock.patch.object(
+                bump_mod, "run_engine",
+                side_effect=bump_mod.EngineError(bump_mod.EXIT_DOWNGRADE_REFUSED, "downgrade_refused", "nope"),
+            ):
+                exit_code = bump_mod.cli_main(self._base_args())
         self.assertEqual(exit_code, bump_mod.EXIT_DOWNGRADE_REFUSED)
 
 

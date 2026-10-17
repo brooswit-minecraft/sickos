@@ -184,11 +184,44 @@ required to exist, not merely implied by a flag.
 round's error message naming an `--allow-breaking` flag named a command
 that did not exist -- the module now has a real `argparse` entry point
 (`python3 scripts/bump_mod.py --help`) specifically for this
-human-in-the-loop case: explicit candidate fields, `--category breaking
---allow-breaking --migration-text-file <path>`. `scripts/poll-mod-updates.py`
-never passes `allow_breaking=True` and has no such flag of its own, so a
-poll-derived breaking candidate is always reported for a human to handle
-through this CLI, never auto-published.
+human-in-the-loop case: `--pin-path`, `--mod-id`, `--version-id`,
+`--category breaking --allow-breaking --migration-text-file <path>`.
+`scripts/poll-mod-updates.py` never passes `allow_breaking=True` and has
+no such flag of its own, so a poll-derived breaking candidate is always
+reported for a human to handle through this CLI, never auto-published.
+
+**The CLI builds its pin and candidate from the pin on disk and real
+Modrinth metadata, not from flags (fourth review round).** A third
+round's CLI took the candidate's identity/hash fields AND its
+compatibility/dependency data as flags -- the former meant an operator
+hand-transcribed hashes Modrinth could just be asked for directly, and
+the latter meant `game_versions`/`loaders`/`dependencies` defaulted to
+empty tuples with no flag to populate them, so the compatibility check
+and `find_dependency_conflicts` were both silent no-ops on this path.
+Fixed: `_candidate_from_cli` fetches `GET /v2/version/{id}` itself (via
+the same `fetch_version_metadata` `run_engine` already uses) and builds
+the candidate with `modrinth_compat.version_candidate_from_json` (the
+old private `_version_to_candidate`, made public for exactly this),
+carrying its real compatibility/dependency data; `_check_compatibility_or_die`
+then re-checks it against `mod_eligibility.read_pack_targets` (moved
+there from `scripts/poll-mod-updates.py` so both callers share one
+implementation) before `run_engine` ever runs. The CLI also defaulted
+`--side` to `"both"`, silently moving 6 client-/server-only pins onto
+both sides if an operator followed the documented remedy command
+verbatim; `_pin_from_cli`/`_resolve_or_die` now default every pin-identity
+field (name, side, pinned-version-id) from the pin actually on disk and
+REFUSE an explicit flag that disagrees with it, rather than overriding.
+
+**The CLI now commits, with the same trailers the automated path uses.**
+A third round's CLI called `run_engine` (which only stages) and stopped,
+leaving the operator to write their own commit message with no
+`Release-Only`/`Mod-Auto-Bump` trailer --
+`scripts/server_update_policy.should_deploy` reads a trailer-less
+message as permission to deploy, so publishing a breaking change through
+the one documented path would also restart the live server. `cli_main`
+now builds the commit with the same `build_generic_commit_message`
+`scripts/poll-mod-updates.py` uses and asserts `should_deploy(message)`
+is `False` before committing (`--no-commit` skips this for inspection).
 
 When a bump does proceed (breaking or not), its notes file also includes
 the candidate's own Modrinth changelog, fenced (`_fenced()`) so the
@@ -197,13 +230,16 @@ notes file the way a verbatim splice did in the prior round, and capped
 at `MAX_CHANGELOG_CHARS` so one mod's long changelog cannot make the
 notes file unbounded.
 
-23 tests in `tests/test_bump_mod.py` cover: already-pinned/no-candidate
+28 tests in `tests/test_bump_mod.py` cover: already-pinned/no-candidate
 no-ops, a real bump (pin rewrite, pack-version bump, notes, staging),
 the breaking-change fail-closed gate, its `allow_breaking=True` +
 `migration_text` override (and refusal when `migration_text` is
-missing), the CLI entry point's own argument validation and file-reading
-(`TestCliMain`), `_fenced`'s defanging/truncation (`TestFenced`),
-downgrade refusal, the identity/hash gate's failure modes (wrong
+missing), the CLI entry point's own argument validation, side-defaulting/
+disagreement-refusal, incompatible-candidate refusal, real
+compatibility/dependency data reaching `run_engine`, and the commit step
+carrying the Release-Only/Mod-Auto-Bump trailers (`TestCliMain`),
+`_fenced`'s defanging/truncation (`TestFenced`), downgrade refusal, the
+identity/hash gate's failure modes (wrong
 project, forged bytes, a 404 lookup), and gate-failure/dirty-tree
 restore. The no-downgrade check's own previous-version lookup fails
 CLOSED, not open: if that lookup itself fails (e.g. a 404 because the
@@ -345,14 +381,19 @@ whatever the earlier run already pushed.
 ## Status
 
 **Implemented, tested, merged to this branch:**
-- `scripts/mod_eligibility.py` -- enrollment/exclusion resolution (6 tests).
+- `scripts/mod_eligibility.py` -- enrollment/exclusion resolution, plus
+  `read_pack_targets` (moved here from `scripts/poll-mod-updates.py` so
+  `scripts/bump_mod.py`'s CLI can share it rather than duplicate it)
+  (10 tests).
 - `scripts/modrinth_compat.py` -- compatibility filter (including
   `version_type == "release"` prerelease exclusion), candidate
   resolution, no-downgrade/dedup decision, token-attaching fetcher
-  (`make_fetcher`), and changelog-based category derivation
+  (`make_fetcher`), changelog-based category derivation
   (`derive_category_from_changelog`, heading-only -- a bare free-text
   "breaking change(s)" match was removed after it matched "No breaking
-  changes.") (35 tests).
+  changes."), and `version_candidate_from_json` (the old private
+  `_version_to_candidate`, made public so a version-id-only caller like
+  the CLI below can build a fully-populated candidate too) (35 tests).
 - `scripts/modrinth_metadata.py` -- identity/hash verification, extracted
   from and still used by the DA engine (12 tests, plus DA's own 74 still
   pass unchanged).
@@ -367,11 +408,15 @@ whatever the earlier run already pushed.
   breaking changes requiring real `migration_text`
   (`EXIT_MIGRATION_MISSING` / `breaking_change_requires_human_review`,
   `EXIT_CONFIG_ERROR` / `migration_text_required`), a real `argparse` CLI
-  entry point for that human-in-the-loop path (`cli_main`, `--help`), the
-  candidate's own changelog now included in generated notes (fenced and
-  length-capped via `_fenced`), and `assert_only_pin_changed_under_mods`
-  checking its own `git diff` call's exit code instead of passing
-  vacuously on a git failure (23 tests).
+  entry point for that human-in-the-loop path (`cli_main`, `--help`) that
+  fetches its own candidate's real compatibility/dependency data from
+  Modrinth and re-checks it, defaults every pin-identity field from the
+  pin on disk (refusing a disagreeing explicit flag rather than
+  overriding), and commits with the same trailers the automated path
+  uses, the candidate's own changelog now included in generated notes
+  (fenced and length-capped via `_fenced`), and
+  `assert_only_pin_changed_under_mods` checking its own `git diff` call's
+  exit code instead of passing vacuously on a git failure (28 tests).
 - `scripts/poll-mod-updates.py` + `.github/workflows/mod-auto-bump-poll.yml`
   -- the generalized trigger, now covering Dynamic Atmosphere's own pin
   too, reading `pack.toml`'s `[versions]` shape strictly (raises rather

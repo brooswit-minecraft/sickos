@@ -131,5 +131,46 @@ class TestDiscoverEligiblePins(unittest.TestCase):
         self.assertEqual(untracked, [])
 
 
+class TestReadPackTargets(unittest.TestCase):
+    """Moved here from scripts/poll-mod-updates.py (MINECRAFT-362 review,
+    fourth round) so scripts/bump_mod.py's CLI can share the exact same
+    compatibility target instead of a second implementation that could
+    drift."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo_root = Path(self.tmp.name)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _write_pack_toml(self, versions_body):
+        (self.repo_root / "pack.toml").write_text(
+            'name = "Sickos"\nversion = "0.22.0"\n\n[versions]\n' + versions_body,
+            encoding="utf-8",
+        )
+
+    def test_reads_minecraft_and_the_one_loader_key(self):
+        self._write_pack_toml('minecraft = "1.21.1"\nneoforge = "21.1.250"\n')
+        self.assertEqual(
+            mod_eligibility.read_pack_targets(self.repo_root), ("1.21.1", "neoforge"),
+        )
+
+    def test_missing_minecraft_key_raises(self):
+        self._write_pack_toml('neoforge = "21.1.250"\n')
+        with self.assertRaises(ValueError):
+            mod_eligibility.read_pack_targets(self.repo_root)
+
+    def test_no_loader_key_raises(self):
+        self._write_pack_toml('minecraft = "1.21.1"\n')
+        with self.assertRaises(ValueError):
+            mod_eligibility.read_pack_targets(self.repo_root)
+
+    def test_two_loader_keys_raises(self):
+        self._write_pack_toml('minecraft = "1.21.1"\nneoforge = "21.1.250"\nfabric = "0.15.0"\n')
+        with self.assertRaises(ValueError):
+            mod_eligibility.read_pack_targets(self.repo_root)
+
+
 if __name__ == "__main__":
     unittest.main()

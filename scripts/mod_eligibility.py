@@ -96,3 +96,37 @@ def discover_eligible_pins(repo_root: Path) -> tuple[list[EligiblePin], list[Unt
         )
 
     return eligible, untracked
+
+
+def read_pack_targets(repo_root):
+    """The pack's own pinned (game_version, loader) -- the single
+    compatibility target every caller (the scheduled poll, and
+    scripts/bump_mod.py's manual CLI) must check a candidate against
+    before writing it. pack.toml's [versions] table keys the loader's
+    own name ("neoforge") to its version, alongside "minecraft" -- the
+    loader is just "whichever key isn't minecraft", not a convention
+    this needs to hardcode.
+
+    Fails loudly, not silently, if pack.toml's [versions] table does not
+    have this expected shape: a silent (None, None) here would make every
+    compatibility check compare against `None`, which never equals
+    anything, so a caller would quietly resolve nothing while reporting a
+    clean "no_candidate" -- indistinguishable from a genuinely quiet run
+    (MINECRAFT-362 review). Previously duplicated between
+    scripts/poll-mod-updates.py and scripts/bump_mod.py's CLI; moved here
+    so there is one implementation both call, not two that could drift
+    (MINECRAFT-362 review, fourth round)."""
+    pack_toml = Path(repo_root) / "pack.toml"
+    import tomllib
+    with pack_toml.open("rb") as handle:
+        data = tomllib.load(handle)
+    versions = data.get("versions", {})
+    game_version = versions.get("minecraft")
+    loader_names = [key for key in versions if key != "minecraft"]
+    if not game_version or len(loader_names) != 1:
+        raise ValueError(
+            "pack.toml's [versions] table is not the expected shape (exactly 'minecraft' plus "
+            f"one loader key); got {sorted(versions)!r}. Refusing to proceed with an "
+            "unverifiable compatibility target."
+        )
+    return game_version, loader_names[0]

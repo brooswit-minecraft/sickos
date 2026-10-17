@@ -111,7 +111,18 @@ def make_fetcher(token=None):
 default_fetcher = make_fetcher()
 
 
-def _version_to_candidate(version_json):
+def version_candidate_from_json(version_json):
+    """Build a VersionCandidate from one raw Modrinth version object (as
+    returned by both `GET /v2/project/{id}/version` -- one entry -- and
+    `GET /v2/version/{id}` -- the whole response), carrying its REAL
+    game_versions/loaders/dependencies/version_type/changelog, not empty
+    defaults. Public (not `_`-prefixed) specifically so a caller that
+    only has a version id (e.g. scripts/bump_mod.py's CLI) can fetch
+    `GET /v2/version/{id}` and build a fully-populated candidate from it,
+    the same way resolve_latest_compatible_version does from the list
+    endpoint -- rather than constructing a VersionCandidate by hand from
+    manually-transcribed flags, which has no compatibility or dependency
+    data at all (MINECRAFT-362 review, fourth round)."""
     files = version_json.get("files")
     if not isinstance(files, list) or not files:
         return None
@@ -165,7 +176,7 @@ def resolve_latest_compatible_version(mod_id, *, game_version, loader, fetcher):
             continue
         if loader not in (entry.get("loaders") or ()):
             continue
-        candidate = _version_to_candidate(entry)
+        candidate = version_candidate_from_json(entry)
         if candidate is None or not candidate.version_number:
             continue
         if parse_semver(candidate.version_number) is None:

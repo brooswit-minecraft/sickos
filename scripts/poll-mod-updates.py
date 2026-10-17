@@ -130,7 +130,11 @@ KNOWN_ANONYMOUS_404_MOD_IDS = frozenset({
 # resolves. Named here (not only in docs) purely so main()'s standing
 # reminder notice (see below) can name them even on a run whose loop
 # never reaches them -- see this module's docstring for why one-bump-
-# per-run means most runs never reach most pins.
+# per-run means most runs never reach most pins. A SNAPSHOT, same caveat
+# as KNOWN_ANONYMOUS_404_MOD_IDS above: if a human bumps one of these 6
+# pins to a parseable semver version (e.g. via scripts/bump_mod.py's
+# CLI), this list goes stale for that pin and should be updated, not
+# trusted as still-accurate indefinitely.
 KNOWN_NON_SEMVER_PIN_NAMES = (
     "Create: Easy Structures (z69Pxatv)", "Cristel Lib (cl223EMc)", "Geophilic (hl5OLM95)",
     "IceAndFire Community Edition (VpmCsizY)", "Quark (qnQsVE2z)", "Zeta (MVARlG2f)",
@@ -163,33 +167,11 @@ def _load_build_generic_commit_message():
 build_generic_commit_message = _load_build_generic_commit_message()
 
 
-def read_pack_targets(repo_root):
-    """The pack's own pinned (game_version, loader) -- read once, used as
-    the compatibility filter for every mod considered this run.
-    pack.toml's [versions] table keys the loader's own name ("neoforge")
-    to its version, alongside "minecraft" -- the loader is just "whichever
-    key isn't minecraft", not a convention this needs to hardcode.
-
-    Fails loudly, not silently, if pack.toml's [versions] table does not
-    have this expected shape: a silent (None, None) here would make every
-    mod's compatibility check compare against `None`, which never equals
-    anything, so the poll would quietly resolve nothing all run while
-    reporting a clean "no_candidate" for every pin -- indistinguishable
-    from a genuinely quiet run (MINECRAFT-362 review)."""
-    pack_toml = Path(repo_root) / "pack.toml"
-    import tomllib
-    with pack_toml.open("rb") as handle:
-        data = tomllib.load(handle)
-    versions = data.get("versions", {})
-    game_version = versions.get("minecraft")
-    loader_names = [key for key in versions if key != "minecraft"]
-    if not game_version or len(loader_names) != 1:
-        raise ValueError(
-            "pack.toml's [versions] table is not the expected shape (exactly 'minecraft' plus "
-            f"one loader key); got {sorted(versions)!r}. Refusing to poll with an unverifiable "
-            "compatibility target."
-        )
-    return game_version, loader_names[0]
+# Moved to mod_eligibility.py (MINECRAFT-362 review, fourth round) so
+# scripts/bump_mod.py's manual CLI can share the exact same compatibility
+# target this script uses, rather than a second implementation that could
+# drift.
+read_pack_targets = mod_eligibility.read_pack_targets
 
 
 def commit_bump(repo_root, message, run_command=subprocess.run):
