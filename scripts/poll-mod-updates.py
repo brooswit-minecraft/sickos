@@ -190,6 +190,23 @@ KNOWN_ONLY_PRERELEASE_PIN_IDS = {
     "e0bNACJD": "Serene Seasons", "kkmrDlKT": "TerraBlender",
 }
 
+# 4 pins: mod_eligibility.discover_eligible_pins reports these as
+# `untracked` -- no [update.modrinth] table at all, so there is no
+# mod_id to key the other four lists by. Keyed by pin_path instead
+# (MINECRAFT-362 review, twelfth round: a prior round's _is_expected_gap
+# reconciled four gap-shaped outcomes against their own static lists by
+# mod_id, but poll_and_bump discarded discover_eligible_pins' own
+# `untracked` list entirely, so a pin silently losing its
+# [update.modrinth] table -- the one route that drops coverage without
+# producing ANY outcome at all -- was invisible to every one of this
+# module's guards). Each of these needs a GitHub-release-based identity
+# check (not yet implemented, see mod_eligibility.py) before it can be
+# auto-bumped at all; a human bump is the only remedy today.
+KNOWN_UNTRACKED_PIN_PATHS = frozenset({
+    "mods/dynamic-battle-axes.pw.toml", "mods/dynamic-despawn.pw.toml",
+    "mods/dynamic-whips.pw.toml", "mods/magicavoxel-loader.pw.toml",
+})
+
 # Display-only convenience views, built from the dicts above so there is
 # one source of truth for membership AND display text.
 KNOWN_NON_SEMVER_PIN_NAMES = tuple(f"{name} ({mod_id})" for mod_id, name in KNOWN_NON_SEMVER_PIN_IDS.items())
@@ -197,6 +214,7 @@ KNOWN_NO_PARSEABLE_CANDIDATE_PIN_NAMES = tuple(
     f"{name} ({mod_id})" for mod_id, name in KNOWN_NO_PARSEABLE_CANDIDATE_PIN_IDS.items()
 )
 KNOWN_ONLY_PRERELEASE_PIN_NAMES = tuple(f"{name} ({mod_id})" for mod_id, name in KNOWN_ONLY_PRERELEASE_PIN_IDS.items())
+KNOWN_UNTRACKED_PIN_NAMES = tuple(sorted(KNOWN_UNTRACKED_PIN_PATHS))
 
 # Outcome kinds with no static per-pin list: `modrinth_compat`/`bump_mod`
 # establish these fresh, per candidate, every run (a dependency
@@ -231,6 +249,10 @@ def _is_expected_gap(outcome):
         return mod_id in KNOWN_NO_PARSEABLE_CANDIDATE_PIN_IDS
     if kind == "only_prerelease_available":
         return mod_id in KNOWN_ONLY_PRERELEASE_PIN_IDS
+    if kind == "untracked":
+        # No mod_id exists for an untracked pin (that is exactly what
+        # "untracked" means) -- reconcile by pin_path instead.
+        return outcome.get("pin_path") in KNOWN_UNTRACKED_PIN_PATHS
     return kind in _UNLISTABLE_EXPECTED_GAP_OUTCOMES
 
 
@@ -292,8 +314,21 @@ def poll_and_bump(repo_root, *, token=None, fetcher=None, run_command=subprocess
     # will not serve anonymously (MINECRAFT-362 review).
     fetcher = fetcher or modrinth_compat.make_fetcher(token=token)
 
-    eligible, _untracked = mod_eligibility.discover_eligible_pins(repo_root)
+    eligible, untracked = mod_eligibility.discover_eligible_pins(repo_root)
     outcomes = []
+
+    # Reported as outcomes in their own right (MINECRAFT-362 review,
+    # twelfth round), not discarded: an untracked pin is the one route
+    # that drops coverage without producing ANY gap outcome at all, so a
+    # mod silently losing its [update.modrinth] table was previously
+    # invisible to every guard in this module. mod_eligibility.py's own
+    # docstring already says callers must report these as a gap, never
+    # silently skip them -- this was the one caller that still did.
+    for pin in untracked:
+        outcomes.append({
+            "mod_name": pin.name, "mod_id": None, "pin_path": pin.pin_path,
+            "outcome": "untracked", "changed": False, "error": pin.reason,
+        })
 
     for pin in eligible:
         if pin.pin_path in EXCLUDED_PIN_PATHS:
@@ -423,11 +458,26 @@ def main(argv=None):
         f"({', '.join(KNOWN_NO_PARSEABLE_CANDIDATE_PIN_NAMES)}); "
         f"{len(KNOWN_ONLY_PRERELEASE_PIN_NAMES)} pins have never published a release build for "
         f"this target and need the mod author to publish one, not a human bump "
-        f"({', '.join(KNOWN_ONLY_PRERELEASE_PIN_NAMES)})."
+        f"({', '.join(KNOWN_ONLY_PRERELEASE_PIN_NAMES)}); "
+        f"{len(KNOWN_UNTRACKED_PIN_NAMES)} pins have no [update.modrinth] table at all and need "
+        f"a GitHub-release-based identity check this mechanism does not implement, so only a "
+        f"human bump covers them today ({', '.join(KNOWN_UNTRACKED_PIN_NAMES)})."
     )
 
     failed = [o for o in outcomes if o["outcome"] not in
               ("no_candidate", "already_pinned", "bumped") and not _is_expected_gap(o)]
+
+    # Name the specific pin(s) that turned this run red, not only the
+    # KNOWN gaps above (MINECRAFT-362 review, twelfth round, smaller
+    # item): the per-outcome ::warning:: loop above only ever fires for
+    # EXPECTED gaps, so a run with one known gap and one genuine,
+    # unlisted regression previously annotated the known gap and said
+    # nothing at all about the pin that actually failed it.
+    for outcome in failed:
+        print(
+            f"::error::{outcome['mod_name']} ({outcome['pin_path']}) failed this run: "
+            f"outcome={outcome['outcome']!r}, error={outcome.get('error')}"
+        )
 
     # Aggregate guard (MINECRAFT-362 review, third round, broadened
     # eleventh round): the ORIGINAL guard only caught "every pin was
@@ -453,14 +503,34 @@ def main(argv=None):
     # exactly the outcome the missing-`files`/renamed-field cases above
     # produce, so treating it as evidence of health would let the
     # sharpest failure shape back in by name.
-    if outcomes and not any(o["outcome"] in ("already_pinned", "bumped") for o in outcomes):
+    #
+    # Deliberately NOT gated on `outcomes` being non-empty (MINECRAFT-362
+    # review, twelfth round): a prior version of this guard read
+    # `if outcomes and not any(...)`, so an empty outcomes list -- mods/
+    # missing or renamed (discover_eligible_pins globs it and raises
+    # nothing on a missing directory), or every pin's enrollment key
+    # shape changing under a packwiz format change (confirmed live: a
+    # tree with mods/mod-id renamed to mod_id enrolls 0 of what should be
+    # 78 pins) -- short-circuited the guard entirely and exited 0 with no
+    # ::error::, no ::warning::, and `[]` in the step summary: strictly
+    # worse than the four shapes this guard already catches, since those
+    # at least leave every pin's row in the summary. Examining nothing at
+    # all is never a legitimate "nothing to do" run.
+    aggregate_guard_failed = False
+    if not outcomes:
+        print("::error::zero pins were examined this run (mods/ missing or renamed, every pin "
+              "excluded, or discover_eligible_pins returning nothing for some other reason) -- "
+              "refusing to report this as a healthy, nothing-to-do run.")
+        aggregate_guard_failed = True
+    elif not any(o["outcome"] in ("already_pinned", "bumped") for o in outcomes):
         print("::error::no pin in this run reached already_pinned or bumped -- this looks like "
               "a systemic problem (Modrinth outage, response-shape change, a bad/expired token, "
               "or an API shape change breaking resolution for every pin uniformly), not the "
               "documented per-pin coverage gap. Failing regardless of any per-pin allowlist.")
         failed = outcomes
+        aggregate_guard_failed = True
 
-    return 1 if failed else 0
+    return 1 if failed or aggregate_guard_failed else 0
 
 
 if __name__ == "__main__":

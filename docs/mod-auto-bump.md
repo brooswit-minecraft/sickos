@@ -23,11 +23,19 @@ and splits them into:
     pin at all; this is defence in depth against one being added by
     mistake.
   - No `[update.modrinth]` table: a GitHub-release-only first-party mod.
-    At the time of writing this is `dynamic-despawn.pw.toml` and
-    `magicavoxel-loader.pw.toml`. Verifying a GitHub release's identity
-    needs a different mechanism (GitHub's release-asset API, not
-    Modrinth's version-file metadata) -- **not implemented**; these two
-    mods are not covered by anything in this document yet.
+    At the time of writing this is 4 pins: `dynamic-despawn.pw.toml` and
+    `magicavoxel-loader.pw.toml`, plus `dynamic-battle-axes.pw.toml` and
+    `dynamic-whips.pw.toml` (added since this count was first written).
+    Verifying a GitHub release's identity needs a different mechanism
+    (GitHub's release-asset API, not Modrinth's version-file metadata) --
+    **not implemented**; these 4 mods are not covered by anything in this
+    document yet. `scripts/poll-mod-updates.py` reports each as its own
+    `"untracked"` outcome every run (not silently dropped) and reconciles
+    the set against `KNOWN_UNTRACKED_PIN_PATHS` by `pin_path`, the same
+    way the four Modrinth-side gap classes below are reconciled by
+    `mod_id` -- a pin newly losing its `[update.modrinth]` table is a
+    coverage regression, not a known gap, and fails the run (twelfth
+    review round).
 
 ## Compatibility and no-downgrade resolution
 
@@ -643,7 +651,7 @@ whatever the earlier run already pushed.
   comparison; and (tenth round) `NoParseableCandidateError`/
   `OnlyPrereleaseAvailableError`, each raised instead of a silent `None`
   so "nothing newer upstream" cannot be confused with "every candidate
-  was unparseable" or "only prereleases exist") (41 tests).
+  was unparseable" or "only prereleases exist") (42 tests).
 - `scripts/modrinth_metadata.py` -- identity/hash verification, extracted
   from and still used by the DA engine (12 tests).
 - `scripts/semver_compare.py` -- no-downgrade comparator, extracted from
@@ -693,21 +701,27 @@ whatever the earlier run already pushed.
   category HINT (not the deciding factor -- see above) to each
   candidate's bump, making AT MOST ONE bump commit per run (so it never
   asks `release.yml` to run twice before the first run finishes),
-  classifying outcomes against an explicit allowlist
-  (`KNOWN_ANONYMOUS_404_MOD_IDS`) plus an aggregate "did anything resolve
-  at all" guard for `resolution_failed` -- not a blanket exemption for
-  that whole outcome class -- so the scheduled job is neither red by
-  construction nor silently green through an outage, `downgrade_refused`/
-  `dependency_conflict` now also classified as expected per-pin gaps
-  (the same repeatable-until-external-change shape), and `commit_bump`
-  committing an explicit pathspec rather than a bare `git commit`, and
-  the previously-computed-but-unchecked `before_head`/`after_head`
-  assertion restored in the breaking-change test (ninth round -- it had
-  been silently dropped, leaving that test unable to catch a regression
-  that refuses the bump outcome yet commits anyway), and
-  `NoParseableCandidateError`/`OnlyPrereleaseAvailableError` each
-  mapped to their OWN expected-gap outcome rather than the generic,
-  non-exempt `"resolution_failed"` (tenth round) (22 tests).
+  classifying four gap-shaped outcome kinds (`resolution_failed`,
+  `unsupported_version_scheme`, `no_parseable_candidate`,
+  `only_prerelease_available`, plus `untracked` -- see "Enrollment"
+  above) each against its OWN explicit `KNOWN_*_PIN_IDS`/
+  `KNOWN_UNTRACKED_PIN_PATHS` allowlist (never the whole outcome class),
+  three genuinely unlistable-in-advance outcomes
+  (`breaking_change_requires_human_review`, `downgrade_refused`,
+  `dependency_conflict`) staying unconditionally expected, and an
+  aggregate guard stated as a POSITIVE invariant -- at least one
+  `already_pinned`/`bumped` outcome this run, deliberately not
+  satisfied by `no_candidate` -- that fails the run both on zero
+  outcomes examined at all (mods/ missing or renamed) and on every pin
+  landing on the same non-healthy outcome, so the scheduled job is
+  neither red by construction nor silently green through an outage, a
+  response-shape change, or a pin quietly dropping out of enrollment
+  (eleventh and twelfth review rounds), and `commit_bump` committing an
+  explicit pathspec rather than a bare `git commit`, and the
+  previously-computed-but-unchecked `before_head`/`after_head` assertion
+  restored in the breaking-change test (ninth round -- it had been
+  silently dropped, leaving that test unable to catch a regression that
+  refuses the bump outcome yet commits anyway) (31 tests).
   `run_engine`'s category determination and no-downgrade
   check both now take/use a `game_version` hint and an identity-checked
   previous-pin metadata, threaded through from this script's own
@@ -725,10 +739,14 @@ whatever the earlier run already pushed.
   and a `required` dependency on a project that is not currently pinned
   is not treated as a conflict (this pass cannot tell a genuinely missing
   requirement from a local-only/out-of-pack mod by design).
-- The two GitHub-release-only mods (`dynamic-despawn`, `magicavoxel-loader`)
-  have no verified-identity mechanism at all yet -- a different source
-  (GitHub's release-asset API, not Modrinth's version-file metadata) would
-  be needed, and nothing here builds it.
+- The 4 GitHub-release-only mods (`dynamic-despawn`, `magicavoxel-loader`,
+  `dynamic-battle-axes`, `dynamic-whips`) have no verified-identity
+  mechanism at all yet -- a different source (GitHub's release-asset API,
+  not Modrinth's version-file metadata) would be needed, and nothing here
+  builds it. `scripts/poll-mod-updates.py` reports each as a standing
+  `"untracked"` gap every run (see "Enrollment" above) so this remains a
+  known, reconciled gap rather than a silent one; a human bump is the
+  only remedy today.
 - **Dynamic Population**: explicitly deferred per this ticket's own
   prerequisite -- it is not added through this or any path until
   MINECRAFT-29's Fillager integration lands and a compatible verified

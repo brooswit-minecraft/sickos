@@ -392,6 +392,42 @@ class TestPollAndBump(unittest.TestCase):
         self.assertFalse(by_mod["ALPHA1"]["changed"])
         self.assertEqual(before_head, after_head)
 
+    def test_untracked_pin_is_reported_as_an_outcome_not_discarded(self):
+        # MINECRAFT-362 review, twelfth round, required item 2:
+        # mod_eligibility.discover_eligible_pins' `untracked` list was
+        # previously bound to `_untracked` and never read -- a pin with
+        # no [update.modrinth] table produced NO outcome at all, the one
+        # route that drops coverage without tripping any gap
+        # classification. It must now appear in poll_and_bump's own
+        # outcome list, unconditionally (not subject to the
+        # one-bump-per-run stop), so main() can reconcile it like the
+        # four gap classes above.
+        (self.repo / "mods" / "no-modrinth-pin.pw.toml").write_text(
+            'name = "No Modrinth Pin"\n'
+            'filename = "nomodrinthpin-1.0.0.jar"\n'
+            'side = "both"\n'
+            "\n"
+            "[download]\n"
+            'url = "https://example.invalid/nomodrinthpin-1.0.0.jar"\n'
+            'hash-format = "sha512"\n'
+            f'hash = "{"d" * 128}"\n',
+            encoding="utf-8",
+        )
+        outcomes = self.run_poll()
+        untracked = [o for o in outcomes if o["outcome"] == "untracked"]
+        self.assertEqual(len(untracked), 1)
+        self.assertEqual(untracked[0]["pin_path"], "mods/no-modrinth-pin.pw.toml")
+        self.assertIsNone(untracked[0]["mod_id"])
+        # Still reported even on a run that also makes a real bump (the
+        # one-bump-per-run stop only applies to the ELIGIBLE loop).
+        self.modrinth.register_latest("ALPHA1", "ALPHANEW", "1.1.0", b"alpha v2")
+        self.modrinth.register_old_pin_metadata("ALPHAOLD", "ALPHA1", "1.0.0")
+        outcomes = self.run_poll()
+        untracked = [o for o in outcomes if o["outcome"] == "untracked"]
+        bumped = [o for o in outcomes if o["outcome"] == "bumped"]
+        self.assertEqual(len(untracked), 1)
+        self.assertEqual(len(bumped), 1)
+
 
 class TestMainExitCode(unittest.TestCase):
     """Exercises main()'s pass/fail classification directly (item 2,
@@ -574,6 +610,69 @@ class TestMainExitCode(unittest.TestCase):
         ]
         exit_code, _ = self._run_main_with(outcomes)
         self.assertEqual(exit_code, 0)
+
+    def test_zero_outcomes_fails_the_run(self):
+        # MINECRAFT-362 review, twelfth round, required item 1: a prior
+        # version of the aggregate guard read `if outcomes and not
+        # any(...)`, so an EMPTY outcomes list (mods/ missing or renamed,
+        # or discover_eligible_pins returning nothing for every pin)
+        # short-circuited the guard entirely and exited 0 with no
+        # ::error:: at all. Examining nothing is never a healthy,
+        # nothing-to-do run.
+        exit_code, output = self._run_main_with([])
+        self.assertEqual(exit_code, 1)
+        self.assertIn("::error::zero pins were examined this run", output)
+
+    def test_known_untracked_pin_is_an_expected_gap(self):
+        # A pin on KNOWN_UNTRACKED_PIN_PATHS (no [update.modrinth] table,
+        # a documented, standing gap) must warn, not fail.
+        known_untracked_path = next(iter(poll_mod_updates.KNOWN_UNTRACKED_PIN_PATHS))
+        outcomes = [
+            self._HEALTHY_PIN,
+            {"mod_id": None, "mod_name": "Untracked", "pin_path": known_untracked_path,
+             "outcome": "untracked", "error": "no [update.modrinth] table; not Modrinth-tracked"},
+        ]
+        exit_code, output = self._run_main_with(outcomes)
+        self.assertEqual(exit_code, 0)
+        self.assertIn(f"::warning::Untracked ({known_untracked_path})", output)
+
+    def test_unlisted_untracked_pin_is_a_coverage_regression(self):
+        # MINECRAFT-362 review, twelfth round, required item 2: a pin
+        # that newly loses its [update.modrinth] table (a packwiz format
+        # change, or a human editing error) is NOT on
+        # KNOWN_UNTRACKED_PIN_PATHS and must fail the run -- this is
+        # exactly the "a mod dropping out of enrollment silently" shape
+        # item 1's zero-outcomes case is the extreme version of.
+        outcomes = [
+            self._HEALTHY_PIN,
+            {"mod_id": None, "mod_name": "Newly Untracked", "pin_path": "mods/newly-untracked.pw.toml",
+             "outcome": "untracked", "error": "no [update.modrinth] table; not Modrinth-tracked"},
+        ]
+        exit_code, output = self._run_main_with(outcomes)
+        self.assertEqual(exit_code, 1)
+        self.assertIn("::error::Newly Untracked (mods/newly-untracked.pw.toml) failed this run", output)
+
+    def test_failed_outcome_names_the_specific_pin(self):
+        # MINECRAFT-362 review, twelfth round, smaller item: the
+        # per-outcome ::warning:: loop only ever fires for EXPECTED gaps,
+        # so a run with one known gap and one genuine, unlisted
+        # regression previously annotated only the known gap and said
+        # nothing about the pin that actually turned the run red.
+        known_404_mod_id = next(iter(poll_mod_updates.KNOWN_ANONYMOUS_404_MOD_IDS))
+        outcomes = [
+            self._HEALTHY_PIN,
+            {"mod_id": known_404_mod_id, "mod_name": "Known Gap", "pin_path": "mods/known.pw.toml",
+             "outcome": "resolution_failed", "error": "404"},
+            {"mod_id": "REGRESSED", "mod_name": "Create Aeronautics", "pin_path": "mods/create-aeronautics.pw.toml",
+             "outcome": "unsupported_version_scheme", "error": "not semver"},
+        ]
+        exit_code, output = self._run_main_with(outcomes)
+        self.assertEqual(exit_code, 1)
+        self.assertIn(
+            "::error::Create Aeronautics (mods/create-aeronautics.pw.toml) failed this run: "
+            "outcome='unsupported_version_scheme'",
+            output,
+        )
 
 
 class TestCommitBump(unittest.TestCase):
