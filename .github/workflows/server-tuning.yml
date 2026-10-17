@@ -1,5 +1,38 @@
 name: Server tuning
 
+# Re-applies repository-owned Dynamic Atmosphere tuning to the live server.
+# Two triggers, deliberately NOT the same shape:
+#
+#   - push (paths below): fires immediately for a config/script edit on main.
+#     Safe to fire right away because nothing about the live jar or the live
+#     config's existence changes here — the sync only ever patches keys that
+#     are already allow-listed into a config file that's already there.
+#
+#   - workflow_run on "Server update": a DA version bump (mods/dynamic-atmosphere.pw.toml)
+#     ships as part of a pack release, and MINECRAFT-50 asked for the sync to
+#     re-run after that release deploys so a DA configVersion bump's
+#     rename-aside-and-regenerate-at-defaults doesn't silently discard this
+#     repository's tuning. Deliberately NOT a `paths:` entry for
+#     mods/dynamic-atmosphere.pw.toml on the push trigger above: a path
+#     trigger fires the instant the bump lands on main, which is BEFORE
+#     "Server update" has re-pointed/restarted the server and DA has had a
+#     chance to regenerate its config — exactly the ordering MINECRAFT-50
+#     warned against ("it will patch a file that is about to be replaced").
+#     Chaining on workflow_run, the same shape server-update.yml itself uses
+#     to chain off "Release", guarantees this only starts once that run has
+#     finished. The sync is idempotent (patch_toml no-ops when nothing
+#     differs) and safe to re-run on every deploy, not just ones that bumped
+#     DA, so there's no need to filter on what the update actually changed.
+#
+#     NOTE ON A TICKET CLAIM, VERIFIED AND FOUND WRONG: MINECRAFT-50 asserted
+#     this workflow and server-update.yml "already share the SFTP
+#     concurrency group". As of this change that is NOT true — read
+#     server-update.yml and its reusable-server-update.yml yourself:
+#     neither declares a `concurrency:` block, and that workflow talks to
+#     Modrinth's API, not SFTP. The `schematic-sftp-${{ github.repository }}`
+#     group below is shared with reset-world.yml (see README.md, "Live
+#     server tuning"), not with server-update.yml. The workflow_run trigger
+#     above is what orders this workflow after a deploy — not a shared lock.
 on:
   push:
     branches: [main]
@@ -8,6 +41,9 @@ on:
       - scripts/sync-server-config.py
       - tests/test_sync_server_config.py
       - .github/workflows/server-tuning.yml
+  workflow_run:
+    workflows: ["Server update"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -19,6 +55,7 @@ concurrency:
 
 jobs:
   sync:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
