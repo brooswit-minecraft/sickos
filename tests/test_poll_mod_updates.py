@@ -500,26 +500,41 @@ class TestMainExitCode(unittest.TestCase):
                     "outcome": "already_pinned", "error": None}
 
     def test_expected_gaps_alone_do_not_fail_the_run(self):
-        # "A" uses a mod_id ON the known-anonymous-404 allowlist -- a
-        # resolution_failed for a mod_id NOT on it is a different test
-        # below, since that must fail, not warn. "B"/"C" use real
-        # mod_ids from their matching KNOWN_*_PIN_IDS dicts, since
-        # _is_expected_gap now checks membership by mod_id, not outcome
-        # string alone.
-        known_404_mod_id = next(iter(poll_mod_updates.KNOWN_ANONYMOUS_404_MOD_IDS))
+        # "B"/"C" use real mod_ids from their matching KNOWN_*_PIN_IDS
+        # dicts (or, for "C", an unlistable-by-design outcome), since
+        # _is_expected_gap checks membership by mod_id, not outcome
+        # string alone. KNOWN_ANONYMOUS_404_MOD_IDS is empty (sixteenth
+        # review round: MODRINTH_TOKEN is actually configured, so
+        # "resolution_failed" is no longer presumed expected for any
+        # mod_id -- see test_resolution_failed_is_never_an_expected_gap_now).
         known_non_semver_mod_id = next(iter(poll_mod_updates.KNOWN_NON_SEMVER_PIN_IDS))
         outcomes = [
             self._HEALTHY_PIN,
-            {"mod_id": known_404_mod_id, "mod_name": "A", "pin_path": "mods/a.pw.toml", "outcome": "resolution_failed", "error": "404"},
             {"mod_id": known_non_semver_mod_id, "mod_name": "B", "pin_path": "mods/b.pw.toml", "outcome": "unsupported_version_scheme", "error": "x"},
             {"mod_id": "C", "mod_name": "C", "pin_path": "mods/c.pw.toml", "outcome": "breaking_change_requires_human_review", "error": "y"},
             {"mod_id": "D", "mod_name": "D", "pin_path": "mods/d.pw.toml", "outcome": "no_candidate", "error": None},
         ]
         exit_code, output = self._run_main_with(outcomes)
         self.assertEqual(exit_code, 0)
-        self.assertIn("::warning::A (mods/a.pw.toml)", output)
         self.assertIn("::warning::B (mods/b.pw.toml)", output)
         self.assertIn("::warning::C (mods/c.pw.toml)", output)
+
+    def test_resolution_failed_is_never_an_expected_gap_now(self):
+        # MINECRAFT-362 review, sixteenth round, required item: a prior
+        # round's KNOWN_ANONYMOUS_404_MOD_IDS allowlist rested on the
+        # false premise that MODRINTH_TOKEN was not configured.
+        # MODRINTH_TOKEN IS configured and wired into this workflow, so
+        # this module's fetcher is never actually anonymous in a real
+        # run -- the allowlist was emptied rather than kept on a false
+        # justification. A resolution_failed for ANY mod_id (including
+        # the 4 previously-allowlisted ones) must now fail the run.
+        outcomes = [
+            self._HEALTHY_PIN,
+            {"mod_id": "PZV7RorC", "mod_name": "Dynamic Atmosphere", "pin_path": "mods/dynamic-atmosphere.pw.toml",
+             "outcome": "resolution_failed", "error": "404"},
+        ]
+        exit_code, _ = self._run_main_with(outcomes)
+        self.assertEqual(exit_code, 1)
 
     def test_downgrade_refused_and_dependency_conflict_are_expected_gaps(self):
         # MINECRAFT-362 review, sixth round: both recur identically every
@@ -576,9 +591,8 @@ class TestMainExitCode(unittest.TestCase):
         self.assertEqual(exit_code, 1)
 
     def test_a_real_unexpected_failure_still_fails_the_run(self):
-        known_404_mod_id = next(iter(poll_mod_updates.KNOWN_ANONYMOUS_404_MOD_IDS))
         outcomes = [
-            {"mod_id": known_404_mod_id, "mod_name": "A", "pin_path": "mods/a.pw.toml", "outcome": "resolution_failed", "error": "404"},
+            self._HEALTHY_PIN,
             {"mod_id": "E", "mod_name": "E", "pin_path": "mods/e.pw.toml", "outcome": "integrity_failure", "error": "bad hash"},
             {"mod_id": "D", "mod_name": "D", "pin_path": "mods/d.pw.toml", "outcome": "no_candidate", "error": None},
         ]
@@ -600,15 +614,20 @@ class TestMainExitCode(unittest.TestCase):
         self.assertEqual(exit_code, 1)
 
     def test_every_pin_failing_to_resolve_fails_regardless_of_allowlist(self):
-        # Aggregate guard: even if every single resolution_failed outcome
-        # IS on the allowlist, a run where NOTHING else succeeded (no
+        # Aggregate guard: even if every single examined outcome IS on
+        # its matching allowlist, a run where NOTHING else succeeded (no
         # already_pinned/bumped at all) signals a systemic problem
         # (outage, response-shape change), not the documented per-pin
-        # baseline.
+        # baseline. Uses KNOWN_NON_SEMVER_PIN_IDS rather than
+        # resolution_failed/KNOWN_ANONYMOUS_404_MOD_IDS -- the latter is
+        # now empty (sixteenth review round: MODRINTH_TOKEN is actually
+        # configured, so resolution_failed is never an expected gap by
+        # itself any more), but the aggregate-guard property under test
+        # here is independent of which list is used.
         outcomes = [
             {"mod_id": mod_id, "mod_name": mod_id, "pin_path": f"mods/{mod_id}.pw.toml",
-             "outcome": "resolution_failed", "error": "HTTP 503"}
-            for mod_id in poll_mod_updates.KNOWN_ANONYMOUS_404_MOD_IDS
+             "outcome": "unsupported_version_scheme", "error": "not semver"}
+            for mod_id in poll_mod_updates.KNOWN_NON_SEMVER_PIN_IDS
         ]
         exit_code, output = self._run_main_with(outcomes)
         self.assertEqual(exit_code, 1)
@@ -734,11 +753,11 @@ class TestMainExitCode(unittest.TestCase):
         # so a run with one known gap and one genuine, unlisted
         # regression previously annotated only the known gap and said
         # nothing about the pin that actually turned the run red.
-        known_404_mod_id = next(iter(poll_mod_updates.KNOWN_ANONYMOUS_404_MOD_IDS))
+        known_only_prerelease_mod_id = next(iter(poll_mod_updates.KNOWN_ONLY_PRERELEASE_PIN_IDS))
         outcomes = [
             self._HEALTHY_PIN,
-            {"mod_id": known_404_mod_id, "mod_name": "Known Gap", "pin_path": "mods/known.pw.toml",
-             "outcome": "resolution_failed", "error": "404"},
+            {"mod_id": known_only_prerelease_mod_id, "mod_name": "Known Gap", "pin_path": "mods/known.pw.toml",
+             "outcome": "only_prerelease_available", "error": "no release build"},
             {"mod_id": "REGRESSED", "mod_name": "Create Aeronautics", "pin_path": "mods/create-aeronautics.pw.toml",
              "outcome": "unsupported_version_scheme", "error": "not semver"},
         ]

@@ -96,12 +96,18 @@ EXCLUDED_PIN_PATHS = frozenset()
 # checked:
 # - "resolution_failed": modrinth_compat.py's version-list fetch catches
 #   bare `Exception`, so this is a catch-all for an HTTP 5xx, a timeout,
-#   a DNS failure, a malformed response, an expired MODRINTH_TOKEN, or a
-#   project genuinely deleted/privated. Only the mod_ids in
-#   KNOWN_ANONYMOUS_404_MOD_IDS below are expected for this outcome --
-#   never the whole class, or a Modrinth outage would stop the
-#   mechanism while the scheduled job stayed green (MINECRAFT-362
-#   review, third round).
+#   a DNS failure, a malformed response, an expired/insufficiently-
+#   scoped MODRINTH_TOKEN, or a project genuinely deleted/privated.
+#   KNOWN_ANONYMOUS_404_MOD_IDS below is currently EMPTY (sixteenth
+#   review round: it previously allowlisted 4 mod_ids on the premise
+#   that MODRINTH_TOKEN was not configured, which is false -- the
+#   token is configured and wired into this workflow), so no mod_id is
+#   presently expected for this outcome and a resolution_failed for ANY
+#   pin fails the run. Re-populate only with mod_ids for which a live,
+#   authenticated check has actually confirmed the configured token
+#   cannot read that specific project -- never the whole class, or a
+#   Modrinth outage would stop the mechanism while the scheduled job
+#   stayed green (MINECRAFT-362 review, third round).
 # - "unsupported_version_scheme" / "no_parseable_candidate" /
 #   "only_prerelease_available": each established by one specific,
 #   deterministic check (the no-downgrade comparator, or
@@ -121,21 +127,29 @@ EXCLUDED_PIN_PATHS = frozenset()
 #   (`_UNLISTABLE_EXPECTED_GAP_OUTCOMES`, defined just before
 #   `_is_expected_gap`).
 
-# The 4 projects individually confirmed (by a live, read-only, authorized
-# resolution against all 78 eligible pins, done under this ticket's
-# review process) to return HTTP 404 to an anonymous/no-token caller, as
-# of this writing. MODRINTH_TOKEN is not set (see docs/mod-auto-bump.md's
-# "Status" -- still held), so these are presently permanent, but this is
-# an explicit allowlist, not a blanket exemption for the whole
-# "resolution_failed" outcome class: once a token is set, re-verify this
-# list rather than assuming it is still accurate, and remove any entry
-# that resolves.
-KNOWN_ANONYMOUS_404_MOD_IDS = frozenset({
-    "PZV7RorC",  # Dynamic Atmosphere
-    "n0hFQ5AT",  # Dynamic Skateboards
-    "BCtj6RgM",  # Dynamic Terrain
-    "srLLPzF8",  # Dynamic Vehicles
-})
+# Previously 4 projects (Dynamic Atmosphere, Dynamic Skateboards,
+# Dynamic Terrain, Dynamic Vehicles) individually confirmed to return
+# HTTP 404 to an ANONYMOUS/no-token caller, on the premise that
+# MODRINTH_TOKEN was not yet configured. That premise is false
+# (MINECRAFT-362 review, sixteenth round): `MODRINTH_TOKEN` IS
+# configured as a repository secret and IS wired into both
+# mod-auto-bump-poll.yml and da-auto-bump.yml -- this module's own
+# fetcher is never actually anonymous in a real run, so "needs
+# MODRINTH_TOKEN to resolve" was never an accurate remedy for these 4
+# pins' behavior under this poll. What remains genuinely unverified is
+# whether the CONFIGURED token has read access to these 4 specific
+# projects -- a materially different, narrower claim this allowlist
+# cannot make without live evidence it does not have. Emptied rather
+# than kept on a false justification, per this comment's own
+# long-standing rule: "once a token is set, re-verify this list rather
+# than assuming it is still accurate" -- the token is set, so a
+# resolution_failed for any of these 4 ids now fails the run loudly and
+# honestly instead of warning on a premise that no longer holds. If a
+# live, authenticated check later confirms the configured token
+# genuinely cannot read one of these projects, re-add it here with that
+# evidence (and the accurate remedy: grant/rotate the token's access,
+# not "set a token" that already exists).
+KNOWN_ANONYMOUS_404_MOD_IDS = frozenset()
 
 # The following three lists are a SNAPSHOT from a live, read-only check
 # of all 78 eligible pins (same caveat as KNOWN_ANONYMOUS_404_MOD_IDS
@@ -510,24 +524,46 @@ def main(argv=None):
     # the exact runs where staying silent about a known gap is most
     # likely to be mistaken for "nothing to report" (MINECRAFT-362
     # review, third round, smaller item).
+    # Built from clauses that skip themselves when their list is empty
+    # (MINECRAFT-362 review, sixteenth round) -- KNOWN_ANONYMOUS_404_MOD_IDS
+    # emptied this round, and a hardcoded "0 pins need MODRINTH_TOKEN to
+    # resolve anonymously ()" printed on literally every run would have
+    # been a new, self-contradicting standing claim on the one line this
+    # notice always prints.
+    _notice_clauses = []
+    if KNOWN_ANONYMOUS_404_MOD_IDS:
+        _notice_clauses.append(
+            f"{len(KNOWN_ANONYMOUS_404_MOD_IDS)} pins need MODRINTH_TOKEN read access to "
+            f"resolve ({', '.join(sorted(KNOWN_ANONYMOUS_404_MOD_IDS))})"
+        )
+    if KNOWN_NON_SEMVER_PIN_NAMES:
+        _notice_clauses.append(
+            f"{len(KNOWN_NON_SEMVER_PIN_NAMES)} pins have a non-semver PINNED version and need "
+            f"a human bump ({', '.join(KNOWN_NON_SEMVER_PIN_NAMES)})"
+        )
+    if KNOWN_NO_PARSEABLE_CANDIDATE_PIN_NAMES:
+        _notice_clauses.append(
+            f"{len(KNOWN_NO_PARSEABLE_CANDIDATE_PIN_NAMES)} pins have NO parseable version on "
+            f"Modrinth at all (the unparseable strings are the project's own published "
+            f"versions, not this pin -- a human bump cannot fix these; only a different "
+            f"comparator this document does not attempt would) "
+            f"({', '.join(KNOWN_NO_PARSEABLE_CANDIDATE_PIN_NAMES)})"
+        )
+    if KNOWN_ONLY_PRERELEASE_PIN_NAMES:
+        _notice_clauses.append(
+            f"{len(KNOWN_ONLY_PRERELEASE_PIN_NAMES)} pins have never published a release build "
+            f"for this target and need the mod author to publish one, not a human bump "
+            f"({', '.join(KNOWN_ONLY_PRERELEASE_PIN_NAMES)})"
+        )
+    if KNOWN_UNTRACKED_PIN_NAMES:
+        _notice_clauses.append(
+            f"{len(KNOWN_UNTRACKED_PIN_NAMES)} pins have no [update.modrinth] table at all and "
+            f"need a GitHub-release-based identity check this mechanism does not implement, so "
+            f"only a human bump covers them today ({', '.join(KNOWN_UNTRACKED_PIN_NAMES)})"
+        )
     print(
         "::notice::Known, standing coverage gaps (not re-evaluated this run; see "
-        "docs/mod-auto-bump.md's Status section): "
-        f"{len(KNOWN_ANONYMOUS_404_MOD_IDS)} pins need MODRINTH_TOKEN to resolve anonymously "
-        f"({', '.join(sorted(KNOWN_ANONYMOUS_404_MOD_IDS))}); "
-        f"{len(KNOWN_NON_SEMVER_PIN_NAMES)} pins have a non-semver PINNED version and need a "
-        f"human bump ({', '.join(KNOWN_NON_SEMVER_PIN_NAMES)}); "
-        f"{len(KNOWN_NO_PARSEABLE_CANDIDATE_PIN_NAMES)} pins have NO parseable version on "
-        f"Modrinth at all (the unparseable strings are the project's own published versions, "
-        f"not this pin -- a human bump cannot fix these; only a different comparator this "
-        f"document does not attempt would) "
-        f"({', '.join(KNOWN_NO_PARSEABLE_CANDIDATE_PIN_NAMES)}); "
-        f"{len(KNOWN_ONLY_PRERELEASE_PIN_NAMES)} pins have never published a release build for "
-        f"this target and need the mod author to publish one, not a human bump "
-        f"({', '.join(KNOWN_ONLY_PRERELEASE_PIN_NAMES)}); "
-        f"{len(KNOWN_UNTRACKED_PIN_NAMES)} pins have no [update.modrinth] table at all and need "
-        f"a GitHub-release-based identity check this mechanism does not implement, so only a "
-        f"human bump covers them today ({', '.join(KNOWN_UNTRACKED_PIN_NAMES)})."
+        "docs/mod-auto-bump.md's Status section): " + "; ".join(_notice_clauses) + "."
     )
 
     failed = [o for o in outcomes if o["outcome"] not in

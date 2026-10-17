@@ -434,7 +434,7 @@ still finishes green) when it isn't configured.
 
 | Name | Kind | Used by | Purpose |
 |---|---|---|---|
-| `MODRINTH_TOKEN` | secret | `release.yml`, `server-update.yml`, `mod-auto-bump-poll.yml` | Auth token for publishing to Modrinth, updating a Modrinth-hosted server, and resolving a project Modrinth will not serve anonymously during the generalized poll |
+| `MODRINTH_TOKEN` | secret | `release.yml`, `server-update.yml`, `da-auto-bump.yml`, `mod-auto-bump-poll.yml` | Auth token for publishing to Modrinth, updating a Modrinth-hosted server, and resolving Modrinth projects during an automated mod bump. Configured today -- rotating or revoking it stops both auto-bump mechanisms from resolving anything, surfacing as `resolution_failed`/`integrity_failure`. |
 | `MODRINTH_PROJECT_ID` | variable | `release.yml`, `server-update.yml` | Identifies which Modrinth project to publish to / follow |
 | `MODRINTH_SERVER_ID` | variable | `server-update.yml` | The Modrinth-hosted server to keep in sync |
 | `SICKOS_DISPATCH_APP_ID` | variable | `da-auto-bump.yml`, `mod-auto-bump-poll.yml` | GitHub App ID used to mint the push token for an automated mod bump (DA's own dispatch, or the generalized poll). Not set today. |
@@ -504,8 +504,9 @@ across any enrolled mod and an honest list of what is and is not
 implemented yet.
 
 `.github/workflows/da-auto-bump.yml` triggers on a `repository_dispatch`
-sent by Dynamic Atmosphere's own release workflow (`event_type:
-dynamic-atmosphere-released`), runs `scripts/bump-dynamic-atmosphere.py`
+sent by Dynamic Atmosphere's own release workflow
+(`event_type: dynamic-atmosphere-released`), runs
+`scripts/bump-dynamic-atmosphere.py`
 (see [docs/da-auto-bump.md](docs/da-auto-bump.md)), and, when it prepares a
 real bump, commits and pushes it to `main` -- which triggers the ordinary
 `release.yml` chain above, exactly as a hand-pushed version bump would.
@@ -603,11 +604,11 @@ Actions. A failure to open that issue only warns; it never fails the run.
 
 ### Generalized mod auto-bump poll
 
-The companion to the dispatch-driven path above: `.github/workflows/
-mod-auto-bump-poll.yml` runs on a 20-minute `schedule` (and on manual
-`workflow_dispatch`), asking Modrinth directly, for EVERY enrolled
-pin -- Dynamic Atmosphere's own included, not only "every other mod" --
-whether a newer, compatible release exists. It exists so a mod with no
+The companion to the dispatch-driven path above:
+`.github/workflows/mod-auto-bump-poll.yml` runs on a 20-minute `schedule`
+(and on manual `workflow_dispatch`), asking Modrinth directly, for EVERY
+enrolled pin -- Dynamic Atmosphere's own included, not only "every other
+mod" -- whether a newer, compatible release exists. It exists so a mod with no
 dispatch integration at all is still covered, and so a Dynamic Atmosphere
 dispatch that gets dropped (replaced in the shared `mod-auto-bump`
 concurrency group by a poll run -- see

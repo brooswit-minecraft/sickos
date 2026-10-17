@@ -506,10 +506,20 @@ while the scheduled job stayed green every 20 minutes -- confirmed: with
 all 78 pins returning HTTP 503 at that head, `main()` exited 0.
 
 The actual fix is an explicit allowlist, not a class-wide exemption:
-`KNOWN_ANONYMOUS_404_MOD_IDS` names the 4 SPECIFIC projects individually
-confirmed (by the same live, read-only, authorized check) to 404
-anonymously today (Dynamic Atmosphere, Dynamic Skateboards, Dynamic
-Terrain, Dynamic Vehicles). `_is_expected_gap()` checks each gap-shaped
+`KNOWN_ANONYMOUS_404_MOD_IDS` would name SPECIFIC projects individually
+confirmed, by a live, authenticated check, to be unreadable even by the
+CONFIGURED `MODRINTH_TOKEN` -- it is currently EMPTY (sixteenth review
+round: a prior round populated it with 4 projects -- Dynamic Atmosphere,
+Dynamic Skateboards, Dynamic Terrain, Dynamic Vehicles -- that returned
+HTTP 404 to an ANONYMOUS caller, on the false premise that
+`MODRINTH_TOKEN` was not yet configured; it IS configured and wired into
+both `da-auto-bump.yml` and `mod-auto-bump-poll.yml`, so this module's
+fetcher is never actually anonymous in a real run, and whether the
+configured token can read those 4 projects specifically remains
+unverified -- not the same claim as "needs a token to be set". Emptied
+rather than kept on a false justification; re-populate only with
+mod_ids a live, authenticated check has actually confirmed the
+configured token cannot read). `_is_expected_gap()` checks each gap-shaped
 outcome's `mod_id` against the specific static list for THAT outcome
 kind (`KNOWN_ANONYMOUS_404_MOD_IDS` for `"resolution_failed"`,
 `KNOWN_NON_SEMVER_PIN_IDS` for `"unsupported_version_scheme"`,
@@ -552,15 +562,16 @@ Because `poll_and_bump` stops at the first bump, most runs never reach
 most pins, so the per-outcome `::warning::` lines above are intermittent
 precisely on the runs that work. `main()` therefore also prints a
 standing `::notice::` reminder every run, independent of what that run's
-loop actually reached, naming all 20 known-uncovered pins from the five
-static lists above (`KNOWN_ANONYMOUS_404_MOD_IDS`,
-`KNOWN_NON_SEMVER_PIN_NAMES`, `KNOWN_NO_PARSEABLE_CANDIDATE_PIN_NAMES`,
-`KNOWN_ONLY_PRERELEASE_PIN_NAMES`, `KNOWN_UNTRACKED_PIN_NAMES` --
-twelfth review round added the fifth) -- these 20 pins are, as of this
-writing, simply not covered by this mechanism: the 4 anonymous-
-inaccessible ones need `MODRINTH_TOKEN` to be set (still held, see
-"Status"); the 3 non-semver ones need either a human bump or a
-different comparator this document does not attempt; the 5
+loop actually reached, naming all known-uncovered pins from five static
+lists (`KNOWN_ANONYMOUS_404_MOD_IDS`, `KNOWN_NON_SEMVER_PIN_NAMES`,
+`KNOWN_NO_PARSEABLE_CANDIDATE_PIN_NAMES`, `KNOWN_ONLY_PRERELEASE_PIN_NAMES`,
+`KNOWN_UNTRACKED_PIN_NAMES` -- twelfth review round added the fifth);
+each clause skips itself when its list is empty (sixteenth review round
+-- `KNOWN_ANONYMOUS_404_MOD_IDS` is currently empty, see below, and a
+hardcoded "0 pins ... ()" clause printed on every run would itself have
+been a standing false claim). As of this writing that is 16 pins across
+the four non-empty lists: the 3 non-semver ones need either a human
+bump or a different comparator this document does not attempt; the 5
 no-parseable-candidate ones have NO parseable version published on
 Modrinth at all, so a human bump cannot fix them either -- only a
 different comparator this document does not attempt would; the 4
@@ -603,7 +614,7 @@ an unexpected failure elsewhere in the same run never blocks pushing a
 bump this run already made -- the job still fails afterward (so the
 failure is visible), but only after that push.
 
-35 tests in `tests/test_poll_mod_updates.py` cover: the same
+36 tests in `tests/test_poll_mod_updates.py` cover: the same
 game-version+loader threading reaching the category gate end-to-end
 through `poll_and_bump` (not only `run_engine` directly), Dynamic Atmosphere's
 pin considered like any other (no-op when nothing is newer for it, bumped
@@ -756,7 +767,10 @@ whatever the earlier run already pushed.
   `EXCLUDED_PIN_PATHS` gaining the same own-outcome treatment --
   `"excluded_pin_path"`, also unconditionally expected -- so a path
   added there in the future gets reported rather than silently dropped
-  by the bare `continue` this replaced) (35 tests).
+  by the bare `continue` this replaced, and (sixteenth round)
+  `KNOWN_ANONYMOUS_404_MOD_IDS` emptied with a dedicated test asserting
+  `"resolution_failed"` is never an expected gap on its own any more)
+  (36 tests).
   `run_engine`'s category determination and no-downgrade
   check both now take/use a `game_version` hint and an identity-checked
   previous-pin metadata, threaded through from this script's own
@@ -786,26 +800,31 @@ whatever the earlier run already pushed.
   prerequisite -- it is not added through this or any path until
   MINECRAFT-29's Fillager integration lands and a compatible verified
   release exists.
-- No live run of either mechanism has happened: no credential has been
-  set, `mod-auto-bump-poll.yml` has never actually fired against the real
-  Modrinth API, and MODRINTH_TOKEN's read-readiness against each mod's
-  project remains untested live -- unchanged from the existing DA holds.
-  Unit tests exercise every decision path against mocked Modrinth
-  responses; they are not live-run evidence.
-- **16 of the 78 eligible pins are not covered by this mechanism today**
-  (established by a live, authorized, read-only resolution against
-  Modrinth, done under the review process for this ticket -- no
-  dispatch, credential, write, or publication probe; recount as of the
-  tenth review round). Four classes, each with its OWN outcome string
-  and its own remedy -- conflating them, or conflating any of them with
-  the TRUE catch-all `"resolution_failed"`, was itself the tenth round's
-  bug (see "Not every non-success outcome..." above):
-  - **4 pins** (`KNOWN_ANONYMOUS_404_MOD_IDS`: Dynamic Atmosphere,
-    Dynamic Skateboards, Dynamic Terrain, Dynamic Vehicles) return HTTP
-    404 to an anonymous caller -- outcome `"resolution_failed"`,
-    allowlisted by `mod_id` specifically (not the whole outcome class).
-    Need `MODRINTH_TOKEN` set to become resolvable -- still held, per
-    the no-live-run item above.
+- No live run of either mechanism has happened, since PR #104 (this
+  ticket's implementation) has not merged: `mod-auto-bump-poll.yml` has
+  never actually fired against the real Modrinth API. Two DIFFERENT
+  credentials are involved here, and their readiness is NOT the same
+  claim (sixteenth review round: a prior version of this bullet
+  conflated them under one false "no credential has been set"): the
+  PUSH credential (`SICKOS_DISPATCH_APP_ID`/`SICKOS_DISPATCH_APP_PRIVATE_KEY`/
+  `SICKOS_DISPATCH_TOKEN`) is genuinely not configured today, confirmed
+  by `gh secret list`/`gh variable list`; but `MODRINTH_TOKEN` IS
+  configured and already wired into both `da-auto-bump.yml` and
+  `mod-auto-bump-poll.yml` -- what remains genuinely unverified is
+  whether that CONFIGURED token has read access to every project it
+  needs to, which only a live, authenticated run can confirm. Unit
+  tests exercise every decision path against mocked Modrinth responses;
+  they are not live-run evidence for either claim.
+- **12 of the 78 eligible pins are documented, permanent, per-pin
+  coverage gaps today** (established by a live, authorized, read-only
+  resolution against Modrinth, done under the review process for this
+  ticket -- no dispatch, credential, write, or publication probe;
+  recount as of the sixteenth review round, which dropped a 4-pin class
+  previously counted here -- see below). Three classes, each with its
+  OWN outcome string and its own remedy -- conflating them, or
+  conflating any of them with the TRUE catch-all `"resolution_failed"`,
+  was itself the tenth round's bug (see "Not every non-success
+  outcome..." above):
   - **3 pins** (`KNOWN_NON_SEMVER_PIN_NAMES`: Create: Easy Structures,
     Geophilic, IceAndFire Community Edition) resolve a real candidate,
     but their own PINNED `version_number` is not valid semver even
@@ -828,17 +847,33 @@ whatever the earlier run already pushed.
     `"only_prerelease_available"`. A human bump cannot fix this; only
     the mod author publishing a release build does.
 
-  All four classes report as `::warning::` lines (when a run's loop
-  reaches them) and a standing `::notice::` reminder every run
-  regardless of what that run's loop reached, so this list stays
-  visible without paging on it every 20 minutes -- NOT as a failed run
-  for a pin ON its matching list. This is true of all four classes
-  equally (eleventh review round generalized it past just the first):
-  each is checked against its OWN `KNOWN_*_PIN_IDS` dict by `mod_id`,
-  so EVERY one of them fails the run for a pin hitting that outcome
-  while NOT on its matching list -- the signal a genuinely unexpected
-  failure (an outage, a revoked token, a new 404, a mod quietly
-  changing version scheme) still needs, not only for
+  A fourth list-based mechanism exists for `"resolution_failed"`
+  (`KNOWN_ANONYMOUS_404_MOD_IDS`) but is currently EMPTY, not a fourth
+  12-pin-contributing class (sixteenth review round): it previously
+  named Dynamic Atmosphere, Dynamic Skateboards, Dynamic Terrain, and
+  Dynamic Vehicles on the premise that `MODRINTH_TOKEN` was not yet
+  configured. That premise is false -- the token IS configured and
+  wired into both `da-auto-bump.yml` and `mod-auto-bump-poll.yml` -- so
+  this module's fetcher is never actually anonymous in a real run, and
+  these 4 pins' real resolvability with the configured token is
+  UNVERIFIED, not a confirmed permanent gap. Emptying the list means a
+  `"resolution_failed"` for any of these 4 (or any other pin) now fails
+  the run loudly instead of warning on a premise that no longer holds;
+  re-populate only with mod_ids a live, authenticated check has
+  actually confirmed the configured token cannot read.
+
+  All three of the populated classes report as `::warning::` lines
+  (when a run's loop reaches them) and a standing `::notice::` reminder
+  every run regardless of what that run's loop reached, so this list
+  stays visible without paging on it every 20 minutes -- NOT as a
+  failed run for a pin ON its matching list. This is true of all of
+  them equally (eleventh review round generalized it past just the
+  first, when there were four instead of three): each is checked
+  against its OWN `KNOWN_*_PIN_IDS` dict by `mod_id`, so EVERY one of
+  them fails the run for a pin hitting that outcome while NOT on its
+  matching list -- the signal a genuinely unexpected failure (an
+  outage, a revoked/insufficiently-scoped token, a new 404, a mod
+  quietly changing version scheme) still needs, not only for
   `"resolution_failed"`. This count is itself a snapshot, not a
   guarantee -- the same undercounting mistake a prior round corrected
   could recur if a pin's scheme is discovered later without updating
