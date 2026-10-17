@@ -625,11 +625,30 @@ def run_engine(repo_root, pin, candidate, *, category=None,
         notes_path = write_notes(repo_root, new_pack_version, notes_content)
 
         gates = gate_commands or default_gate_commands(repo_root)
-        for gate_name in ("refresh", "check", "build"):
-            run_gate(repo_root, run_command, gates, gate_name)
-
-        assert_only_pin_changed_under_mods(repo_root, pin.pin_path, run_command=run_command)
+        # refresh MUST run before staging, and staging MUST run before
+        # check: `make check` (Makefile) is `git diff --quiet -- pack.toml
+        # index.toml mods`, which compares the WORKTREE against the INDEX,
+        # not HEAD. Before anything is staged, this run's own unstaged
+        # writes to pack.toml/the pin file make that diff non-empty by
+        # construction, so `check` fails every time regardless of whether
+        # the bump is otherwise correct. refresh must come first because it
+        # regenerates index.toml from the pin files on disk -- staging
+        # before refresh would stage a stale index.toml. Same ordering as
+        # bump-dynamic-atmosphere.py's own run_engine (MINECRAFT-362
+        # review, fourteenth round: the generalized engine reused
+        # run_gate/stage_intended_files from that module but not this
+        # ordering, so `make check` never once passed for a real
+        # generalized bump -- confirmed live, with real packwiz and a real
+        # candidate, that this ordering alone is the difference between
+        # `gate_failed` and a successful bump).
+        run_gate(repo_root, run_command, gates, "refresh")
         stage_intended_files(repo_root, pin.pin_path, notes_path, run_command=run_command)
+        run_gate(repo_root, run_command, gates, "check")
+        run_gate(repo_root, run_command, gates, "build")
+
+        # Compares against HEAD, not the index, so staging order above
+        # does not affect it -- can run any time after the pin is written.
+        assert_only_pin_changed_under_mods(repo_root, pin.pin_path, run_command=run_command)
     except EngineError:
         restore_repo(repo_root, pin.pin_path, notes_path, run_command=run_command)
         raise

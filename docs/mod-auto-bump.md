@@ -159,10 +159,16 @@ resolve anonymously. `packwiz update` only moves a pin to whatever its own
 lookup considers "latest" -- it cannot be pointed at a specific version id,
 so it is the wrong tool for "pin exactly the version this event named."
 Direct-pin writing does not skip packwiz's own validation: `make refresh`,
-`make check`, and `make build` still run over the rewritten pin before
-anything is staged or committed, for every mod, not only DA -- so packwiz
-itself still enforces the pack's index/dependency/hash consistency on the
-result. If a future mod's Modrinth project becomes anonymously resolvable
+`make check`, and `make build` still run over the rewritten pin, for
+every mod, not only DA -- so packwiz itself still enforces the pack's
+index/dependency/hash consistency on the result. The write happens
+before any gate runs, but `git add` (staging) happens between `refresh`
+and `check`, not after `build` -- `make check` is `git diff --quiet --
+pack.toml index.toml mods` against the INDEX, not HEAD, so it only
+passes if this run's own writes are staged first (fourteenth review
+round: the generalized engine got this ordering wrong for several
+rounds, making every real bump fail `make check` every time -- see
+`scripts/bump_mod.py`'s own comment on this ordering in `run_engine`). If a future mod's Modrinth project becomes anonymously resolvable
 and `packwiz update` can be pointed at an exact version id, re-evaluate;
 nothing here forecloses that.
 
@@ -299,7 +305,7 @@ notes file the way a verbatim splice did in the prior round, and capped
 at `MAX_CHANGELOG_CHARS` so one mod's long changelog cannot make the
 notes file unbounded.
 
-40 tests in `tests/test_bump_mod.py` cover: a real engine-level
+42 tests in `tests/test_bump_mod.py` cover: a real engine-level
 game-version+loader-prefixed major bump reaching the breaking gate
 (not just `semver_delta_category` in isolation), a previous-pin
 metadata id mismatch failing closed, already-pinned/no-candidate
@@ -546,19 +552,28 @@ Because `poll_and_bump` stops at the first bump, most runs never reach
 most pins, so the per-outcome `::warning::` lines above are intermittent
 precisely on the runs that work. `main()` therefore also prints a
 standing `::notice::` reminder every run, independent of what that run's
-loop actually reached, naming all 16 known-uncovered pins from the four
+loop actually reached, naming all 20 known-uncovered pins from the five
 static lists above (`KNOWN_ANONYMOUS_404_MOD_IDS`,
 `KNOWN_NON_SEMVER_PIN_NAMES`, `KNOWN_NO_PARSEABLE_CANDIDATE_PIN_NAMES`,
-`KNOWN_ONLY_PRERELEASE_PIN_NAMES`) -- these 16 pins are, as of this
+`KNOWN_ONLY_PRERELEASE_PIN_NAMES`, `KNOWN_UNTRACKED_PIN_NAMES` --
+twelfth review round added the fifth) -- these 20 pins are, as of this
 writing, simply not covered by this mechanism: the 4 anonymous-
 inaccessible ones need `MODRINTH_TOKEN` to be set (still held, see
 "Status"); the 3 non-semver ones need either a human bump or a
 different comparator this document does not attempt; the 5
 no-parseable-candidate ones have NO parseable version published on
 Modrinth at all, so a human bump cannot fix them either -- only a
-different comparator this document does not attempt would; and the 4
+different comparator this document does not attempt would; the 4
 only-prerelease ones have never published a release build for this
-target and need the mod author to publish one, not a human bump.
+target and need the mod author to publish one, not a human bump; and
+the 4 untracked ones have no `[update.modrinth]` table at all and need
+a GitHub-release-based identity check this mechanism does not
+implement, so only a human bump covers them today. Deliberately NOT
+named here: a pin matching `EXCLUDED_MOD_NAMES` (Herobrine API,
+Baritone) reports its own `"excluded_local_only"` outcome but is not a
+coverage gap at all -- it is a permanent, intentional non-enrollment,
+so the standing notice (which exists to list GAPS) omits it (thirteenth
+review round).
 
 **`downgrade_refused` and `dependency_conflict` are expected gaps too
 (sixth review round).** Both were still landing in `failed`, the
@@ -699,8 +714,14 @@ whatever the earlier run already pushed.
   a bare `git commit`, a real AC4 category determination from the
   semver delta between the currently-pinned and candidate version
   numbers (escalatable, never downgradable, by a changelog/explicit
-  category), and a transport failure (DNS/timeout/connection refused)
-  now exiting cleanly instead of a bare traceback (40 tests).
+  category), a transport failure (DNS/timeout/connection refused)
+  now exiting cleanly instead of a bare traceback, and (fourteenth
+  round) `stage_intended_files` moved between the `refresh` and `check`
+  gates (matching `bump-dynamic-atmosphere.py`'s own ordering) so
+  `make check`'s `git diff --quiet` against the INDEX actually passes --
+  one test exercises this with the real `git diff --quiet` predicate in
+  place of a stub, and a second (skipped where `packwiz` is not
+  installed) runs the real `packwiz refresh` binary too (42 tests).
 - `scripts/poll-mod-updates.py` + `.github/workflows/mod-auto-bump-poll.yml`
   -- the generalized trigger, now covering Dynamic Atmosphere's own pin
   too, reading `pack.toml`'s `[versions]` shape strictly (raises rather

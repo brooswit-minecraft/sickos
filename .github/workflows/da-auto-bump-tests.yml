@@ -61,6 +61,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          # Same as the `runtime-compatibility` job's own `make tools`
+          # step in ci.yml -- `stable` rather than a hardcoded minimum,
+          # so this does not need Go's own toolchain-switch machinery to
+          # satisfy whatever Go version a future PACKWIZ_REF bump pins.
+          go-version: stable
+      # MINECRAFT-362, fourteenth review round: tests/test_bump_mod.py's
+      # TestRealPackwizDryRun exercises the real packwiz binary (not the
+      # `true`/`false` stand-ins every other test here uses), the one
+      # test in this job that evaluates `make check`'s actual predicate.
+      # Without this, that test silently skips (packwiz not found) and
+      # this job's green checkmark means nothing about whether a real
+      # bump can actually pass its own gates.
+      - name: Install pinned packwiz
+        run: make tools
       - name: Run DA auto-bump engine tests
         run: python -m unittest discover -s tests -p 'test_bump_dynamic_atmosphere.py'
       - name: Run DA auto-bump dispatch-workflow tests (SICKOS-78)

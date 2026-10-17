@@ -464,10 +464,23 @@ def main(argv=None):
 
     for outcome in outcomes:
         if _is_expected_gap(outcome):
-            print(
-                f"::warning::{outcome['mod_name']} ({outcome['pin_path']}) not covered this run: "
-                f"outcome={outcome['outcome']!r}, error={outcome.get('error')}"
-            )
+            if outcome["outcome"] == "excluded_local_only":
+                # Deliberate, permanent non-enrollment (MINECRAFT-362
+                # requires excluding Herobrine API/Baritone), not a
+                # coverage gap -- "not covered this run" would describe
+                # a REQUIRED exclusion as a problem (thirteenth review
+                # round, smaller item: the one wording this round
+                # existed to fix that hadn't been fixed here yet).
+                print(
+                    f"::warning::{outcome['mod_name']} ({outcome['pin_path']}) deliberately "
+                    f"excluded from auto-update (see EXCLUDED_MOD_NAMES in mod_eligibility.py), "
+                    f"not a coverage gap: error={outcome.get('error')}"
+                )
+            else:
+                print(
+                    f"::warning::{outcome['mod_name']} ({outcome['pin_path']}) not covered this run: "
+                    f"outcome={outcome['outcome']!r}, error={outcome.get('error')}"
+                )
 
     # Standing reminder, independent of what this run's loop actually
     # reached: one-bump-per-run (see poll_and_bump's docstring) means most

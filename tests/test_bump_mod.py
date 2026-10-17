@@ -468,6 +468,72 @@ class TestMetadataGate(EngineTestCase):
         self.assertEqual(self.porcelain(), before)
 
 
+def _find_packwiz():
+    """Same resolution order as the Makefile's own `PACKWIZ ?=` line: a
+    `packwiz` already on PATH, else this repo's own `./bin/packwiz` (what
+    `make tools` installs). Returns None if neither exists, so the real
+    dry-run test below can skip cleanly rather than fail in an
+    environment that has not run `make tools`."""
+    import shutil as _shutil
+    on_path = _shutil.which("packwiz")
+    if on_path:
+        return on_path
+    repo_bin = Path(__file__).parents[1] / "bin" / "packwiz"
+    if repo_bin.exists():
+        return str(repo_bin)
+    return None
+
+
+class TestRealPackwizDryRun(EngineTestCase):
+    """MINECRAFT-362 review, fourteenth round: the one test in this file
+    that calls run_engine with REAL default_gate_commands-shaped commands
+    (actual packwiz refresh/export, actual `git diff --quiet` against the
+    index) rather than STUB_GATES' `true`/`false`. 382 passing tests
+    never once evaluated the real `make check` predicate, so a
+    gate-ordering regression that made every real bump fail was
+    invisible to the whole suite -- this is the dry-run coverage the
+    review asked for to close that hole. Skips (not fails) where packwiz
+    is not installed, so environments that have not run `make tools`
+    still get the rest of this file's coverage."""
+
+    PACKWIZ = _find_packwiz()
+
+    def setUp(self):
+        super().setUp()
+        if self.PACKWIZ is None:
+            self.skipTest("packwiz not installed; run `make tools` to enable this test")
+
+    def _real_gate_commands(self):
+        # "refresh" and "check" are the real packwiz binary plus the real
+        # `make check` predicate -- exactly the two gates the fourteenth
+        # round's ordering defect broke. "build" is deliberately left as
+        # a no-op ("true"): `packwiz modrinth export` tries to fetch each
+        # pin's own download URL (a real network call to cdn.modrinth.com
+        # for whatever this fixture's fake pins point at), which this
+        # dry-run test has no need to depend on -- the ordering defect
+        # under test is entirely in refresh/check, same as DA's own gate
+        # sequence treats build as independent of staging.
+        return {
+            "refresh": [self.PACKWIZ, "refresh"],
+            "check": ["bash", "-c",
+                      f'"{self.PACKWIZ}" refresh >/dev/null && '
+                      'git diff --quiet -- pack.toml index.toml mods'],
+            "build": ["true"],
+        }
+
+    def test_real_gates_produce_a_successful_bump(self):
+        content = b"real packwiz dry-run jar"
+        candidate = make_candidate(content=content)
+        self.register(candidate.version_id, metadata_for(candidate))
+        self.register(OLD_VERSION_ID, {"id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0"})
+        pin = make_pin()
+        summary, exit_code, _ = self.run_engine(
+            pin, candidate, content=content, gate_commands=self._real_gate_commands(),
+        )
+        self.assertEqual(exit_code, bump_mod.EXIT_OK)
+        self.assertEqual(summary["outcome"], "bumped")
+
+
 class TestGateFailureRestoresRepo(EngineTestCase):
     def test_failing_check_gate_restores_repo(self):
         content = b"gate failure jar"
@@ -482,6 +548,38 @@ class TestGateFailureRestoresRepo(EngineTestCase):
         self.assertEqual(self.porcelain(), before)
         self.assertFalse((self.repo / "docs" / "releases").exists() and
                           any((self.repo / "docs" / "releases").iterdir()))
+
+
+class TestGateOrderingAgainstTheRealCheckPredicate(EngineTestCase):
+    """MINECRAFT-362 review, fourteenth round: STUB_GATES above uses
+    `true` for every gate, which passes regardless of staging order --
+    382 passing tests and 6 green CI checks never once evaluated
+    `make check`'s actual predicate, so a gate-ordering regression that
+    made every real bump fail was invisible to the whole suite. This
+    class reproduces that predicate directly with plain git (no
+    packwiz/make needed, so it is as cheap and CI-portable as STUB_GATES
+    itself): `make check`'s rule is literally `git diff --quiet --
+    pack.toml index.toml mods` run against the INDEX, not HEAD, so it
+    only passes if this run's own writes to those paths are already
+    staged -- exactly the ordering run_engine must get right."""
+
+    REALISTIC_CHECK_GATES = {
+        "refresh": ["true"],
+        "check": ["git", "diff", "--quiet", "--", "pack.toml", "index.toml", "mods"],
+        "build": ["true"],
+    }
+
+    def test_check_gate_passes_because_staging_happens_before_it_runs(self):
+        content = b"realistic gate jar"
+        candidate = make_candidate(content=content)
+        self.register(candidate.version_id, metadata_for(candidate))
+        self.register(OLD_VERSION_ID, {"id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0"})
+        pin = make_pin()
+        summary, exit_code, _ = self.run_engine(
+            pin, candidate, content=content, gate_commands=self.REALISTIC_CHECK_GATES,
+        )
+        self.assertEqual(exit_code, bump_mod.EXIT_OK)
+        self.assertEqual(summary["outcome"], "bumped")
 
 
 class TestDirtyTreeRefusal(EngineTestCase):
