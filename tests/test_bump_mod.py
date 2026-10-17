@@ -453,6 +453,40 @@ class TestFenced(unittest.TestCase):
         self.assertLess(len(rendered), bump_mod.MAX_CHANGELOG_CHARS + 100)
 
 
+class TestCliCommitBump(unittest.TestCase):
+    """MINECRAFT-362 review, fifth round: cli_commit_bump previously ran
+    a bare `git commit` with no pathspec, so anything else a human had
+    already staged in their working checkout would be swept into this
+    release commit too. Real git repo, no mocking -- what's under test
+    is git's own pathspec'd-commit behaviour, not this module's logic."""
+
+    def setUp(self):
+        self.repo = Path(tempfile.mkdtemp(prefix="cli-commit-bump-"))
+        _git(self.repo, "init", "-q")
+        _git(self.repo, "config", "user.email", "test@example.com")
+        _git(self.repo, "config", "user.name", "Test")
+        (self.repo / "pack.toml").write_text("version = \"0.22.0\"\n", encoding="utf-8")
+        (self.repo / "other.txt").write_text("pre-existing\n", encoding="utf-8")
+        _git(self.repo, "add", "-A")
+        _git(self.repo, "commit", "-q", "-m", "fixture")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.repo, ignore_errors=True)
+
+    def test_unrelated_staged_file_is_not_swept_into_the_commit(self):
+        (self.repo / "pack.toml").write_text("version = \"0.23.0\"\n", encoding="utf-8")
+        (self.repo / "other.txt").write_text("an unrelated in-progress edit\n", encoding="utf-8")
+        _git(self.repo, "add", "-A")  # operator's own working checkout already has both staged
+
+        bump_mod.cli_commit_bump(self.repo, "fix: bump\n\nRelease-Only: true\n", ("pack.toml",))
+
+        committed = _git(self.repo, "diff", "--name-only", "HEAD~1", "HEAD").stdout.split()
+        self.assertEqual(committed, ["pack.toml"])
+        still_staged = _git(self.repo, "diff", "--cached", "--name-only").stdout.split()
+        self.assertEqual(still_staged, ["other.txt"])
+
+
 def cli_version_metadata(version_id, *, game_versions=("1.21.1",), loaders=("neoforge",),
                           content=b"cli jar contents"):
     return {
@@ -536,6 +570,31 @@ class TestCliMain(unittest.TestCase):
                     bump_mod.cli_main(self._base_args(["--side", "server"]))
         mock_run_engine.assert_not_called()
 
+    def test_mod_id_defaults_from_the_pin_on_disk(self):
+        # MINECRAFT-362 review, fifth round: --mod-id was the one
+        # pin-identity field left unguarded, defaulting to whatever the
+        # operator typed with no cross-check against the pin on disk --
+        # the exact field run_engine's own identity gate trusts as
+        # ground truth.
+        fake_summary = {"changed": False, "outcome": "no_candidate"}
+        args = [
+            "--repo-root", str(self.tmpdir),
+            "--pin-path", "mods/example-mod.pw.toml", "--version-id", "NEWID",
+        ]
+        with mock.patch.object(bump_mod, "fetch_version_metadata", return_value=cli_version_metadata("NEWID")):
+            with mock.patch.object(bump_mod, "run_engine", return_value=(fake_summary, bump_mod.EXIT_OK, "ok")) as mock_run_engine:
+                exit_code = bump_mod.cli_main(args)
+        self.assertEqual(exit_code, bump_mod.EXIT_OK)
+        pin_arg = mock_run_engine.call_args[0][1]
+        self.assertEqual(pin_arg.mod_id, MOD_ID)  # from self.on_disk_pin
+
+    def test_explicit_mod_id_disagreeing_with_disk_is_refused(self):
+        with mock.patch.object(bump_mod, "fetch_version_metadata", return_value=cli_version_metadata("NEWID")):
+            with mock.patch.object(bump_mod, "run_engine") as mock_run_engine:
+                with self.assertRaises(SystemExit):
+                    bump_mod.cli_main(self._base_args(["--mod-id", "uCdwusMi"]))
+        mock_run_engine.assert_not_called()
+
     def test_incompatible_candidate_is_refused_before_touching_the_engine(self):
         # Candidate declares fabric/1.20.1, not this pack's neoforge/1.21.1
         # -- the compatibility check resolve_latest_compatible_version
@@ -606,6 +665,13 @@ class TestCliMain(unittest.TestCase):
                     bump_mod.cli_main(self._base_args(["--migration-text-file", str(migration_path)]))
         warned = "".join(call.args[0] for call in mock_stderr.write.call_args_list if call.args)
         self.assertIn("will not appear", warned)
+
+    def test_anonymous_404_names_modrinth_token_not_a_bare_traceback(self):
+        error = urllib.error.HTTPError("https://api.modrinth.com/v2/version/x", 404, "Not Found", {}, None)
+        with mock.patch.object(bump_mod, "fetch_version_metadata", side_effect=error):
+            with self.assertRaises(SystemExit) as ctx:
+                bump_mod.cli_main(self._base_args())
+        self.assertIn("MODRINTH_TOKEN", str(ctx.exception))
 
     def test_engine_error_is_reported_with_its_own_exit_code(self):
         with mock.patch.object(bump_mod, "fetch_version_metadata", return_value=cli_version_metadata("NEWID")):

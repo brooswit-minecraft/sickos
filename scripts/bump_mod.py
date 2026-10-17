@@ -591,15 +591,25 @@ def _load_build_generic_commit_message():
 build_generic_commit_message = _load_build_generic_commit_message()
 
 
-def cli_commit_bump(repo_root, message, run_command=subprocess.run):
+def cli_commit_bump(repo_root, message, paths, run_command=subprocess.run):
     """Same shape and bot identity as scripts/poll-mod-updates.py's own
     commit_bump -- a CLI-published bump is still the generalized
     mod-auto-bump mechanism, just human-triggered instead of scheduled,
-    so it carries the same trailers and the same committer identity."""
+    so it carries the same trailers and the same committer identity.
+
+    Commits ONLY `paths` (pack.toml, index.toml, the pin, the notes
+    file), never a bare `git commit` with no pathspec: unlike the
+    automated poll's fresh CI checkout, this runs on a human's working
+    checkout, where an unrelated file being already staged (e.g. an
+    in-progress config edit) is ordinary -- a bare `git commit` would
+    sweep that into this release commit too, unreviewed, published as
+    Release-Only under this bot's identity (MINECRAFT-362 review, fifth
+    round, confirmed empirically). A pathspec'd commit leaves anything
+    else staged untouched -- still staged, neither stolen nor discarded."""
     run_command(
         ["git", "-c", "user.name=sickos-mod-auto-bump[bot]",
          "-c", "user.email=sickos-mod-auto-bump[bot]@users.noreply.github.com",
-         "commit", "-F", "-"],
+         "commit", "-F", "-", "--", *paths],
         cwd=str(repo_root), input=message, text=True, check=True,
     )
     result = run_command(["git", "rev-parse", "HEAD"], cwd=str(repo_root),
@@ -619,8 +629,15 @@ def _build_cli_parser():
     )
     parser.add_argument("--repo-root", default=".")
     parser.add_argument("--pin-path", required=True, help="e.g. mods/example-mod.pw.toml")
-    parser.add_argument("--mod-id", required=True, help="Modrinth project id.")
     parser.add_argument("--version-id", required=True, help="Candidate Modrinth version id.")
+    parser.add_argument("--mod-id", default=None,
+                         help="Defaults to the pin's own [update.modrinth] mod-id; an explicit "
+                              "value that disagrees with the pin on disk is refused, not "
+                              "overridden -- this is the field every identity/hash check trusts "
+                              "as ground truth (run_engine verifies the fetched candidate's "
+                              "project_id against it), so an unguarded mismatch here would let "
+                              "one mistyped flag publish an entirely different mod's jar under "
+                              "this pin's name/side (MINECRAFT-362 review, fifth round).")
     parser.add_argument("--mod-name", default=None,
                          help="Defaults to the pin's own [name]; an explicit value that "
                               "disagrees with the pin on disk is refused, not overridden.")
@@ -670,8 +687,13 @@ def _resolve_or_die(field_name, explicit_value, on_disk_value):
     """Default a pin-identity field from the pin actually on disk; refuse
     (do not silently override) an explicit value that disagrees. This is
     the fix for --side's old 'both' default silently moving client-/
-    server-only pins (MINECRAFT-362 review, fourth round), generalized to
-    every such field rather than just the one that was caught."""
+    server-only pins (MINECRAFT-362 review, fourth round) -- and,
+    crucially, ALSO applies to --mod-id (fifth round): a fourth round's
+    claim that every pin-identity field used this helper was wrong,
+    --mod-id was the one exception, and it is the field run_engine's own
+    identity gate trusts as ground truth, so an unguarded mismatch there
+    defeated artifact-identity validation on the one path that can
+    publish without passing through it."""
     if explicit_value is None:
         return on_disk_value
     if explicit_value != on_disk_value:
@@ -690,7 +712,7 @@ def _pin_from_cli(args):
         pin_path=args.pin_path,
         name=_resolve_or_die("mod-name", args.mod_name, on_disk.name),
         side=_resolve_or_die("side", args.side, on_disk.side),
-        mod_id=args.mod_id,
+        mod_id=_resolve_or_die("mod-id", args.mod_id, on_disk.mod_id),
         pinned_version_id=_resolve_or_die("pinned-version-id", args.pinned_version_id, on_disk.pinned_version_id),
     )
 
@@ -702,7 +724,15 @@ def _candidate_from_cli(args, *, token=None):
     carry (MINECRAFT-362 review, fourth round: those empty defaults made
     the compatibility check and find_dependency_conflicts both no-ops on
     this path)."""
-    metadata = fetch_version_metadata(args.version_id, token=token)
+    try:
+        metadata = fetch_version_metadata(args.version_id, token=token)
+    except urllib.error.HTTPError as error:
+        raise SystemExit(
+            f"GET /v2/version/{args.version_id} returned HTTP {error.code}. If this project "
+            "is one that Modrinth will not serve anonymously (see docs/mod-auto-bump.md's "
+            "KNOWN_ANONYMOUS_404_MOD_IDS), set MODRINTH_TOKEN in the environment before running "
+            "this CLI and try again."
+        ) from error
     if metadata.get("id") != args.version_id:
         raise SystemExit(
             f"Modrinth's response for version {args.version_id!r} carries a different id "
@@ -779,18 +809,24 @@ def cli_main(argv=None):
             mod_name=pin.name, mod_id=pin.mod_id,
             modrinth_version_id=summary["candidate_version_id"],
             version_number=summary["candidate_version_number"],
+            source_text="a human-run CLI (scripts/bump_mod.py)",
         )
         # Defense in depth, not the only thing standing between this and
         # a live deploy: build_generic_commit_message already always
-        # attaches Release-Only: true, but assert it holds for the exact
+        # attaches Release-Only: true, but check it holds for the exact
         # message about to be committed anyway (MINECRAFT-362 review,
         # fourth round -- a CLI-authored commit with no Release-Only
         # trailer reads as permission to deploy/restart the live server).
-        assert server_update_policy.should_deploy(commit_message) is False, (
-            "refusing to commit: the generated commit message would not be read as "
-            "Release-Only by server_update_policy.should_deploy"
-        )
-        commit_sha = cli_commit_bump(args.repo_root, commit_message)
+        # A plain `if`, not `assert`: an assert vanishes entirely under
+        # `python3 -O`, silently dropping this exact guard (fifth round).
+        if server_update_policy.should_deploy(commit_message):
+            raise SystemExit(
+                "refusing to commit: the generated commit message would not be read as "
+                "Release-Only by server_update_policy.should_deploy -- this should not be "
+                "possible; please report it rather than committing by hand."
+            )
+        commit_paths = ("pack.toml", "index.toml", pin.pin_path, summary["notes_path"])
+        commit_sha = cli_commit_bump(args.repo_root, commit_message, commit_paths)
         summary["commit_sha"] = commit_sha
         print(f"Committed {commit_sha} (Release-Only; will not trigger a server deploy/restart).")
     elif summary["changed"]:

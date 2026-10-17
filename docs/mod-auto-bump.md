@@ -209,19 +209,52 @@ implementation) before `run_engine` ever runs. The CLI also defaulted
 `--side` to `"both"`, silently moving 6 client-/server-only pins onto
 both sides if an operator followed the documented remedy command
 verbatim; `_pin_from_cli`/`_resolve_or_die` now default every pin-identity
-field (name, side, pinned-version-id) from the pin actually on disk and
-REFUSE an explicit flag that disagrees with it, rather than overriding.
+field (name, side, mod-id, pinned-version-id) from the pin actually on
+disk and REFUSE an explicit flag that disagrees with it, rather than
+overriding.
 
-**The CLI now commits, with the same trailers the automated path uses.**
-A third round's CLI called `run_engine` (which only stages) and stopped,
-leaving the operator to write their own commit message with no
-`Release-Only`/`Mod-Auto-Bump` trailer --
+**`--mod-id` was the one pin-identity field `_resolve_or_die` had not
+been applied to (fifth review round).** It is also the field
+`run_engine`'s own identity gate trusts as ground truth
+(`expected_project_id=pin.mod_id`): a wrong `--mod-id` is self-consistent
+with the metadata fetched for `--version-id` (both just describe
+whatever project that version id actually belongs to), so every gate
+passes and the wrong mod's jar, hash, and listing publish under the
+intended pin's name and side. `_pin_from_cli` now resolves `mod_id`
+through `_resolve_or_die` exactly like the other three fields, and
+`--mod-id` is optional (defaults from the pin on disk) rather than
+required.
+
+**The CLI now commits, with the same trailers the automated path uses,
+and an explicit pathspec.** A third round's CLI called `run_engine`
+(which only stages) and stopped, leaving the operator to write their own
+commit message with no `Release-Only`/`Mod-Auto-Bump` trailer --
 `scripts/server_update_policy.should_deploy` reads a trailer-less
 message as permission to deploy, so publishing a breaking change through
 the one documented path would also restart the live server. `cli_main`
 now builds the commit with the same `build_generic_commit_message`
-`scripts/poll-mod-updates.py` uses and asserts `should_deploy(message)`
-is `False` before committing (`--no-commit` skips this for inspection).
+`scripts/poll-mod-updates.py` uses (passing its own `source_text`, so
+the commit body no longer claims "via scheduled Modrinth reconciliation"
+on a bump a human made by hand) and checks `should_deploy(message)` is
+`False` before committing (a plain `if`, not `assert` -- an `assert`
+vanishes under `python3 -O`) (`--no-commit` skips this for inspection).
+
+`cli_commit_bump` (and, for symmetry, `scripts/poll-mod-updates.py`'s own
+`commit_bump`) now commit an EXPLICIT PATHSPEC
+(`pack.toml`, `index.toml`, the pin, the notes file) rather than a bare
+`git commit`: a bare commit records everything already in the index, so
+on a human's working checkout -- where an unrelated in-progress edit
+being staged is ordinary, unlike the automated path's always-empty fresh
+CI checkout -- it would sweep that unreviewed content into this release
+commit too, authored as `sickos-mod-auto-bump[bot]` with `Release-Only:
+true`, which `release.yml` then publishes. A pathspec'd `git commit --
+<paths>` records a snapshot of exactly those paths and leaves anything
+else staged untouched (still staged, neither stolen nor discarded).
+
+Fetching a project Modrinth will not serve anonymously (`GET
+/v2/version/{id}` returning HTTP 404) previously surfaced as a bare,
+unhandled traceback; `_candidate_from_cli` now catches it and names
+`MODRINTH_TOKEN` as the likely remedy.
 
 When a bump does proceed (breaking or not), its notes file also includes
 the candidate's own Modrinth changelog, fenced (`_fenced()`) so the
@@ -230,16 +263,18 @@ notes file the way a verbatim splice did in the prior round, and capped
 at `MAX_CHANGELOG_CHARS` so one mod's long changelog cannot make the
 notes file unbounded.
 
-28 tests in `tests/test_bump_mod.py` cover: already-pinned/no-candidate
+32 tests in `tests/test_bump_mod.py` cover: already-pinned/no-candidate
 no-ops, a real bump (pin rewrite, pack-version bump, notes, staging),
 the breaking-change fail-closed gate, its `allow_breaking=True` +
 `migration_text` override (and refusal when `migration_text` is
-missing), the CLI entry point's own argument validation, side-defaulting/
-disagreement-refusal, incompatible-candidate refusal, real
-compatibility/dependency data reaching `run_engine`, and the commit step
-carrying the Release-Only/Mod-Auto-Bump trailers (`TestCliMain`),
-`_fenced`'s defanging/truncation (`TestFenced`), downgrade refusal, the
-identity/hash gate's failure modes (wrong
+missing), the CLI entry point's own argument validation, side- and
+mod-id-defaulting/disagreement-refusal, incompatible-candidate refusal,
+real compatibility/dependency data reaching `run_engine`, an anonymous
+404 naming `MODRINTH_TOKEN` rather than a bare traceback, and the commit
+step carrying the Release-Only/Mod-Auto-Bump trailers (`TestCliMain`),
+an unrelated staged file surviving a CLI-triggered commit untouched
+(`TestCliCommitBump`), `_fenced`'s defanging/truncation (`TestFenced`),
+downgrade refusal, the identity/hash gate's failure modes (wrong
 project, forged bytes, a 404 lookup), and gate-failure/dirty-tree
 restore. The no-downgrade check's own previous-version lookup fails
 CLOSED, not open: if that lookup itself fails (e.g. a 404 because the
@@ -345,7 +380,7 @@ an unexpected failure elsewhere in the same run never blocks pushing a
 bump this run already made -- the job still fails afterward (so the
 failure is visible), but only after that push.
 
-14 tests in `tests/test_poll_mod_updates.py` cover: Dynamic Atmosphere's
+15 tests in `tests/test_poll_mod_updates.py` cover: Dynamic Atmosphere's
 pin considered like any other (no-op when nothing is newer for it, bumped
 when something is), no-op when nothing is newer for a mod, a single bump
 actually committing with the right trailers, a changelog-derived category
@@ -359,6 +394,9 @@ allowlist) keep the run green, a `resolution_failed` for a mod_id NOT on
 the allowlist still fails it, a genuine unexpected failure still fails
 it, and the aggregate "every pin failed to resolve" guard fails the run
 even when every one of those failures is individually allowlisted.
+`commit_bump` committing an explicit pathspec (not a bare `git commit`)
+is covered separately (`TestCommitBump`), for symmetry with
+`scripts/bump_mod.py`'s own `cli_commit_bump` fix.
 
 `scripts/da-auto-bump-dispatch.py` gained `build_generic_commit_message`
 for this -- same shape as `build_commit_message`, with its own
@@ -416,7 +454,7 @@ whatever the earlier run already pushed.
   uses, the candidate's own changelog now included in generated notes
   (fenced and length-capped via `_fenced`), and
   `assert_only_pin_changed_under_mods` checking its own `git diff` call's
-  exit code instead of passing vacuously on a git failure (28 tests).
+  exit code instead of passing vacuously on a git failure, and `--mod-id` now resolved through the same on-disk-defaulting/disagreement-refusal as the other pin-identity fields (32 tests).
 - `scripts/poll-mod-updates.py` + `.github/workflows/mod-auto-bump-poll.yml`
   -- the generalized trigger, now covering Dynamic Atmosphere's own pin
   too, reading `pack.toml`'s `[versions]` shape strictly (raises rather
@@ -428,7 +466,7 @@ whatever the earlier run already pushed.
   (`KNOWN_ANONYMOUS_404_MOD_IDS`) plus an aggregate "did anything resolve
   at all" guard -- not a blanket exemption for the whole
   `"resolution_failed"` outcome class -- so the scheduled job is neither
-  red by construction nor silently green through an outage (14 tests).
+  red by construction nor silently green through an outage, and `commit_bump` committing an explicit pathspec rather than a bare `git commit` (15 tests).
 - The shared `mod-auto-bump` concurrency group, covering both mechanisms.
 - `modrinth_compat.find_dependency_conflicts` -- refuses a candidate that
   declares a currently-pinned project `incompatible` (6 tests, plus 3

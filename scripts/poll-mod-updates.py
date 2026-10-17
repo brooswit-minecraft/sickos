@@ -174,11 +174,22 @@ build_generic_commit_message = _load_build_generic_commit_message()
 read_pack_targets = mod_eligibility.read_pack_targets
 
 
-def commit_bump(repo_root, message, run_command=subprocess.run):
+def commit_bump(repo_root, message, paths, run_command=subprocess.run):
+    """Commit ONLY `paths` (pack.toml, index.toml, the pin, the notes
+    file) -- never a bare `git commit` with no pathspec. A pathspec'd
+    `git commit -- <paths>` records a snapshot of exactly those paths'
+    current content and leaves anything else already staged untouched
+    (still staged, not stolen into this commit and not discarded either).
+    This run's own checkout starts from a fresh `actions/checkout` with
+    an empty index, so a bare commit happens to be equivalent here today
+    -- the explicit pathspec is defense in depth for that invariant ever
+    changing, and the exact fix scripts/bump_mod.py's CLI needed for the
+    same helper, where a human's working checkout can have unrelated
+    staged changes (MINECRAFT-362 review, fifth round)."""
     run_command(
         ["git", "-c", "user.name=sickos-mod-auto-bump[bot]",
          "-c", "user.email=sickos-mod-auto-bump[bot]@users.noreply.github.com",
-         "commit", "-F", "-"],
+         "commit", "-F", "-", "--", *paths],
         cwd=str(repo_root), input=message, text=True, check=True,
     )
     result = run_command(["git", "rev-parse", "HEAD"], cwd=str(repo_root),
@@ -253,7 +264,8 @@ def poll_and_bump(repo_root, *, token=None, fetcher=None, run_command=subprocess
             modrinth_version_id=summary["candidate_version_id"],
             version_number=summary["candidate_version_number"],
         )
-        commit_sha = commit_bump(repo_root, commit_message, run_command=run_command)
+        commit_paths = ("pack.toml", "index.toml", pin.pin_path, summary["notes_path"])
+        commit_sha = commit_bump(repo_root, commit_message, commit_paths, run_command=run_command)
         outcome.update(
             outcome="bumped", changed=True, error=None,
             new_pack_version=summary["new_pack_version"],

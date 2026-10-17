@@ -388,5 +388,41 @@ class TestMainExitCode(unittest.TestCase):
         self.assertIn("::error::every pin examined this run failed to resolve at all", output)
 
 
+class TestCommitBump(unittest.TestCase):
+    """MINECRAFT-362 review, fifth round: for symmetry with
+    scripts/bump_mod.py's cli_commit_bump, commit_bump also commits an
+    explicit pathspec rather than a bare `git commit` -- this run's own
+    fresh CI checkout has an empty index so there is nothing to
+    accidentally sweep in today, but a second implementation that
+    forgets this if it is ever copied elsewhere would reintroduce the
+    CLI's exact bug."""
+
+    def setUp(self):
+        self.repo = Path(tempfile.mkdtemp(prefix="commit-bump-"))
+        _git(self.repo, "init", "-q")
+        _git(self.repo, "config", "user.email", "test@example.com")
+        _git(self.repo, "config", "user.name", "Test")
+        (self.repo / "pack.toml").write_text("version = \"0.22.0\"\n", encoding="utf-8")
+        (self.repo / "other.txt").write_text("pre-existing\n", encoding="utf-8")
+        _git(self.repo, "add", "-A")
+        _git(self.repo, "commit", "-q", "-m", "fixture")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.repo, ignore_errors=True)
+
+    def test_unrelated_staged_file_is_not_swept_into_the_commit(self):
+        (self.repo / "pack.toml").write_text("version = \"0.23.0\"\n", encoding="utf-8")
+        (self.repo / "other.txt").write_text("an unrelated in-progress edit\n", encoding="utf-8")
+        _git(self.repo, "add", "-A")
+
+        poll_mod_updates.commit_bump(self.repo, "fix: bump\n\nRelease-Only: true\n", ("pack.toml",))
+
+        committed = _git(self.repo, "diff", "--name-only", "HEAD~1", "HEAD").stdout.split()
+        self.assertEqual(committed, ["pack.toml"])
+        still_staged = _git(self.repo, "diff", "--cached", "--name-only").stdout.split()
+        self.assertEqual(still_staged, ["other.txt"])
+
+
 if __name__ == "__main__":
     unittest.main()
