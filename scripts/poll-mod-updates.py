@@ -85,55 +85,35 @@ import modrinth_compat  # noqa: E402
 EXCLUDED_PIN_PATHS = frozenset()
 
 # Outcomes that are a PERMANENT, per-pin property this poll cannot fix by
-# retrying, as opposed to an unexpected failure:
-# - "unsupported_version_scheme": the no-downgrade check cannot compare
-#   the pinned version's own version_number because it is not valid
-#   semver -- established per-pin, by this exact comparison, every time.
-# - "breaking_change_requires_human_review": a real candidate exists but
-#   this generic engine refuses to auto-publish a breaking change with no
-#   migration notes (see bump_mod.run_engine's allow_breaking gate) --
-#   also established per-pin, every time, by the same gate.
-# - "downgrade_refused": a pin ahead of the latest resolvable RELEASE
-#   (e.g. pinned to a prerelease the `version_type == "release"` filter
-#   then permanently out-resolves) hits this identically every run until
-#   something upstream changes (a new, genuinely newer release is
-#   published) -- the same repeatable-until-external-change shape as the
-#   two outcomes above, confirmed live: mods/ice-and-fire-community-
-#   edition.pw.toml pinned at a prerelease ahead of its newest actual
-#   release reaches this, not unsupported_version_scheme, the moment its
-#   pinned version string happens to be valid semver (MINECRAFT-362
-#   review, sixth round).
-# - "dependency_conflict": the SAME resolved "latest compatible"
-#   candidate is re-resolved every run until a newer one is published,
-#   and find_dependency_conflicts is a pure function of that candidate's
-#   own declared dependencies plus the pack's current pins -- so this
-#   recurs identically every run for the same reason the three outcomes
-#   above do, until the conflicting dependency declaration or pin changes
-#   upstream.
-# "resolution_failed" is deliberately NOT unconditionally in this set
-# (MINECRAFT-362 review, third round): modrinth_compat.py's version-list
-# fetch catches bare `Exception`, so "resolution_failed" is a catch-all
-# for an HTTP 5xx, a timeout, a DNS failure, a malformed response, an
-# expired MODRINTH_TOKEN, or a project genuinely deleted/privated -- NONE
-# of which are the documented "4 projects Modrinth won't serve
-# anonymously" gap, and treating the whole class as expected would let a
-# Modrinth outage (or any of the above) stop the mechanism entirely while
-# the scheduled job stays green every 20 minutes. Only the 4 SPECIFIC,
-# individually-confirmed project ids below get the "expected" treatment
-# for that outcome; see `_is_expected_gap` and the aggregate guard in
-# `main()` for the rest of the fix.
-EXPECTED_GAP_OUTCOMES = frozenset({
-    "unsupported_version_scheme", "breaking_change_requires_human_review",
-    "downgrade_refused", "dependency_conflict",
-    # Both added tenth round: each is a permanent, deterministic per-pin
-    # property raised by modrinth_compat.resolve_latest_compatible_version
-    # itself (NoParseableCandidateError / OnlyPrereleaseAvailableError),
-    # not the TRUE catch-all CompatResolutionError class -- see
-    # modrinth_compat.py's own docstrings on those two exceptions, and
-    # the comment on "resolution_failed" below for why that one stays
-    # OUT of this set.
-    "no_parseable_candidate", "only_prerelease_available",
-})
+# retrying, as opposed to an unexpected failure -- see `_is_expected_gap`
+# (below the three KNOWN_*_PIN_IDS dicts) for exactly how each is
+# checked:
+# - "resolution_failed": modrinth_compat.py's version-list fetch catches
+#   bare `Exception`, so this is a catch-all for an HTTP 5xx, a timeout,
+#   a DNS failure, a malformed response, an expired MODRINTH_TOKEN, or a
+#   project genuinely deleted/privated. Only the mod_ids in
+#   KNOWN_ANONYMOUS_404_MOD_IDS below are expected for this outcome --
+#   never the whole class, or a Modrinth outage would stop the
+#   mechanism while the scheduled job stayed green (MINECRAFT-362
+#   review, third round).
+# - "unsupported_version_scheme" / "no_parseable_candidate" /
+#   "only_prerelease_available": each established by one specific,
+#   deterministic check (the no-downgrade comparator, or
+#   `resolve_latest_compatible_version` itself -- see
+#   `NoParseableCandidateError`/`OnlyPrereleaseAvailableError` in
+#   modrinth_compat.py), so each is checked against its own
+#   KNOWN_*_PIN_IDS dict below BY mod_id, not treated as expected for
+#   every pin that happens to hit it (MINECRAFT-362 review, eleventh
+#   round -- a pin newly landing in one of these classes without being
+#   on its list is a coverage regression, not the documented baseline).
+# - "breaking_change_requires_human_review" / "downgrade_refused" /
+#   "dependency_conflict": each re-established fresh every run from
+#   data that can change at any time (a candidate's own declared
+#   category, the pack's current pins, another pin's own update), so
+#   there is no fixed set of mod_ids to check against -- these stay
+#   unconditionally expected by outcome string alone
+#   (`_UNLISTABLE_EXPECTED_GAP_OUTCOMES`, defined just before
+#   `_is_expected_gap`).
 
 # The 4 projects individually confirmed (by a live, read-only, authorized
 # resolution against all 78 eligible pins, done under this ticket's
@@ -166,48 +146,92 @@ KNOWN_ANONYMOUS_404_MOD_IDS = frozenset({
 # already been fixed by the ninth round's resolver normalization and
 # should not have been listed at all.
 
+# Keyed by mod_id (not just named in a display string) as of the
+# eleventh review round: _is_expected_gap below now reconciles each
+# run's OBSERVED gap outcomes against these lists by mod_id, not just
+# the outcome string -- a pin that lands in one of these outcome classes
+# WITHOUT being on the matching list is a coverage regression (a mod
+# changed version scheme, or its author started shipping only
+# prereleases), and must fail the run rather than silently blend into
+# the documented baseline. Previously these were allowlisted
+# unconditionally by outcome string alone, which is also what made the
+# aggregate guard below unable to tell a genuine, newly-affected pin
+# apart from the always-expected ones.
+
 # 3 pins: a real candidate DOES resolve, but the no-downgrade check
 # (bump_mod.run_engine, via decide_update) cannot compare it against
 # this pin's own unparsable pinned version -- outcome
 # "unsupported_version_scheme". Needs a human bump to a parseable
 # version.
-KNOWN_NON_SEMVER_PIN_NAMES = (
-    "Create: Easy Structures (z69Pxatv)", "Geophilic (hl5OLM95)",
-    "IceAndFire Community Edition (VpmCsizY)",
-)
+KNOWN_NON_SEMVER_PIN_IDS = {
+    "z69Pxatv": "Create: Easy Structures", "hl5OLM95": "Geophilic",
+    "VpmCsizY": "IceAndFire Community Edition",
+}
 
 # 5 pins: modrinth_compat.resolve_latest_compatible_version itself raises
 # NoParseableCandidateError -- compatible RELEASE entries exist, but none
 # parses as semver even after normalization (some other, undocumented
-# version scheme). Needs a human bump, or a comparator this document
-# does not attempt.
-KNOWN_NO_PARSEABLE_CANDIDATE_PIN_NAMES = (
-    "Quark (qnQsVE2z)", "Zeta (MVARlG2f)", "Create: Dynamic Village (YCPmkFAm)",
-    "Create: Pillager Arise (VT2rW2wr)", "Dungeons and Taverns (tpehi7ww)",
-)
+# version scheme). These 5 pins' UNPARSEABLE strings are the Modrinth
+# CANDIDATES themselves, not the pin -- so "a human bump" cannot fix any
+# of them (there is nothing parseable to bump to); only a different
+# comparator this document does not attempt would (MINECRAFT-362 review,
+# eleventh round, smaller item -- a prior round's remedy text was wrong).
+KNOWN_NO_PARSEABLE_CANDIDATE_PIN_IDS = {
+    "qnQsVE2z": "Quark", "MVARlG2f": "Zeta", "YCPmkFAm": "Create: Dynamic Village",
+    "VT2rW2wr": "Create: Pillager Arise", "tpehi7ww": "Dungeons and Taverns",
+}
 
 # 4 pins: resolve_latest_compatible_version raises OnlyPrereleaseAvailableError
 # -- compatible entries exist, but every one is a beta/alpha, never a
 # release, for this (game_version, loader). A human bump cannot fix
 # this; only the mod author publishing a release build does.
-KNOWN_ONLY_PRERELEASE_PIN_NAMES = (
-    "Biomes O' Plenty (HXF82T3G)", "GlitchCore (s3dmwKy5)",
-    "Serene Seasons (e0bNACJD)", "TerraBlender (kkmrDlKT)",
+KNOWN_ONLY_PRERELEASE_PIN_IDS = {
+    "HXF82T3G": "Biomes O' Plenty", "s3dmwKy5": "GlitchCore",
+    "e0bNACJD": "Serene Seasons", "kkmrDlKT": "TerraBlender",
+}
+
+# Display-only convenience views, built from the dicts above so there is
+# one source of truth for membership AND display text.
+KNOWN_NON_SEMVER_PIN_NAMES = tuple(f"{name} ({mod_id})" for mod_id, name in KNOWN_NON_SEMVER_PIN_IDS.items())
+KNOWN_NO_PARSEABLE_CANDIDATE_PIN_NAMES = tuple(
+    f"{name} ({mod_id})" for mod_id, name in KNOWN_NO_PARSEABLE_CANDIDATE_PIN_IDS.items()
 )
+KNOWN_ONLY_PRERELEASE_PIN_NAMES = tuple(f"{name} ({mod_id})" for mod_id, name in KNOWN_ONLY_PRERELEASE_PIN_IDS.items())
+
+# Outcome kinds with no static per-pin list: `modrinth_compat`/`bump_mod`
+# establish these fresh, per candidate, every run (a dependency
+# declaration or a competing pin can change at any time), so there is no
+# fixed set to reconcile against the way the four list-based outcomes
+# above have -- these stay unconditionally expected by outcome string
+# alone.
+_UNLISTABLE_EXPECTED_GAP_OUTCOMES = frozenset({
+    "breaking_change_requires_human_review", "downgrade_refused", "dependency_conflict",
+})
 
 
 def _is_expected_gap(outcome):
     """True if `outcome` (one entry from poll_and_bump's return list) is
     a documented, permanent, per-pin gap rather than an unexpected
-    failure. `resolution_failed` only counts when the pin's mod_id is on
-    the individually-confirmed allowlist above -- NOT for the outcome
-    class as a whole (MINECRAFT-362 review, third round)."""
+    failure (or a coverage regression). Four outcome kinds are checked
+    against their own static KNOWN_*_PIN_IDS list BY mod_id -- a pin
+    hitting one of these outcomes while NOT on the matching list is
+    something this poll has never seen before for that pin, which must
+    fail the run rather than silently blend into "the documented
+    baseline" (MINECRAFT-362 review, eleventh round). The remaining
+    kinds have no fixed set to check against (see
+    _UNLISTABLE_EXPECTED_GAP_OUTCOMES) and stay unconditionally
+    expected."""
     kind = outcome["outcome"]
-    if kind in EXPECTED_GAP_OUTCOMES:
-        return True
+    mod_id = outcome.get("mod_id")
     if kind == "resolution_failed":
-        return outcome.get("mod_id") in KNOWN_ANONYMOUS_404_MOD_IDS
-    return False
+        return mod_id in KNOWN_ANONYMOUS_404_MOD_IDS
+    if kind == "unsupported_version_scheme":
+        return mod_id in KNOWN_NON_SEMVER_PIN_IDS
+    if kind == "no_parseable_candidate":
+        return mod_id in KNOWN_NO_PARSEABLE_CANDIDATE_PIN_IDS
+    if kind == "only_prerelease_available":
+        return mod_id in KNOWN_ONLY_PRERELEASE_PIN_IDS
+    return kind in _UNLISTABLE_EXPECTED_GAP_OUTCOMES
 
 
 def _load_build_generic_commit_message():
@@ -285,7 +309,7 @@ def poll_and_bump(repo_root, *, token=None, fetcher=None, run_command=subprocess
         # else (MINECRAFT-362 review, tenth round -- a prior round raised
         # the first of these as the bare base class, which this script
         # then surfaced as "resolution_failed", landing it in the one
-        # outcome EXPECTED_GAP_OUTCOMES does NOT unconditionally exempt).
+        # outcome _is_expected_gap does NOT unconditionally exempt).
         except modrinth_compat.NoParseableCandidateError as error:
             outcome.update(outcome="no_parseable_candidate", changed=False, error=str(error))
             outcomes.append(outcome)
@@ -392,8 +416,10 @@ def main(argv=None):
         f"({', '.join(sorted(KNOWN_ANONYMOUS_404_MOD_IDS))}); "
         f"{len(KNOWN_NON_SEMVER_PIN_NAMES)} pins have a non-semver PINNED version and need a "
         f"human bump ({', '.join(KNOWN_NON_SEMVER_PIN_NAMES)}); "
-        f"{len(KNOWN_NO_PARSEABLE_CANDIDATE_PIN_NAMES)} pins have no parseable CANDIDATE on "
-        f"Modrinth and need a human bump or a different comparator "
+        f"{len(KNOWN_NO_PARSEABLE_CANDIDATE_PIN_NAMES)} pins have NO parseable version on "
+        f"Modrinth at all (the unparseable strings are the project's own published versions, "
+        f"not this pin -- a human bump cannot fix these; only a different comparator this "
+        f"document does not attempt would) "
         f"({', '.join(KNOWN_NO_PARSEABLE_CANDIDATE_PIN_NAMES)}); "
         f"{len(KNOWN_ONLY_PRERELEASE_PIN_NAMES)} pins have never published a release build for "
         f"this target and need the mod author to publish one, not a human bump "
@@ -403,18 +429,35 @@ def main(argv=None):
     failed = [o for o in outcomes if o["outcome"] not in
               ("no_candidate", "already_pinned", "bumped") and not _is_expected_gap(o)]
 
-    # Aggregate guard (MINECRAFT-362 review, third round): if literally
-    # EVERY pin examined this run failed to resolve at all, that is not
-    # the documented baseline (which always has some already_pinned/
-    # no_candidate/bumped mix even accounting for the known-gap pins) --
-    # it signals something systemic (a Modrinth outage, a response-shape
-    # change, a revoked token) that the per-pin allowlist above cannot
-    # and should not absorb. Fail regardless of which pins are on it.
-    if outcomes and all(o["outcome"] == "resolution_failed" for o in outcomes):
-        print("::error::every pin examined this run failed to resolve at all -- this looks like "
-              "a systemic problem (Modrinth outage, response-shape change, or a bad/expired "
-              "token), not the documented per-pin coverage gap. Failing regardless of the "
-              "known-anonymous-404 allowlist.")
+    # Aggregate guard (MINECRAFT-362 review, third round, broadened
+    # eleventh round): the ORIGINAL guard only caught "every pin was
+    # resolution_failed." Driving main() over all 78 real pins with an
+    # injected fetcher found FOUR other ways to go silently, permanently
+    # green: every entry's version_type reading something other than
+    # "release" (-> 78x only_prerelease_available), every version
+    # missing its `files` array or declaring a renamed game_versions
+    # field (-> 78x no_candidate, the sharp case: zero warnings printed,
+    # the standing notice unchanged, a summary that reads like an
+    # ordinary quiet day), and every compatible release unparseable (->
+    # 78x no_parseable_candidate). None of those are "every pin
+    # resolution_failed," so the narrower guard missed all four.
+    #
+    # The real invariant a healthy run has -- stated positively, not as
+    # a list of failure shapes to keep extending -- is that AT LEAST ONE
+    # pin reaches "already_pinned" or "bumped": with 78 eligible pins
+    # and the overwhelming majority already at their resolved latest at
+    # any given time, zero of either happening at once is not a
+    # legitimate "nothing to do" run, it is the signature of something
+    # systemic breaking resolution for every pin uniformly. "no_candidate"
+    # deliberately does NOT count as healthy here either -- it is
+    # exactly the outcome the missing-`files`/renamed-field cases above
+    # produce, so treating it as evidence of health would let the
+    # sharpest failure shape back in by name.
+    if outcomes and not any(o["outcome"] in ("already_pinned", "bumped") for o in outcomes):
+        print("::error::no pin in this run reached already_pinned or bumped -- this looks like "
+              "a systemic problem (Modrinth outage, response-shape change, a bad/expired token, "
+              "or an API shape change breaking resolution for every pin uniformly), not the "
+              "documented per-pin coverage gap. Failing regardless of any per-pin allowlist.")
         failed = outcomes
 
     return 1 if failed else 0

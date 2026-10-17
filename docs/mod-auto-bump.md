@@ -473,7 +473,7 @@ comparator cannot evaluate a non-semver pinned version) and
 are each established by one specific, deterministic check that always
 reaches the same verdict for the same pin -- genuinely permanent,
 genuinely safe to keep out of the exit code unconditionally
-(`scripts/poll-mod-updates.py`'s `EXPECTED_GAP_OUTCOMES`). `"resolution_failed"`
+(`scripts/poll-mod-updates.py`'s `_is_expected_gap()`). `"resolution_failed"`
 is different: `modrinth_compat.py`'s version-list fetch catches bare
 `Exception`, so it is a catch-all for an HTTP 5xx, a timeout, a DNS
 failure, a malformed response, an expired `MODRINTH_TOKEN`, or a project
@@ -488,14 +488,25 @@ The actual fix is an explicit allowlist, not a class-wide exemption:
 `KNOWN_ANONYMOUS_404_MOD_IDS` names the 4 SPECIFIC projects individually
 confirmed (by the same live, read-only, authorized check) to 404
 anonymously today (Dynamic Atmosphere, Dynamic Skateboards, Dynamic
-Terrain, Dynamic Vehicles). `_is_expected_gap()` only treats
-`"resolution_failed"` as expected when the failing pin's `mod_id` is on
-that list; a `"resolution_failed"` for anything else fails the run. On
-top of that, an aggregate guard in `main()` fails the run regardless of
-the allowlist if LITERALLY EVERY pin examined failed to resolve at all
-(the signature of a systemic problem, not the documented per-pin
-baseline, which always has some mix of `already_pinned`/`no_candidate`/
-`bumped` even accounting for the known-gap pins). The non-semver pins
+Terrain, Dynamic Vehicles). `_is_expected_gap()` checks each gap-shaped
+outcome's `mod_id` against the specific static list for THAT outcome
+kind (`KNOWN_ANONYMOUS_404_MOD_IDS` for `"resolution_failed"`,
+`KNOWN_NON_SEMVER_PIN_IDS` for `"unsupported_version_scheme"`,
+`KNOWN_NO_PARSEABLE_CANDIDATE_PIN_IDS` for `"no_parseable_candidate"`,
+`KNOWN_ONLY_PRERELEASE_PIN_IDS` for `"only_prerelease_available"`); a
+gap-shaped outcome for a pin NOT on its outcome's list fails the run
+(eleventh review round -- an unlisted pin landing in one of these
+classes is a coverage regression, not a known gap, and the allowlist
+must say so explicitly rather than only ever growing softer). On top of
+that, an aggregate guard in `main()` fails the run regardless of any
+per-pin allowlist unless at least one outcome this run was
+`"already_pinned"` or `"bumped"` (eleventh review round -- narrower than
+it sounds: a run where every pin lands on `"no_candidate"` is exactly
+the silent-failure shape this guard exists to catch, so `"no_candidate"`
+deliberately does NOT count as healthy here even though it is not
+itself a failure; the prior version of this guard only fired when
+LITERALLY EVERY pin failed to resolve, which missed that shape). The
+non-semver pins
 (see `KNOWN_NON_SEMVER_PIN_NAMES` -- 3 as of this writing, see "Status"
 below) don't need an allowlist the same way, since
 `"unsupported_version_scheme"` is already established per-pin by a
@@ -505,24 +516,34 @@ the two outcomes `resolve_latest_compatible_version` itself raises
 `KNOWN_NO_PARSEABLE_CANDIDATE_PIN_NAMES`/`KNOWN_ONLY_PRERELEASE_PIN_NAMES`
 below): each is a deterministic per-pin fact the resolver itself
 establishes, never a wrapper around `modrinth_compat.py`'s bare-`Exception`
-catch-all the way `"resolution_failed"` is, so both are unconditionally
-in `EXPECTED_GAP_OUTCOMES` too (tenth review round -- a prior round
+catch-all the way `"resolution_failed"` is, so both get their own
+per-outcome allowlist in `_is_expected_gap()` too, same as the
+non-semver pins (tenth and eleventh review rounds -- a prior round
 raised the first of these as the plain `CompatResolutionError` base
 class, which this script then mapped to `"resolution_failed"`, landing
-it in the one outcome class that is NOT unconditionally exempt and
-hard-failing the run for every pin on this specific gap).
+it in that outcome's allowlist instead of its own and hard-failing the
+run for every pin on this specific gap; the eleventh round then gave
+each of these two outcomes its own list, `KNOWN_NO_PARSEABLE_CANDIDATE_PIN_IDS`
+and `KNOWN_ONLY_PRERELEASE_PIN_IDS`, rather than exempting the outcome
+class unconditionally).
 
 Because `poll_and_bump` stops at the first bump, most runs never reach
 most pins, so the per-outcome `::warning::` lines above are intermittent
 precisely on the runs that work. `main()` therefore also prints a
 standing `::notice::` reminder every run, independent of what that run's
-loop actually reached, naming all 10 known-uncovered pins from the
+loop actually reached, naming all 16 known-uncovered pins from the four
 static lists above (`KNOWN_ANONYMOUS_404_MOD_IDS`,
-`KNOWN_NON_SEMVER_PIN_NAMES`) -- these 10 pins are, as of this writing,
-simply not covered by this mechanism: the 4 anonymous-inaccessible ones
-need `MODRINTH_TOKEN` to be set (still held, see "Status"), and the 6
-non-semver ones need either a human bump or a different comparator this
-document does not attempt.
+`KNOWN_NON_SEMVER_PIN_NAMES`, `KNOWN_NO_PARSEABLE_CANDIDATE_PIN_NAMES`,
+`KNOWN_ONLY_PRERELEASE_PIN_NAMES`) -- these 16 pins are, as of this
+writing, simply not covered by this mechanism: the 4 anonymous-
+inaccessible ones need `MODRINTH_TOKEN` to be set (still held, see
+"Status"); the 3 non-semver ones need either a human bump or a
+different comparator this document does not attempt; the 5
+no-parseable-candidate ones have NO parseable version published on
+Modrinth at all, so a human bump cannot fix them either -- only a
+different comparator this document does not attempt would; and the 4
+only-prerelease ones have never published a release build for this
+target and need the mod author to publish one, not a human bump.
 
 **`downgrade_refused` and `dependency_conflict` are expected gaps too
 (sixth review round).** Both were still landing in `failed`, the
@@ -540,9 +561,11 @@ version would hit `downgrade_refused` every run instead, unclassified.
 `dependency_conflict` is a pure function of the SAME re-resolved "latest
 compatible" candidate's own declared dependencies against the pack's
 current pins, so it recurs for the same structural reason. Both are now
-in `EXPECTED_GAP_OUTCOMES` unconditionally (no per-mod-id allowlist
-needed, unlike `resolution_failed` -- each is already established
-per-pin by one deterministic check, not a catch-all).
+unconditionally expected via `_UNLISTABLE_EXPECTED_GAP_OUTCOMES` (no
+per-mod-id allowlist needed, unlike the four outcomes above -- each is
+already established per-pin by one deterministic check, not a
+catch-all, and which specific pin hits it next isn't knowable in
+advance the way the other four outcomes' pins are).
 
 Push-gating and credential-checking are driven by whether the run's
 summary recorded a real bump, not by the script's overall exit code, so
@@ -550,7 +573,7 @@ an unexpected failure elsewhere in the same run never blocks pushing a
 bump this run already made -- the job still fails afterward (so the
 failure is visible), but only after that push.
 
-22 tests in `tests/test_poll_mod_updates.py` cover: the same
+26 tests in `tests/test_poll_mod_updates.py` cover: the same
 game-version+loader threading reaching the category gate end-to-end
 through `poll_and_bump` (not only `run_engine` directly), Dynamic Atmosphere's
 pin considered like any other (no-op when nothing is newer for it, bumped
@@ -563,12 +586,16 @@ second is left for the next run), an incompatible candidate correctly
 read as no-candidate, a downgrade reported (not crashed), one mod's
 failure not blocking another mod's success in the same run, a breaking
 candidate refused rather than auto-published, and `main()`'s exit-code
-classification itself: expected gaps alone (via the allowlist, now
-including `downgrade_refused`/`dependency_conflict`) keep the run green,
-a `resolution_failed` for a mod_id NOT on the allowlist still fails it, a
-genuine unexpected failure still fails it, and the aggregate "every pin
-failed to resolve" guard fails the run even when every one of those
-failures is individually allowlisted.
+classification itself: expected gaps alone (via the per-outcome
+allowlists, now including `downgrade_refused`/`dependency_conflict`)
+keep the run green, a gap-shaped outcome for a mod_id NOT on that
+outcome's own allowlist still fails it (a coverage regression, not a
+known gap), a genuine unexpected failure still fails it, and the
+aggregate guard -- no run may pass with zero `already_pinned`/`bumped`
+outcomes, regardless of any per-pin allowlist -- fails the run both
+when every pin failed to resolve and when every pin instead landed on
+`no_candidate` (eleventh review round: the narrower, pre-existing guard
+only caught the first shape).
 `commit_bump` committing an explicit pathspec (not a bare `git commit`)
 is covered separately (`TestCommitBump`), for symmetry with
 `scripts/bump_mod.py`'s own `cli_commit_bump` fix.

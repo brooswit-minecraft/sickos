@@ -482,7 +482,7 @@ def run_engine(repo_root, pin, candidate, *, category=None,
         # version scheme is a per-pin, permanent property (not a one-off
         # configuration mistake this run could recover from), so callers
         # that poll many pins need to tell it apart from an unexpected
-        # failure -- see poll-mod-updates.py's EXPECTED_GAP_OUTCOMES
+        # failure -- see poll-mod-updates.py's _is_expected_gap
         # (MINECRAFT-362 review).
         raise EngineError(
             EXIT_CONFIG_ERROR, "unsupported_version_scheme",
@@ -893,11 +893,6 @@ def cli_main(argv=None):
     migration_text = None
     if args.migration_text_file:
         migration_text = Path(args.migration_text_file).read_text(encoding="utf-8")
-        if args.category != "breaking":
-            print("::warning::--migration-text-file was supplied but --category is not "
-                  "'breaking'; render_notes only emits migration text on a breaking bump, so "
-                  "this file's content will not appear anywhere in the generated notes.",
-                  file=sys.stderr)
     if args.allow_breaking and not (migration_text and migration_text.strip()):
         print("::error::--allow-breaking requires --migration-text-file with real, non-empty "
               "content.", file=sys.stderr)
@@ -918,6 +913,13 @@ def cli_main(argv=None):
     except EngineError as error:
         print(f"::error::{error.message}", file=sys.stderr)
         return error.exit_code
+
+    if migration_text is not None and summary.get("mapping_rule") != "breaking_as_minor":
+        print("::warning::--migration-text-file was supplied but the bump's actual mapping "
+              f"rule is `{summary.get('mapping_rule')!r}`, not `breaking_as_minor`; render_notes "
+              "only emits migration text for a breaking_as_minor bump, so this file's content "
+              "will not appear anywhere in the generated notes.",
+              file=sys.stderr)
 
     print(message)
 

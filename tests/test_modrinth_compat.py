@@ -188,6 +188,24 @@ class TestResolveLatestCompatibleVersion(unittest.TestCase):
         candidate = resolve_latest_compatible_version("EXAMPLE", game_version="1.21.1", loader="neoforge", fetcher=fetcher)
         self.assertIsNone(candidate)
 
+    def test_compatible_release_entry_with_no_files_also_returns_none_not_an_error(self):
+        # MINECRAFT-362 review, eleventh round: the OTHER route to None --
+        # distinct from test_genuinely_no_compatible_entry_at_all_returns_none
+        # above. Here a compatible, release-grade entry DOES declare this
+        # (game_version, loader), but version_candidate_from_json returns
+        # None for it (an empty `files` array -- the same shape Modrinth
+        # would send for a version with no uploaded jar). This falls
+        # through the loop silently: it increments neither
+        # unparsable_count nor prerelease_only_count, so it is
+        # indistinguishable, from the caller's side, from "nothing newer
+        # upstream" -- confirmed still current behavior, not a regression
+        # introduced by this round's other fixes.
+        entry = version_entry("V1", "1.0.0")
+        entry["files"] = []
+        fetcher = mock.Mock(return_value=[entry])
+        candidate = resolve_latest_compatible_version("EXAMPLE", game_version="1.21.1", loader="neoforge", fetcher=fetcher)
+        self.assertIsNone(candidate)
+
 
 class TestMakeFetcher(unittest.TestCase):
     def test_no_token_sends_no_authorization_header(self):

@@ -54,7 +54,7 @@ class CompatResolutionError(Exception):
     """Fetching or parsing Modrinth's version list for a project failed --
     the TRUE catch-all/systemic class (HTTP 5xx, timeout, DNS failure,
     malformed response, expired token, a project genuinely deleted/
-    privated). scripts/poll-mod-updates.py's EXPECTED_GAP_OUTCOMES
+    privated). scripts/poll-mod-updates.py's _is_expected_gap
     allowlists this by mod_id (KNOWN_ANONYMOUS_404_MOD_IDS) rather than
     as a whole class, specifically so this constructor stays reserved
     for the unexpected case -- the two subclasses below are each a
@@ -213,7 +213,7 @@ def resolve_latest_compatible_version(mod_id, *, game_version, loader, fetcher):
     raise their own exception (MINECRAFT-362 review, tenth round: a
     prior round made the first of these distinct from `None`, but wired
     it to the wrong outcome class on the caller side -- see
-    scripts/poll-mod-updates.py's EXPECTED_GAP_OUTCOMES):
+    scripts/poll-mod-updates.py's _is_expected_gap):
 
     - `NoParseableCandidateError`: at least one compatible RELEASE entry
       exists, but none had a parseable version_number after

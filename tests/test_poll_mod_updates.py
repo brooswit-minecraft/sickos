@@ -409,14 +409,27 @@ class TestMainExitCode(unittest.TestCase):
                     exit_code = poll_mod_updates.main(["--repo-root", "."])
         return exit_code, buf.getvalue()
 
+    # A real, healthy run always has at least one already_pinned or
+    # bumped pin (MINECRAFT-362 review, eleventh round's aggregate
+    # guard) -- every outcomes list below that is meant to pass includes
+    # one of these so it reflects that invariant, not just the specific
+    # gap being tested.
+    _HEALTHY_PIN = {"mod_id": "HEALTHY1", "mod_name": "Healthy Mod", "pin_path": "mods/healthy.pw.toml",
+                    "outcome": "already_pinned", "error": None}
+
     def test_expected_gaps_alone_do_not_fail_the_run(self):
         # "A" uses a mod_id ON the known-anonymous-404 allowlist -- a
         # resolution_failed for a mod_id NOT on it is a different test
-        # below, since that must fail, not warn.
+        # below, since that must fail, not warn. "B"/"C" use real
+        # mod_ids from their matching KNOWN_*_PIN_IDS dicts, since
+        # _is_expected_gap now checks membership by mod_id, not outcome
+        # string alone.
         known_404_mod_id = next(iter(poll_mod_updates.KNOWN_ANONYMOUS_404_MOD_IDS))
+        known_non_semver_mod_id = next(iter(poll_mod_updates.KNOWN_NON_SEMVER_PIN_IDS))
         outcomes = [
+            self._HEALTHY_PIN,
             {"mod_id": known_404_mod_id, "mod_name": "A", "pin_path": "mods/a.pw.toml", "outcome": "resolution_failed", "error": "404"},
-            {"mod_id": "B", "mod_name": "B", "pin_path": "mods/b.pw.toml", "outcome": "unsupported_version_scheme", "error": "x"},
+            {"mod_id": known_non_semver_mod_id, "mod_name": "B", "pin_path": "mods/b.pw.toml", "outcome": "unsupported_version_scheme", "error": "x"},
             {"mod_id": "C", "mod_name": "C", "pin_path": "mods/c.pw.toml", "outcome": "breaking_change_requires_human_review", "error": "y"},
             {"mod_id": "D", "mod_name": "D", "pin_path": "mods/d.pw.toml", "outcome": "no_candidate", "error": None},
         ]
@@ -431,8 +444,11 @@ class TestMainExitCode(unittest.TestCase):
         # run for a given pin until something upstream changes (a newer
         # real release, or a changed dependency declaration) -- the same
         # repeatable-until-external-change shape as the two outcomes
-        # above, so they must not be red-by-construction either.
+        # above, so they must not be red-by-construction either. Neither
+        # has a static per-pin list (unpredictable in advance), so any
+        # mod_id is "expected" for these two outcomes.
         outcomes = [
+            self._HEALTHY_PIN,
             {"mod_id": "F", "mod_name": "F", "pin_path": "mods/f.pw.toml", "outcome": "downgrade_refused", "error": "x"},
             {"mod_id": "G", "mod_name": "G", "pin_path": "mods/g.pw.toml", "outcome": "dependency_conflict", "error": "y"},
         ]
@@ -448,16 +464,34 @@ class TestMainExitCode(unittest.TestCase):
         # here -- it landed as "resolution_failed", which only the 4
         # allowlisted mod_ids escape, so these pins hard-failed the run
         # every single time. Both are deterministic per-pin facts, like
-        # downgrade_refused/dependency_conflict above, not a systemic
-        # failure.
+        # downgrade_refused/dependency_conflict above -- but (eleventh
+        # round) checked against their OWN static list by mod_id, so use
+        # real mod_ids from each dict here.
+        no_parseable_mod_id = next(iter(poll_mod_updates.KNOWN_NO_PARSEABLE_CANDIDATE_PIN_IDS))
+        only_prerelease_mod_id = next(iter(poll_mod_updates.KNOWN_ONLY_PRERELEASE_PIN_IDS))
         outcomes = [
-            {"mod_id": "H", "mod_name": "H", "pin_path": "mods/h.pw.toml", "outcome": "no_parseable_candidate", "error": "x"},
-            {"mod_id": "I", "mod_name": "I", "pin_path": "mods/i.pw.toml", "outcome": "only_prerelease_available", "error": "y"},
+            self._HEALTHY_PIN,
+            {"mod_id": no_parseable_mod_id, "mod_name": "H", "pin_path": "mods/h.pw.toml", "outcome": "no_parseable_candidate", "error": "x"},
+            {"mod_id": only_prerelease_mod_id, "mod_name": "I", "pin_path": "mods/i.pw.toml", "outcome": "only_prerelease_available", "error": "y"},
         ]
         exit_code, output = self._run_main_with(outcomes)
         self.assertEqual(exit_code, 0)
         self.assertIn("::warning::H (mods/h.pw.toml)", output)
         self.assertIn("::warning::I (mods/i.pw.toml)", output)
+
+    def test_unlisted_pin_in_a_gap_class_is_a_coverage_regression(self):
+        # MINECRAFT-362 review, eleventh round, item 2: a pin hitting
+        # unsupported_version_scheme/no_parseable_candidate/only_
+        # prerelease_available WITHOUT being on the matching static list
+        # is something this poll has never seen before for that pin --
+        # must fail, not blend into the documented baseline.
+        outcomes = [
+            self._HEALTHY_PIN,
+            {"mod_id": "NOT_LISTED", "mod_name": "J", "pin_path": "mods/j.pw.toml",
+             "outcome": "unsupported_version_scheme", "error": "x"},
+        ]
+        exit_code, _ = self._run_main_with(outcomes)
+        self.assertEqual(exit_code, 1)
 
     def test_a_real_unexpected_failure_still_fails_the_run(self):
         known_404_mod_id = next(iter(poll_mod_updates.KNOWN_ANONYMOUS_404_MOD_IDS))
@@ -486,9 +520,9 @@ class TestMainExitCode(unittest.TestCase):
     def test_every_pin_failing_to_resolve_fails_regardless_of_allowlist(self):
         # Aggregate guard: even if every single resolution_failed outcome
         # IS on the allowlist, a run where NOTHING else succeeded (no
-        # no_candidate/already_pinned/bumped at all) signals a systemic
-        # problem (outage, response-shape change), not the documented
-        # per-pin baseline.
+        # already_pinned/bumped at all) signals a systemic problem
+        # (outage, response-shape change), not the documented per-pin
+        # baseline.
         outcomes = [
             {"mod_id": mod_id, "mod_name": mod_id, "pin_path": f"mods/{mod_id}.pw.toml",
              "outcome": "resolution_failed", "error": "HTTP 503"}
@@ -496,7 +530,50 @@ class TestMainExitCode(unittest.TestCase):
         ]
         exit_code, output = self._run_main_with(outcomes)
         self.assertEqual(exit_code, 1)
-        self.assertIn("::error::every pin examined this run failed to resolve at all", output)
+        self.assertIn("::error::no pin in this run reached already_pinned or bumped", output)
+
+    def test_every_pin_only_prerelease_available_fails_the_aggregate_guard(self):
+        # MINECRAFT-362 review, eleventh round: a prior round's narrower
+        # guard (only triggered by "every pin resolution_failed") missed
+        # this shape entirely -- confirmed live, injecting a fetcher
+        # where every entry's version_type reads something other than
+        # "release" exits 0 under the old guard.
+        mod_ids = poll_mod_updates.KNOWN_ONLY_PRERELEASE_PIN_IDS
+        outcomes = [
+            {"mod_id": mod_id, "mod_name": mod_id, "pin_path": f"mods/{mod_id}.pw.toml",
+             "outcome": "only_prerelease_available", "error": "x"}
+            for mod_id in mod_ids
+        ]
+        exit_code, output = self._run_main_with(outcomes)
+        self.assertEqual(exit_code, 1)
+        self.assertIn("::error::no pin in this run reached already_pinned or bumped", output)
+
+    def test_every_pin_no_candidate_fails_the_aggregate_guard(self):
+        # The sharpest shape: no_candidate prints no warning at all (it
+        # is the ordinary "nothing newer" case), so a systemic break
+        # that makes every pin look like a clean no_candidate (a missing
+        # `files` array, a renamed game_versions field) must still be
+        # caught -- no_candidate deliberately does not count as
+        # "healthy" for this guard, for exactly that reason.
+        outcomes = [
+            {"mod_id": f"MOD{i}", "mod_name": f"MOD{i}", "pin_path": f"mods/mod{i}.pw.toml",
+             "outcome": "no_candidate", "error": None}
+            for i in range(5)
+        ]
+        exit_code, output = self._run_main_with(outcomes)
+        self.assertEqual(exit_code, 1)
+        self.assertIn("::error::no pin in this run reached already_pinned or bumped", output)
+
+    def test_a_healthy_mix_including_no_candidate_does_not_fail_the_guard(self):
+        # The guard must not fire on an ordinary healthy run just
+        # because some pins are no_candidate -- only when NOTHING in the
+        # run reached already_pinned/bumped.
+        outcomes = [
+            self._HEALTHY_PIN,
+            {"mod_id": "MOD1", "mod_name": "MOD1", "pin_path": "mods/mod1.pw.toml", "outcome": "no_candidate", "error": None},
+        ]
+        exit_code, _ = self._run_main_with(outcomes)
+        self.assertEqual(exit_code, 0)
 
 
 class TestCommitBump(unittest.TestCase):
