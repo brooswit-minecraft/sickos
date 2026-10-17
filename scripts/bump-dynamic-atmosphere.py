@@ -23,6 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import modrinth_metadata  # noqa: E402 - needs sys.path set up first
+import mod_eligibility  # noqa: E402
 
 USER_AGENT = "brooswit-minecraft/sickos (SICKOS-75 DA auto-bump engine)"
 DA_MOD_ID = "PZV7RorC"
@@ -885,7 +886,17 @@ def run_engine(repo_root, payload_raw, *, release_body_override=None,
     # same one-directional rule, for the same reason: a payload category
     # claiming "breaking" is still trusted over a merely-patch-looking
     # version bump.
-    delta_category = semver_delta_category(pin["pinned_version"], payload["version"])
+    # DA's own version scheme is always plain "x.y.z[-prerelease]" (see
+    # load_da_pin's fixed dynamicatmosphere-<version>.jar parsing), so
+    # this normalization is a no-op for DA today -- threaded through
+    # anyway, for the same reason and in the same shape as
+    # scripts/bump_mod.py's own fix, rather than leaving this call site
+    # unnormalized and relying on DA never adopting a prefixed scheme
+    # (MINECRAFT-362 review, ninth round, smaller item).
+    da_game_version, da_loader = mod_eligibility.read_pack_targets(repo_root)
+    delta_category = semver_delta_category(
+        pin["pinned_version"], payload["version"], game_version=da_game_version, loader=da_loader,
+    )
     category = more_severe_category(caller_category, delta_category)
     if category is None and category_received is not None and category_received not in KNOWN_CATEGORIES:
         # Preserve the "payload category was present but not recognised"

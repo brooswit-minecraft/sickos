@@ -156,8 +156,22 @@ KNOWN_ANONYMOUS_404_MOD_IDS = frozenset({
 # CLI), this list goes stale for that pin and should be updated, not
 # trusted as still-accurate indefinitely.
 KNOWN_NON_SEMVER_PIN_NAMES = (
-    "Create: Easy Structures (z69Pxatv)", "Cristel Lib (cl223EMc)", "Geophilic (hl5OLM95)",
+    # MINECRAFT-362 review, ninth round: a live check of all 74 pins that
+    # resolve anonymously found 15 with a pinned version_number that
+    # fails parse_semver, not the 6 previously named here -- Cristel Lib
+    # and Xaero's Minimap/World Map were in that 15, but all three use
+    # exactly the "<loader>-<game_version>-<mod_version>" (or "<game_
+    # version>-<loader>-<mod_version>") scheme this round's resolver/
+    # decide_update normalization fix (strip_known_version_prefixes) now
+    # handles, so they are NOT listed here -- they resolve and compare
+    # correctly now. The other 9 (7 new here, 2 already present) use
+    # genuinely non-semver schemes this document does not attempt to
+    # parse (extra components, a leading "v", etc.) and remain real gaps.
+    "Create: Easy Structures (z69Pxatv)", "Geophilic (hl5OLM95)",
     "IceAndFire Community Edition (VpmCsizY)", "Quark (qnQsVE2z)", "Zeta (MVARlG2f)",
+    "Biomes O' Plenty (HXF82T3G)", "Create: Dynamic Village (YCPmkFAm)",
+    "Create: Pillager Arise (VT2rW2wr)", "Dungeons and Taverns (tpehi7ww)",
+    "GlitchCore (s3dmwKy5)", "Serene Seasons (e0bNACJD)", "TerraBlender (kkmrDlKT)",
 )
 
 

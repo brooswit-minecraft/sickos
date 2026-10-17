@@ -348,6 +348,11 @@ class TestPollAndBump(unittest.TestCase):
         by_mod = {o["mod_id"]: o for o in outcomes}
         self.assertEqual(by_mod["ALPHA1"]["outcome"], "breaking_change_requires_human_review")
         self.assertFalse(by_mod["ALPHA1"]["changed"])
+        # MINECRAFT-362 review, ninth round: this assertion was computed
+        # (before_head/after_head) but never actually checked -- restored.
+        # A regression that refuses the bump outcome yet commits anyway
+        # must fail this test.
+        self.assertEqual(before_head, after_head)
 
     def test_game_version_and_loader_reach_the_category_gate_end_to_end(self):
         # MINECRAFT-362 review, eighth round: poll_and_bump must actually
@@ -362,10 +367,14 @@ class TestPollAndBump(unittest.TestCase):
         )
         self.modrinth.register_old_pin_metadata("ALPHAOLD", "ALPHA1", "1.21.1-NeoForge-5.1.9")
 
+        before_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
         outcomes = self.run_poll()
+        after_head = _git(self.repo, "rev-parse", "HEAD").stdout.strip()
+
         by_mod = {o["mod_id"]: o for o in outcomes}
         self.assertEqual(by_mod["ALPHA1"]["outcome"], "breaking_change_requires_human_review")
         self.assertFalse(by_mod["ALPHA1"]["changed"])
+        self.assertEqual(before_head, after_head)
 
 
 class TestMainExitCode(unittest.TestCase):

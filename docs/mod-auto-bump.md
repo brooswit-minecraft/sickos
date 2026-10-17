@@ -42,7 +42,18 @@ and splits them into:
   than a real release's -- `version_type` and `version_number` are
   independent fields on Modrinth, so semver ordering alone cannot be
   trusted to keep a prerelease out of the public pack), and returns the
-  one with the highest semver `version_number` among those.
+  one with the highest semver `version_number` among those -- each
+  candidate's `version_number` is normalized through
+  `semver_compare.strip_known_version_prefixes(game_version, loader)`
+  BEFORE the parseability check and the ordering comparison (ninth
+  review round: this function already existed for
+  `semver_delta_category`'s sake, but the resolver itself compared raw
+  strings, so a mod that bakes its game version/loader into its version
+  string -- Xaero's Minimap/World Map, Cristel Lib -- either had every
+  candidate skipped as unparsable, permanently reporting a clean
+  `no_candidate` with dozens of real releases available, or worse, could
+  have a coincidentally-raw-parseable entry win the ordering against
+  other entries' un-normalized strings, selecting a genuine downgrade).
 - `fetch_project_versions`'s `fetcher` can be built with
   `make_fetcher(token=...)` to attach `MODRINTH_TOKEN` as an
   `Authorization` header on the version-list request itself, not only on
@@ -50,17 +61,20 @@ and splits them into:
   documented DA case) are not resolvable anonymously at all, so a
   version-list call that never carries the token can fail before the
   token-gated call downstream gets a chance to help.
-- `decide_update(pin, candidate, previous_version_number=None)` turns a
-  resolved candidate into one of `no_candidate` / `already_pinned`
-  (dedup by Modrinth version id -- a replayed/retried dispatch is a
-  no-op) / `downgrade_refused` / `candidate`. The downgrade check only
-  runs when a caller supplies the previously-pinned version *number*
-  (packwiz pins only store the version *id*). `scripts/bump_mod.py`
-  supplies it by fetching the pinned version id's own metadata from
-  Modrinth (one extra `GET /v2/version/{id}` call) rather than parsing it
-  from the pin's filename -- filenames are not uniform enough across 78
-  different mods to parse reliably, unlike DA's own fixed
-  `dynamicatmosphere-<version>.jar` scheme.
+- `decide_update(pin, candidate, previous_version_number=None,
+  game_version=None, loader=None)` turns a resolved candidate into one
+  of `no_candidate` / `already_pinned` (dedup by Modrinth version id --
+  a replayed/retried dispatch is a no-op) / `downgrade_refused` /
+  `candidate`. The downgrade check only runs when a caller supplies the
+  previously-pinned version *number* (packwiz pins only store the
+  version *id*). `scripts/bump_mod.py` supplies it by fetching the
+  pinned version id's own metadata from Modrinth (one extra `GET
+  /v2/version/{id}` call) rather than parsing it from the pin's filename
+  -- filenames are not uniform enough across 78 different mods to parse
+  reliably, unlike DA's own fixed `dynamicatmosphere-<version>.jar`
+  scheme. Both the candidate's and the previous version's strings are
+  normalized through the same `strip_known_version_prefixes` before
+  `compare_semver` (ninth round, same reasoning as the resolver above).
 
 **Explicit scope limit**: compatibility here means the candidate's own
 declared `game_versions`/`loaders`. `modrinth_compat.py` also has
@@ -481,9 +495,9 @@ top of that, an aggregate guard in `main()` fails the run regardless of
 the allowlist if LITERALLY EVERY pin examined failed to resolve at all
 (the signature of a systemic problem, not the documented per-pin
 baseline, which always has some mix of `already_pinned`/`no_candidate`/
-`bumped` even accounting for the known-gap pins). The 6 non-semver pins
-(Create: Easy Structures, Cristel Lib, Geophilic, IceAndFire Community
-Edition, Quark, Zeta) don't need an allowlist the same way, since
+`bumped` even accounting for the known-gap pins). The non-semver pins
+(see `KNOWN_NON_SEMVER_PIN_NAMES` -- 12 as of this writing, see "Status"
+below) don't need an allowlist the same way, since
 `"unsupported_version_scheme"` is already established per-pin by a
 single deterministic comparison, not a catch-all.
 
@@ -581,13 +595,20 @@ whatever the earlier run already pushed.
   "breaking change(s)" match was removed after it matched "No breaking
   changes."), and `version_candidate_from_json` (the old private
   `_version_to_candidate`, made public so a version-id-only caller like
-  the CLI below can build a fully-populated candidate too) (35 tests).
+  the CLI below can build a fully-populated candidate too; and (ninth
+  round) `resolve_latest_compatible_version`/`decide_update` now both
+  normalize through `semver_compare.strip_known_version_prefixes`
+  themselves, closing the gap where the strip existed but only
+  `semver_delta_category` used it -- Xaero's Minimap/World Map and
+  Cristel Lib were, until this round, permanently invisible to the
+  resolver or vulnerable to a downgrade slipping past the un-normalized
+  comparison) (40 tests).
 - `scripts/modrinth_metadata.py` -- identity/hash verification, extracted
   from and still used by the DA engine (12 tests).
 - `scripts/semver_compare.py` -- no-downgrade comparator, extracted from
   and still used by the DA engine, plus `semver_delta_category` (the
   real AC4 category source, see below -- including stripping every
-  leading game-version/loader component for the 16 pins that bake one or
+  leading game-version/loader component for the pins that bake one or
   both into their version string) and `more_severe_category` (28 tests).
 - `bump-dynamic-atmosphere.py`'s own dispatch path gained the SAME
   semver-delta category derivation (eighth round): it previously took
@@ -623,7 +644,7 @@ whatever the earlier run already pushed.
   semver delta between the currently-pinned and candidate version
   numbers (escalatable, never downgradable, by a changelog/explicit
   category), and a transport failure (DNS/timeout/connection refused)
-  now exiting cleanly instead of a bare traceback (37 tests).
+  now exiting cleanly instead of a bare traceback (40 tests).
 - `scripts/poll-mod-updates.py` + `.github/workflows/mod-auto-bump-poll.yml`
   -- the generalized trigger, now covering Dynamic Atmosphere's own pin
   too, reading `pack.toml`'s `[versions]` shape strictly (raises rather
@@ -638,8 +659,12 @@ whatever the earlier run already pushed.
   construction nor silently green through an outage, `downgrade_refused`/
   `dependency_conflict` now also classified as expected per-pin gaps
   (the same repeatable-until-external-change shape), and `commit_bump`
-  committing an explicit pathspec rather than a bare `git commit`
-  (18 tests). `run_engine`'s category determination and no-downgrade
+  committing an explicit pathspec rather than a bare `git commit`, and
+  the previously-computed-but-unchecked `before_head`/`after_head`
+  assertion restored in the breaking-change test (ninth round -- it had
+  been silently dropped, leaving that test unable to catch a regression
+  that refuses the bump outcome yet commits anyway) (19 tests).
+  `run_engine`'s category determination and no-downgrade
   check both now take/use a `game_version` hint and an identity-checked
   previous-pin metadata, threaded through from this script's own
   `read_pack_targets` result (see the Compatibility and Write Path
@@ -670,23 +695,32 @@ whatever the earlier run already pushed.
   project remains untested live -- unchanged from the existing DA holds.
   Unit tests exercise every decision path against mocked Modrinth
   responses; they are not live-run evidence.
-- **10 of the 78 eligible pins are not covered by this mechanism today**
-  (established by a one-time, authorized, read-only resolution against
-  live Modrinth, done under the review process for this ticket -- no
-  dispatch, credential, write, or publication probe): 4 projects return
-  HTTP 404 to an anonymous caller (Dynamic Atmosphere, Dynamic
-  Skateboards, Dynamic Terrain, Dynamic Vehicles) and need `MODRINTH_TOKEN`
-  set to become resolvable -- still held, per the no-live-run item above;
-  6 pins' currently-pinned `version_number` is not valid semver (Create:
-  Easy Structures, Cristel Lib, Geophilic, IceAndFire Community Edition,
-  Quark, Zeta) and so can never pass the no-downgrade comparator -- these
-  need either a human bump to a parseable version, or a different
-  comparator this document does not attempt. Both classes report as
-  `::warning::` lines (when a run's loop reaches them) and the
+- **16 of the 78 eligible pins are not covered by this mechanism today**
+  (established by a live, authorized, read-only resolution against
+  Modrinth, done under the review process for this ticket -- no
+  dispatch, credential, write, or publication probe; recount as of the
+  ninth review round, up from an originally-undercounted 10 -- a live
+  check of all 74 anonymously-resolvable pins' pinned `version_number`
+  found 15 failing raw `parse_semver`, not 6, though 3 of those 15
+  turned out to use the same loader/game-version-prefixed scheme this
+  round's resolver/`decide_update` normalization fix now handles
+  correctly, so they are fixed, not gaps): 4 projects return HTTP 404 to
+  an anonymous caller (Dynamic Atmosphere, Dynamic Skateboards, Dynamic
+  Terrain, Dynamic Vehicles) and need `MODRINTH_TOKEN` set to become
+  resolvable -- still held, per the no-live-run item above; 12 pins'
+  currently-pinned `version_number` is not valid semver even after
+  normalization (see `KNOWN_NON_SEMVER_PIN_NAMES` for the exact list)
+  and so can never pass the no-downgrade comparator -- these need either
+  a human bump to a parseable version, or a different comparator this
+  document does not attempt. Both classes report as `::warning::` lines
+  (when a run's loop reaches them) and the
   `"resolution_failed"`/`"unsupported_version_scheme"` outcomes (see
   "Trigger" above), not a failed run -- the 4 anonymous-404 ids are an
   explicit, individually-confirmed allowlist (`KNOWN_ANONYMOUS_404_MOD_IDS`),
   NOT a blanket exemption for every `"resolution_failed"`, and `main()`
   also prints a standing reminder every run regardless of what that
   run's loop reached, so this list stays visible without paging on it
-  every 20 minutes.
+  every 20 minutes. This count is itself a snapshot, not a guarantee --
+  the same undercounting mistake this round corrected could recur if a
+  pin's scheme is discovered later without updating this document and
+  `KNOWN_NON_SEMVER_PIN_NAMES` together.

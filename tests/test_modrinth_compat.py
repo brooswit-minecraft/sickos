@@ -111,6 +111,53 @@ class TestResolveLatestCompatibleVersion(unittest.TestCase):
         with self.assertRaisesRegex(CompatResolutionError, "failed"):
             resolve_latest_compatible_version("EXAMPLE", game_version="1.21.1", loader="neoforge", fetcher=fetcher)
 
+    def test_real_xaeros_scheme_resolves_to_highest_after_normalization(self):
+        # MINECRAFT-362 review, ninth round: Xaero's Minimap/World Map's
+        # real scheme is "<loader>-<game_version>-<mod_version>" (e.g.
+        # "neoforge-1.21.1-26.6.0"). Before stripping that prefix, every
+        # entry failed parse_semver and this permanently returned None
+        # (a silent, forever "no_candidate") despite dozens of real
+        # compatible releases existing.
+        fetcher = mock.Mock(return_value=[
+            version_entry("V1", "neoforge-1.21.1-26.5.0"),
+            version_entry("V2", "neoforge-1.21.1-26.6.0"),
+            version_entry("V3", "neoforge-1.21.1-25.0.0"),
+        ])
+        candidate = resolve_latest_compatible_version(
+            "XAERO", game_version="1.21.1", loader="neoforge", fetcher=fetcher,
+        )
+        self.assertEqual(candidate.version_id, "V2")
+
+    def test_normalization_prevents_a_coincidental_raw_parse_from_winning(self):
+        # If even one entry's raw (un-normalized) string happens to look
+        # like valid semver, comparing it against OTHER entries' raw
+        # strings could select a genuine downgrade. All entries must be
+        # normalized the same way before comparison, not just skipped
+        # individually when unparsable.
+        fetcher = mock.Mock(return_value=[
+            # Raw "3.0.3" parses as semver by coincidence and would sort
+            # above the real-but-still-unstripped entries without
+            # normalization.
+            version_entry("OLD", "3.0.3"),
+            version_entry("NEW", "neoforge-1.21.1-3.1.7"),
+        ])
+        candidate = resolve_latest_compatible_version(
+            "CRISTELLIB", game_version="1.21.1", loader="neoforge", fetcher=fetcher,
+        )
+        self.assertEqual(candidate.version_id, "NEW")
+
+    def test_all_compatible_entries_unparsable_is_a_distinct_error_not_none(self):
+        # "Every compatible entry failed to parse" must not be
+        # indistinguishable from "upstream has nothing newer" -- the
+        # former is an unexpected/reportable failure (CompatResolutionError,
+        # which poll-mod-updates.py surfaces as resolution_failed), the
+        # latter a clean, silent no_candidate.
+        fetcher = mock.Mock(return_value=[
+            version_entry("V1", "not-a-version-at-all"),
+        ])
+        with self.assertRaises(CompatResolutionError):
+            resolve_latest_compatible_version("EXAMPLE", game_version="1.21.1", loader="neoforge", fetcher=fetcher)
+
     def test_prerelease_that_sorts_higher_is_not_picked(self):
         fetcher = mock.Mock(return_value=[
             version_entry("V1", "1.2.0"),
@@ -271,6 +318,39 @@ class TestDecideUpdate(unittest.TestCase):
         self.assertEqual(
             decide_update(pin, candidate, previous_version_number="not-a-version"),
             "unparsable_version",
+        )
+
+    def test_game_version_loader_normalization_detects_a_real_downgrade(self):
+        # MINECRAFT-362 review, ninth round: Cristel Lib's real scheme
+        # ("neoforge-1.21.1-3.1.7") compared RAW would read as unparsable
+        # (fail closed, but for the wrong reason) or, worse, compare
+        # incorrectly against another raw string. Normalized, a genuine
+        # downgrade is correctly caught.
+        pin = make_pin(pinned_version_id="OLDID")
+        candidate = modrinth_compat.VersionCandidate(
+            version_id="NEWID", version_number="neoforge-1.21.1-3.0.3", file_name="mod.jar",
+            sha1="a" * 40, sha512="b" * 128, download_url="https://x",
+        )
+        self.assertEqual(
+            decide_update(
+                pin, candidate, previous_version_number="neoforge-1.21.1-3.1.7",
+                game_version="1.21.1", loader="neoforge",
+            ),
+            "downgrade_refused",
+        )
+
+    def test_game_version_loader_normalization_detects_a_real_advance(self):
+        pin = make_pin(pinned_version_id="OLDID")
+        candidate = modrinth_compat.VersionCandidate(
+            version_id="NEWID", version_number="neoforge-1.21.1-3.1.8", file_name="mod.jar",
+            sha1="a" * 40, sha512="b" * 128, download_url="https://x",
+        )
+        self.assertEqual(
+            decide_update(
+                pin, candidate, previous_version_number="neoforge-1.21.1-3.1.7",
+                game_version="1.21.1", loader="neoforge",
+            ),
+            "candidate",
         )
 
 

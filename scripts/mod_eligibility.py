@@ -23,12 +23,19 @@ Two explicit kinds of exclusion, both read from this one place:
   rather than silently enrolling it.
 - Pins with no [update.modrinth] table are not Modrinth-tracked at all, so
   they are reported separately (see UNTRACKED_KIND) rather than silently
-  dropped -- at the time of writing this is mods/dynamic-despawn.pw.toml
-  and mods/magicavoxel-loader.pw.toml, both GitHub-release-only first-party
-  mods. Verifying a GitHub release's identity/hash is a different, not yet
+  dropped -- at the time of writing this is 4 pins: mods/dynamic-despawn.pw.toml
+  and mods/magicavoxel-loader.pw.toml (GitHub-release-only first-party mods),
+  plus mods/dynamic-battle-axes.pw.toml and mods/dynamic-whips.pw.toml (added
+  since this count was first written; same reason -- no [update.modrinth]
+  table). Verifying a GitHub release's identity/hash is a different, not yet
   implemented, mechanism (GitHub's release-asset API, not Modrinth's
   version-file metadata) -- out of scope for this pass; callers should
-  surface them as a known gap, not pretend they are covered.
+  surface them as a known gap, not pretend they are covered. This count
+  is a snapshot of mods/ at the time of writing, not a guarantee -- call
+  discover_eligible_pins() and read its own `untracked` list rather than
+  trusting a number in a docstring to stay current (MINECRAFT-362 review,
+  ninth round: a prior version of this docstring undercounted this by
+  half).
 """
 
 from __future__ import annotations

@@ -467,7 +467,10 @@ def run_engine(repo_root, pin, candidate, *, category=None,
             f"({previous_metadata_id!r}) -- refusing to trust its version_number",
         )
 
-    downgrade_decision = decide_update(pin, candidate, previous_version_number=previous_version_number)
+    downgrade_decision = decide_update(
+        pin, candidate, previous_version_number=previous_version_number,
+        game_version=game_version, loader=loader,
+    )
     if downgrade_decision == "downgrade_refused":
         raise EngineError(
             EXIT_DOWNGRADE_REFUSED, "downgrade_refused",

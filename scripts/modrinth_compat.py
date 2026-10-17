@@ -43,7 +43,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from semver_compare import compare_semver, parse_semver  # noqa: E402 - needs sys.path set up first
+from semver_compare import (  # noqa: E402 - needs sys.path set up first
+    compare_semver, parse_semver, strip_known_version_prefixes,
+)
 
 USER_AGENT = "brooswit-minecraft/sickos (MINECRAFT-362 mod auto-bump resolver)"
 
@@ -151,9 +153,20 @@ def resolve_latest_compatible_version(mod_id, *, game_version, loader, fetcher):
     Modrinth's own `game_versions`/`loaders` query filter already does the
     compatibility narrowing server-side; this re-checks it client-side too
     (never trust a filter you did not verify) and picks the candidate with
-    the highest version_number by semver precedence. A candidate whose
-    version_number is not valid semver is skipped, not crashed on -- fail
-    closed on that single candidate, not the whole resolution.
+    the highest version_number by semver precedence -- after stripping any
+    leading game-version/loader component each candidate's OWN
+    version_number carries (`semver_compare.strip_known_version_prefixes`),
+    not the raw string. Without this normalization, a mod that bakes its
+    game version and/or loader into its version string (e.g. Xaero's
+    Minimap/World Map and Cristel Lib: "neoforge-1.21.1-26.6.0") would
+    have every one of its real candidates skipped as unparsable, AND --
+    the sharper failure mode -- if even one entry's raw string happens to
+    parse as semver by coincidence, ordering against un-normalized
+    strings can select a genuine downgrade (MINECRAFT-362 review, ninth
+    round: confirmed live for both Xaero's pins, each permanently
+    reporting a clean "no_candidate" today with 22-26 real compatible
+    releases available, and for Cristel Lib, where the un-normalized
+    comparison previously selected an older version as "best").
 
     Only `version_type == "release"` entries are considered: Modrinth's
     `version_type` ("release"/"beta"/"alpha") is independent of
@@ -161,12 +174,20 @@ def resolve_latest_compatible_version(mod_id, *, game_version, loader, fetcher):
     semver (e.g. "1.3.0-beta.1" > "1.2.0") must not be auto-pinned into
     the public pack ahead of its own eventual full release
     (MINECRAFT-362 review).
+
+    Raises CompatResolutionError -- a distinct outcome from returning
+    None -- if at least one otherwise-compatible RELEASE entry existed
+    but none had a parseable version_number after normalization: that is
+    an unexpected/reportable failure, not "upstream genuinely has nothing
+    newer" (which is the only case `None` means).
     """
     versions_json = fetch_project_versions(mod_id, game_version=game_version, loader=loader, fetcher=fetcher)
     if not isinstance(versions_json, list):
         raise CompatResolutionError(f"version list for {mod_id} was not a JSON array")
 
     best = None
+    best_normalized = None
+    unparsable_count = 0
     for entry in versions_json:
         if not isinstance(entry, dict):
             continue
@@ -179,10 +200,20 @@ def resolve_latest_compatible_version(mod_id, *, game_version, loader, fetcher):
         candidate = version_candidate_from_json(entry)
         if candidate is None or not candidate.version_number:
             continue
-        if parse_semver(candidate.version_number) is None:
+        normalized = strip_known_version_prefixes(candidate.version_number, game_version, loader)
+        if parse_semver(normalized) is None:
+            unparsable_count += 1
             continue
-        if best is None or compare_semver(candidate.version_number, best.version_number) > 0:
+        if best is None or compare_semver(normalized, best_normalized) > 0:
             best = candidate
+            best_normalized = normalized
+
+    if best is None and unparsable_count > 0:
+        raise CompatResolutionError(
+            f"{unparsable_count} compatible release version(s) for {mod_id} exist but none had "
+            "a parseable version_number after stripping any leading game-version/loader "
+            "component -- refusing to report this as 'nothing newer upstream'"
+        )
     return best
 
 
@@ -221,7 +252,7 @@ def derive_category_from_changelog(changelog):
     return None
 
 
-def decide_update(pin, candidate, *, previous_version_number=None):
+def decide_update(pin, candidate, *, previous_version_number=None, game_version=None, loader=None):
     """Compare an EligiblePin's current pin against a resolved VersionCandidate.
 
     Returns one of:
@@ -231,10 +262,15 @@ def decide_update(pin, candidate, *, previous_version_number=None):
       bump-dynamic-atmosphere.py's already-pinned no-op).
     - "downgrade_refused": `previous_version_number` was supplied and the
       candidate's version_number is not strictly newer than it by semver
-      precedence (semver_compare.compare_semver).
+      precedence (semver_compare.compare_semver), both normalized first
+      via `semver_compare.strip_known_version_prefixes(game_version,
+      loader)` -- without this, a mod that bakes its game version/loader
+      into its version string compares raw, mis-parsed strings
+      (MINECRAFT-362 review, ninth round).
     - "unparsable_version": `previous_version_number` was supplied but
-      either it or the candidate's version_number is not valid semver --
-      fail closed by refusing to call this an update, rather than guessing.
+      either it or the candidate's version_number (after normalization)
+      is not valid semver -- fail closed by refusing to call this an
+      update, rather than guessing.
     - "candidate": a real, newer (or not-yet-compared), compatible update.
 
     `previous_version_number` is optional because the only thing a pin
@@ -251,8 +287,10 @@ def decide_update(pin, candidate, *, previous_version_number=None):
         return "already_pinned"
     if previous_version_number is None:
         return "candidate"
+    normalized_candidate = strip_known_version_prefixes(candidate.version_number, game_version, loader)
+    normalized_previous = strip_known_version_prefixes(previous_version_number, game_version, loader)
     try:
-        comparison = compare_semver(candidate.version_number, previous_version_number)
+        comparison = compare_semver(normalized_candidate, normalized_previous)
     except ValueError:
         return "unparsable_version"
     return "downgrade_refused" if comparison <= 0 else "candidate"
