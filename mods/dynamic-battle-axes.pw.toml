@@ -1,8 +1,8 @@
 name = "Dynamic Battle Axes"
-filename = "dynamicbattleaxes-0.2.0.jar"
+filename = "dynamicbattleaxes-0.2.1.jar"
 side = "both"
 
 [download]
-url = "https://github.com/brooswit-minecraft/dynamic-battle-axes/releases/download/v0.2.0/dynamicbattleaxes-0.2.0.jar"
+url = "https://github.com/brooswit-minecraft/dynamic-battle-axes/releases/download/v0.2.1/dynamicbattleaxes-0.2.1.jar"
 hash-format = "sha256"
-hash = "37b01375fe9c2002cf56558bee923ac163404d57fac476567bcbd751d1c635c5"
+hash = "3acb0feade7a02adb7abb2c9669e537821c3a3a5cd56f1b19ba05a8fe3ba07f7"
