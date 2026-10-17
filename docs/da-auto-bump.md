@@ -277,9 +277,11 @@ version, not to the version a dispatch names. packwiz still validates the
 result: `make refresh`, `make check` and `make build` run packwiz over the
 rewritten pin before anything is committed. Re-evaluate using `packwiz
 update` once the project is publicly resolvable.
-This direct-pin write, backed by the metadata gate above, is the proposed
-alternative to the literal `packwiz update` requirement; it is pending owner
-acceptance. Every
+This direct-pin write, backed by the metadata gate above, is the accepted
+alternative to the literal `packwiz update` requirement -- an engineering
+implementation decision for MINECRAFT-362 (see `docs/mod-auto-bump.md`'s
+"Direct-pin vs. `packwiz update`" section for the generalized rationale
+that applies to any enrolled mod, not only DA). Every
 string value is TOML-escaped. `name` and `side` are preserved from the
 existing pin; `filename`, `download.url`, `download.hash` (with
 `hash-format` fixed at `sha512`), and `update.modrinth.version` come from

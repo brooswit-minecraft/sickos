@@ -21,6 +21,9 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import modrinth_metadata  # noqa: E402 - needs sys.path set up first
+
 USER_AGENT = "brooswit-minecraft/sickos (SICKOS-75 DA auto-bump engine)"
 DA_MOD_ID = "PZV7RorC"
 DA_RELEASE_OWNER = "brooswit-minecraft"
@@ -168,68 +171,14 @@ def validate_payload(payload):
 
 # --------------------------------------------------------------------------
 # Semver-with-prerelease comparison for DA version strings like
-# "0.19.0-alpha.1". Standard semver precedence (see semver.org #11):
-#   - compare (major, minor, patch) numerically first;
-#   - a version WITH a prerelease suffix is OLDER than the same numeric
-#     triple with no suffix;
-#   - otherwise compare prerelease identifiers left to right, split on '.':
-#     a numeric identifier compares numerically, an alphanumeric identifier
-#     compares lexically (ASCII), a numeric identifier is always older than
-#     an alphanumeric one, and if all shared identifiers are equal, the
-#     prerelease with MORE identifiers is newer.
-# Build metadata (a "+..." suffix) is not used by this pack's DA versions
-# and is intentionally ignored for ordering if present, per semver's own
-# rule that build metadata never affects precedence.
+# "0.19.0-alpha.1". The actual comparator lives in semver_compare.py,
+# shared with the generalized multi-mod resolver (MINECRAFT-362) so there
+# is one implementation of "is this a downgrade?", not two that could
+# drift. Re-exported here under their original names so this module's
+# existing callers and tests are unaffected.
 # --------------------------------------------------------------------------
 
-_SEMVER_RE = re.compile(
-    r"^(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)"
-    r"(?:-(?P<prerelease>[0-9A-Za-z.-]+))?"
-    r"(?:\+[0-9A-Za-z.-]+)?$"
-)
-
-
-def parse_semver(version):
-    match = _SEMVER_RE.match(version)
-    if not match:
-        return None
-    core = (int(match.group("major")), int(match.group("minor")), int(match.group("patch")))
-    prerelease = match.group("prerelease")
-    identifiers = tuple(prerelease.split(".")) if prerelease else None
-    return core, identifiers
-
-
-def _identifier_key(identifier):
-    return (0, int(identifier)) if identifier.isdigit() else (1, identifier)
-
-
-def compare_semver(left, right):
-    """Return -1, 0, or 1 comparing two version strings. Raises ValueError if unparsable."""
-    left_parsed = parse_semver(left)
-    right_parsed = parse_semver(right)
-    if left_parsed is None or right_parsed is None:
-        raise ValueError(f"cannot compare non-semver version(s): {left!r}, {right!r}")
-
-    left_core, left_pre = left_parsed
-    right_core, right_pre = right_parsed
-    if left_core != right_core:
-        return -1 if left_core < right_core else 1
-
-    if left_pre is None and right_pre is None:
-        return 0
-    if left_pre is None:
-        return 1
-    if right_pre is None:
-        return -1
-
-    for left_id, right_id in zip(left_pre, right_pre):
-        left_key = _identifier_key(left_id)
-        right_key = _identifier_key(right_id)
-        if left_key != right_key:
-            return -1 if left_key < right_key else 1
-    if len(left_pre) != len(right_pre):
-        return -1 if len(left_pre) < len(right_pre) else 1
-    return 0
+from semver_compare import parse_semver, compare_semver  # noqa: E402 - needs sys.path set up first
 
 
 # --------------------------------------------------------------------------
@@ -546,7 +495,12 @@ def fetch_modrinth_version_metadata(version_id):
 
 
 def verify_against_modrinth_metadata(payload, fetcher):
-    """Return the matched Modrinth file entry, or raise EngineError (fail closed)."""
+    """Return the matched Modrinth file entry, or raise EngineError (fail closed).
+
+    The actual identity/hash checks live in modrinth_metadata.py, shared
+    with the generalized multi-mod resolver (MINECRAFT-362) so there is one
+    implementation of this gate, not two that could drift.
+    """
     version_id = payload["modrinth_version_id"]
 
     def refuse(reason):
@@ -563,32 +517,19 @@ def verify_against_modrinth_metadata(payload, fetcher):
     except Exception as error:  # noqa: BLE001 - any lookup failure fails closed
         refuse(f"metadata lookup failed: {error!r}")
 
-    if not isinstance(metadata, dict):
-        refuse("metadata response was not a JSON object")
-    if metadata.get("id") != version_id:
-        refuse(f"metadata id {metadata.get('id')!r} does not match the requested version id")
-    if metadata.get("project_id") != DA_MOD_ID:
-        refuse(f"metadata project_id {metadata.get('project_id')!r} is not {DA_MOD_ID}")
-
-    if metadata.get("version_number") != payload["version"]:
-        refuse(f"metadata version_number {metadata.get('version_number')!r} does not equal "
-               f"payload version {payload['version']!r}")
-
-    files = metadata.get("files")
-    if not isinstance(files, list):
-        refuse("metadata has no files list")
-    matches = [f for f in files if isinstance(f, dict) and f.get("filename") == payload["file_name"]]
-    if len(matches) != 1:
-        refuse(f"expected exactly one file named {payload['file_name']!r}, found {len(matches)}")
-    entry = matches[0]
-    hashes = entry.get("hashes") if isinstance(entry.get("hashes"), dict) else {}
-    if str(hashes.get("sha512", "")).lower() != payload["sha512"]:
-        refuse("payload sha512 differs from Modrinth's published sha512")
-    if str(hashes.get("sha1", "")).lower() != payload["sha1"]:
-        refuse("payload sha1 differs from Modrinth's published sha1")
-    if entry.get("url") != payload["download_url"]:
-        refuse("payload download_url differs from Modrinth's published file url")
-    return entry
+    try:
+        return modrinth_metadata.verify_version_file_metadata(
+            metadata,
+            expected_version_id=version_id,
+            expected_project_id=DA_MOD_ID,
+            expected_version_number=payload["version"],
+            expected_file_name=payload["file_name"],
+            expected_sha512=payload["sha512"],
+            expected_sha1=payload["sha1"],
+            expected_download_url=payload["download_url"],
+        )
+    except modrinth_metadata.MetadataVerificationError as error:
+        refuse(str(error))
 
 
 # --------------------------------------------------------------------------

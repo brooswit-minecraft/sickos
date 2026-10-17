@@ -6,8 +6,16 @@ on:
       - scripts/bump-dynamic-atmosphere.py
       - scripts/da-auto-bump-dispatch.py
       - scripts/release_decisions.py
+      - scripts/modrinth_metadata.py
+      - scripts/semver_compare.py
+      - scripts/mod_eligibility.py
+      - scripts/modrinth_compat.py
       - tests/test_bump_dynamic_atmosphere.py
       - tests/test_da_auto_bump_dispatch.py
+      - tests/test_modrinth_metadata.py
+      - tests/test_semver_compare.py
+      - tests/test_mod_eligibility.py
+      - tests/test_modrinth_compat.py
       - .github/workflows/da-auto-bump-tests.yml
       - .github/workflows/da-auto-bump.yml
   push:
@@ -16,8 +24,16 @@ on:
       - scripts/bump-dynamic-atmosphere.py
       - scripts/da-auto-bump-dispatch.py
       - scripts/release_decisions.py
+      - scripts/modrinth_metadata.py
+      - scripts/semver_compare.py
+      - scripts/mod_eligibility.py
+      - scripts/modrinth_compat.py
       - tests/test_bump_dynamic_atmosphere.py
       - tests/test_da_auto_bump_dispatch.py
+      - tests/test_modrinth_metadata.py
+      - tests/test_semver_compare.py
+      - tests/test_mod_eligibility.py
+      - tests/test_modrinth_compat.py
       - .github/workflows/da-auto-bump-tests.yml
       - .github/workflows/da-auto-bump.yml
 
@@ -39,6 +55,14 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_bump_dynamic_atmosphere.py'
       - name: Run DA auto-bump dispatch-workflow tests (SICKOS-78)
         run: python -m unittest discover -s tests -p 'test_da_auto_bump_dispatch.py'
+      - name: Run shared Modrinth metadata gate tests (MINECRAFT-362)
+        run: python -m unittest discover -s tests -p 'test_modrinth_metadata.py'
+      - name: Run shared semver comparator tests (MINECRAFT-362)
+        run: python -m unittest discover -s tests -p 'test_semver_compare.py'
+      - name: Run mod enrollment/eligibility tests (MINECRAFT-362)
+        run: python -m unittest discover -s tests -p 'test_mod_eligibility.py'
+      - name: Run mod compatibility-resolution tests (MINECRAFT-362)
+        run: python -m unittest discover -s tests -p 'test_modrinth_compat.py'
 
   actionlint:
     runs-on: ubuntu-latest
