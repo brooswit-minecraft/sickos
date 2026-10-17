@@ -60,12 +60,26 @@ name: Server tuning
 #     literal job named "server-update" (not "server-update / ...") only
 #     ever appears, and only with conclusion skipped, when
 #     deployment-policy decided deploy=false and the reusable-workflow
-#     call itself never ran (confirmed against real runs: 39049928024 for
-#     the skip shape, 38505769236 for the real-deploy shape, whose actual
-#     work appears as "server-update / deploy-method" and
-#     "server-update / Upload and restart server"). This is authoritative
-#     for THAT run specifically — no commit, no trailer, no SHA-drift
-#     possible, since a run's own job list cannot describe any other run.
+#     call itself never ran. This is authoritative for THAT run
+#     specifically — no commit, no trailer, no SHA-drift possible, since
+#     a run's own job list cannot describe any other run.
+#
+#     SECOND FIX, FOUND INCOMPLETE BY REVIEW: counting "server-update /
+#     deploy-method" success as deployment evidence was wrong — it's pure
+#     validation (one case statement over the configured deploy method)
+#     and never touches the server. Worse, "server-update / Update
+#     server" (the Modrinth-API deploy method's own job) can also succeed
+#     on a no-op "not configured, skipping" path without deploying
+#     anything. FIX: only "server-update / Upload and restart server"
+#     (the SFTP path's actual upload-and-restart step) succeeding counts
+#     as positive evidence; any sibling job in a
+#     failure/cancelled/timed_out/action_required state still
+#     disqualifies it. The classification itself now lives in
+#     scripts/server_tuning_deploy_evidence.py (not inline bash/jq), unit
+#     tested against eight real/synthetic job-list fixtures captured from
+#     the provider in tests/test_server_update_policy.py — a regression
+#     here, including all the way back to the original MINECRAFT-258 bug,
+#     now has behavioral coverage, not just YAML-text assertions.
 #     Ambiguous, missing or partially-failed job evidence fails CLOSED
 #     (no live write), same polarity as server-update.yml's own
 #     `deploy == 'true'` and the fail-closed contract
@@ -75,6 +89,16 @@ name: Server tuning
 #     `!cancelled()` (not `always()`) for the same reason: a guard-job
 #     failure or an operator cancel must not leave the live write
 #     eligible by default.
+#
+#     KNOWN NOT HARDENED (recorded, not fixed, per review): the Actions
+#     API's /jobs endpoint returns the LATEST attempt of the triggering
+#     run, not necessarily its original github.event.workflow_run.run_attempt
+#     (re-runs do happen on this repo); it also reads only page 1 of jobs
+#     (fails in the safe direction if ever paginated); and nothing pins
+#     the hardcoded "server-update" job name to server-update.yml's own
+#     job key, so a rename there would silently make this guard permanent
+#     deploy=false (safe, but it would quietly stop MINECRAFT-50's
+#     post-deploy sync with CI green throughout).
 on:
   push:
     branches: [main]
@@ -103,38 +127,26 @@ jobs:
     outputs:
       deploy: ${{ steps.policy.outputs.deploy }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Read actual deploy evidence from the triggering run's own jobs
         id: policy
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ github.event.workflow_run.id }}
         run: |
-          set -o pipefail
-          if ! jobs_json="$(gh api "repos/${{ github.repository }}/actions/runs/${RUN_ID}/jobs")"; then
-            echo "::warning::could not read jobs for Server update run $RUN_ID; failing closed"
-            echo 'deploy=false' >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # Unambiguous "did not deploy": the reusable-workflow CALL job
-          # itself (named exactly "server-update", never "server-update /
-          # ...") only appears, and only skipped, when deployment-policy
-          # decided deploy=false and the call never ran.
-          skipped_call=$(jq '[.jobs[] | select(.name == "server-update" and .conclusion == "skipped")] | length' <<<"$jobs_json")
-          deploy_jobs=$(jq '[.jobs[] | select(.name | startswith("server-update /"))]' <<<"$jobs_json")
-          succeeded_deploy_jobs=$(jq '[.[] | select(.conclusion == "success")] | length' <<<"$deploy_jobs")
-          # "skipped" among these is a normal internal conditional step
-          # inside the reusable workflow (e.g. "Update server" when a
-          # different deploy method was used) -- not failure evidence.
-          # Only an actually bad outcome disqualifies the deploy.
-          bad_deploy_jobs=$(jq '[.[] | select(.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out" or .conclusion == "action_required")] | length' <<<"$deploy_jobs")
-          if [ "$skipped_call" != "0" ]; then
-            echo 'deploy=false' >> "$GITHUB_OUTPUT"
-          elif [ "$succeeded_deploy_jobs" != "0" ] && [ "$bad_deploy_jobs" = "0" ]; then
-            echo 'deploy=true' >> "$GITHUB_OUTPUT"
-          else
-            echo "::warning::ambiguous Server update job evidence for run $RUN_ID (jobs: $(jq -c '[.jobs[] | {name, conclusion}]' <<<"$jobs_json")); failing closed"
-            echo 'deploy=false' >> "$GITHUB_OUTPUT"
-          fi
+          # The classifier (scripts/server_tuning_deploy_evidence.py,
+          # unit-tested against eight real/synthetic job-list fixtures in
+          # tests/test_server_update_policy.py) decides; this step only
+          # fetches. A failed `gh api` call produces no stdout, which the
+          # script's own JSON-parse failure path already treats as
+          # deploy=false -- no separate error handling needed here.
+          gh api "repos/${{ github.repository }}/actions/runs/${RUN_ID}/jobs" \
+            | python3 scripts/server_tuning_deploy_evidence.py >> "$GITHUB_OUTPUT"
 
   sync:
     needs: [release-only-guard]
