@@ -5,6 +5,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+from server_update_policy import should_deploy  # noqa: E402
+
 MODULE_PATH = Path(__file__).resolve().parent.parent / "scripts" / "da-auto-bump-dispatch.py"
 _spec = importlib.util.spec_from_file_location("da_auto_bump_dispatch", MODULE_PATH)
 dispatch = importlib.util.module_from_spec(_spec)
@@ -252,7 +255,7 @@ class TestBuildCommitMessage(unittest.TestCase):
         # bullet list -- exactly the shape SICKOS-79's review flagged as
         # unrecognised when a trailer isn't in its own final paragraph.
         final_paragraph = message.strip("\n").split("\n\n")[-1]
-        self.assertEqual(final_paragraph, "DA-Auto-Bump: 0.20.0 abc123")
+        self.assertEqual(final_paragraph, "Release-Only: true\nDA-Auto-Bump: 0.20.0 abc123")
 
     def test_trailer_survives_multiline_body_and_bullet_list(self):
         message = build_commit_message(
@@ -263,6 +266,43 @@ class TestBuildCommitMessage(unittest.TestCase):
         # trailer, and the gate still finds it.
         self.assertIn("- Dynamic Atmosphere version:", message)
         self.assertIn("- Mapping rule:", message)
+        self.assertTrue(has_da_auto_bump_trailer(message))
+
+    def test_generated_message_never_deploys_patch(self):
+        message = build_commit_message(
+            mapping_rule="patch", new_pack_version="0.22.2",
+            da_version="0.19.2", modrinth_version_id="abc123",
+        )
+        self.assertFalse(should_deploy(message))
+        self.assertTrue(has_da_auto_bump_trailer(message))
+
+    def test_generated_message_never_deploys_minor(self):
+        message = build_commit_message(
+            mapping_rule="minor", new_pack_version="0.23.0",
+            da_version="0.20.0", modrinth_version_id="abc123",
+        )
+        self.assertFalse(should_deploy(message))
+        self.assertTrue(has_da_auto_bump_trailer(message))
+
+    def test_generated_message_never_deploys_minor_default_rules(self):
+        for default_rule in (
+            "minor_default_absent_category",
+            "minor_default_unrecognised_category",
+        ):
+            with self.subTest(mapping_rule=default_rule):
+                message = build_commit_message(
+                    mapping_rule=default_rule, new_pack_version="0.23.0",
+                    da_version="0.20.0", modrinth_version_id="abc123",
+                )
+                self.assertFalse(should_deploy(message))
+                self.assertTrue(has_da_auto_bump_trailer(message))
+
+    def test_generated_message_never_deploys_breaking(self):
+        message = build_commit_message(
+            mapping_rule="breaking_as_minor", new_pack_version="1.0.0",
+            da_version="1.0.0-beta.1", modrinth_version_id="xyz789",
+        )
+        self.assertFalse(should_deploy(message))
         self.assertTrue(has_da_auto_bump_trailer(message))
 
 

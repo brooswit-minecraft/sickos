@@ -255,7 +255,13 @@ def build_commit_message(*, mapping_rule: str, new_pack_version: str, da_version
         f"- Modrinth version id: {modrinth_version_id}",
         f"- Mapping rule: {mapping_rule}",
     ]
-    trailer = f"DA-Auto-Bump: {da_version} {modrinth_version_id}"
+    # Release-Only: true keeps server_update_policy.should_deploy() from
+    # treating this pack publication as a deploy/restart trigger -- the
+    # review for MINECRAFT-362 requires automatic pack commits to never
+    # deploy or restart the server. Both trailers sit together, alone in
+    # the final paragraph, so git's trailer parser (has_da_auto_bump_trailer
+    # and trailer_value) recognises both.
+    trailer = f"Release-Only: true\nDA-Auto-Bump: {da_version} {modrinth_version_id}"
     return subject + "\n\n" + "\n".join(body) + "\n\n" + trailer + "\n"
 
 
