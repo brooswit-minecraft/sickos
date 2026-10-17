@@ -87,6 +87,71 @@ class TestHoldTrailer(unittest.TestCase):
         head_commit_message = "Second commit of a rebase-merged push\n\nNo trailer here.\n"
         self.assertFalse(parse_hold(head_commit_message)["held"])
 
+    def test_stranded_trailer_from_squash_composition_fails_closed(self):
+        # MINECRAFT-258 incident, verbatim: PR #109's branch head ended in
+        # one terminal paragraph (Release-Only: true, then Co-authored-by:),
+        # but GitHub's squash-merge composer rebuilt Co-authored-by as a
+        # FRESH final paragraph on the merge commit, stranding Release-Only
+        # in its own earlier paragraph. git interpret-trailers --parse only
+        # reads the last paragraph, so the trailer silently read as absent
+        # and should_deploy's existing-trailer-absent default (deploy) fired
+        # -- a real unauthorized live server restart, not a hypothetical.
+        # Treating "stranded" the same as "absent" is the defect; this must
+        # raise instead, the same fail-closed shape as an invalid value.
+        message = (
+            "MINECRAFT-258: bump Dynamic Battle Axes to 0.2.1 (#109)\n"
+            "\n"
+            "Pin the arc-sweep-race fix (dynamic-battle-axes v0.2.1) instead of the\n"
+            "0.2.0 jar, which still has the client/integrated-server thread race an\n"
+            "independent post-merge review found. Patch bump per CONTRIBUTING.md\n"
+            "(compatible mod bugfix).\n"
+            "\n"
+            "\n"
+            "Release-Only: true\n"
+            "\n"
+            "Co-authored-by: brooswit <10604446+brooswit@users.noreply.github.com>\n"
+            "Co-authored-by: Claude Sonnet 5 <noreply@anthropic.com>\n"
+        )
+        with self.assertRaises(ValueError):
+            has_trailer("Release-Only", message)
+        with self.assertRaises(ValueError):
+            trailer_value("Release-Only", message)
+
+    def test_stranded_release_hold_also_fails_closed(self):
+        # Same mechanism, but for the publication-hold trailer parse_hold
+        # itself uses -- item 3 of the MINECRAFT-258 review: this was a
+        # latent, not-yet-fired failure mode (Release-Hold has not yet been
+        # used on a squash merge), covered by the same fix since both
+        # callers share has_trailer/trailer_value.
+        message = (
+            "Batch three accepted merges (#200)\n"
+            "\n"
+            "Holding until the batch is complete.\n"
+            "\n"
+            "Release-Hold: true\n"
+            "\n"
+            "Co-authored-by: someone <someone@example.com>\n"
+        )
+        with self.assertRaises(ValueError):
+            parse_hold(message)
+
+    def test_trailer_recognized_in_final_paragraph_is_not_flagged_as_stranded(self):
+        # The normal shape -- Release-Hold genuinely IS in the final
+        # paragraph alongside Co-authored-by -- must not raise just because
+        # an earlier paragraph also happens to be trailer-shaped.
+        message = (
+            "Subject\n"
+            "\n"
+            "Body.\n"
+            "\n"
+            "Reviewed-by: someone <someone@example.com>\n"
+            "\n"
+            "Release-Hold: true\n"
+            "Co-authored-by: someone <someone@example.com>\n"
+        )
+        result = parse_hold(message)
+        self.assertTrue(result["held"])
+
 
 class TestSkippedIntermediateVersions(unittest.TestCase):
     def test_all_versions_released_none_skipped(self):

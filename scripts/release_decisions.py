@@ -30,6 +30,74 @@ MISSING_CONFIG_VARS = ("MODRINTH_TOKEN", "MODRINTH_PROJECT_ID")
 # Section 1: hold-trailer detection.
 # --------------------------------------------------------------------------
 
+_TRAILER_SHAPED_LINE = re.compile(r"^[A-Za-z][A-Za-z0-9-]*\s*:\s*.+$")
+
+
+def _non_final_trailer_shaped_paragraphs(message: str) -> list[str]:
+    """Every blank-line-delimited paragraph in `message`, EXCEPT the last
+    one, whose every non-blank line looks like `Key: value` -- i.e. a
+    paragraph that reads exactly like a trailer block but isn't the one
+    `git interpret-trailers --parse` actually inspects (it only ever
+    looks at the final paragraph)."""
+    paragraphs = re.split(r"\n[ \t]*\n", message.strip())
+    if len(paragraphs) <= 1:
+        return []
+    shaped = []
+    for para in paragraphs[:-1]:
+        lines = [line for line in para.splitlines() if line.strip()]
+        if lines and all(_TRAILER_SHAPED_LINE.match(line.strip()) for line in lines):
+            shaped.append(para)
+    return shaped
+
+
+def _raise_if_stranded(name: str, message: str, recognized_output: str) -> None:
+    """Raise if `name` appears as its own trailer-shaped paragraph
+    somewhere in `message` but was NOT recognized by git's own parser
+    (`recognized_output`, i.e. `result.stdout` from the `--parse` call
+    both has_trailer and trailer_value already make).
+
+    A squash or rebase merge can compose a fresh final paragraph (most
+    visibly, GitHub's squash composer rebuilding `Co-authored-by:` lines)
+    and leave what was a single trailer paragraph on the branch split in
+    two on the merge commit -- observed on MINECRAFT-258: a branch head
+    whose message ended in one terminal paragraph (`Release-Only: true`
+    then `Co-authored-by:`) became a merge commit with `Release-Only:
+    true` as its own earlier paragraph and only `Co-authored-by:` in the
+    final one. `git interpret-trailers --parse` only ever reads the last
+    paragraph, so the trailer silently reads as absent -- which fails
+    OPEN for both Release-Only (server_update_policy.should_deploy
+    defaults to deploying when no trailer is present) and Release-Hold
+    (parse_hold defaults to not-held). Treating "stranded" the same as
+    "absent" is the actual defect; raising here instead gives both
+    callers the same fail-closed behavior they already have for an
+    outright invalid value, via the exact same exception type.
+
+    Deliberately narrow: only a paragraph that is ENTIRELY trailer-shaped
+    counts, so a prose mention lacking a blank-line separator (no
+    paragraph split at all) or embedded mid-paragraph with other prose
+    lines is unaffected -- both existing, intentional "not a trailer"
+    shapes stay exactly as before.
+    """
+    recognized_keys = {
+        line.split(":", 1)[0].strip().lower()
+        for line in recognized_output.splitlines()
+        if ":" in line
+    }
+    if name.lower() in recognized_keys:
+        return
+    for paragraph in _non_final_trailer_shaped_paragraphs(message):
+        for line in paragraph.splitlines():
+            key = line.split(":", 1)[0].strip()
+            if key.lower() == name.lower():
+                raise ValueError(
+                    f"{name!r} appears as its own trailer-shaped paragraph in the "
+                    "message, but outside the final paragraph git interpret-trailers "
+                    "recognizes -- likely stranded by a squash/rebase merge composing "
+                    "a fresh final trailer paragraph (observed: MINECRAFT-258). "
+                    "Refusing to silently treat it as absent."
+                )
+
+
 def has_trailer(name: str, message: str) -> bool:
     """True iff `message` carries a trailer keyed `name` (case-insensitive),
     using git's own trailer parser rather than a loose grep -- a mention of
@@ -49,6 +117,7 @@ def has_trailer(name: str, message: str) -> bool:
         text=True,
         check=True,
     )
+    _raise_if_stranded(name, message, result.stdout)
     for line in result.stdout.splitlines():
         if ":" not in line:
             continue
@@ -70,6 +139,7 @@ def trailer_value(name: str, message: str) -> str | None:
         text=True,
         check=True,
     )
+    _raise_if_stranded(name, message, result.stdout)
     for line in result.stdout.splitlines():
         if ":" not in line:
             continue
