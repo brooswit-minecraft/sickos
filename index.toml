@@ -121,7 +121,7 @@ metafile = true
 
 [[files]]
 file = "mods/dynamic-battle-axes.pw.toml"
-hash = "29018524f0751b3dfa23a5c8e8da1c9b7dfda99765adcd4ff1e59ba051eb6a1c"
+hash = "4cc74747631f3d4b1b23951245f640ad6321d240ae7e1364a8214c2def8c82ac"
 metafile = true
 
 [[files]]
