@@ -25,3 +25,37 @@ class ServerUpdatePolicyTest(unittest.TestCase):
 
     def test_trailer_case_is_insensitive(self):
         self.assertFalse(should_deploy("Release\n\nrelease-only: TRUE\n"))
+
+
+class ServerTuningGateContractTest(unittest.TestCase):
+    """Static contract on server-tuning.yml's live-SFTP gate: a guard-job
+    failure, an infra blip, or an operator cancel must fail CLOSED (no
+    live write), not open. Reading the YAML text is what actually catches
+    a `!= 'false'` / `always()` regression -- no live workflow_run event
+    or Actions-API mock required (MINECRAFT-258 review)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.workflow = (
+            Path(__file__).resolve().parents[1] / ".github/workflows/server-tuning.yml"
+        ).read_text()
+        cls.sync_job = cls.workflow.split("\n  sync:\n", 1)[1]
+
+    def test_sync_gate_requires_deploy_true_not_merely_not_false(self):
+        self.assertIn("needs.release-only-guard.outputs.deploy == 'true'", self.sync_job)
+        self.assertNotIn("outputs.deploy != 'false'", self.sync_job)
+
+    def test_sync_gate_does_not_use_always(self):
+        # always() keeps the live-write job eligible even after a
+        # cancelled run; !cancelled() preserves the push/workflow_dispatch
+        # short-circuit while still failing closed on a cancel.
+        gate = self.sync_job.split("if: >-", 1)[1].split("runs-on:", 1)[0]
+        self.assertIn("!cancelled()", gate)
+        self.assertNotIn("always()", gate)
+
+    def test_guard_reads_release_message_from_a_separate_checkout(self):
+        guard_job = self.workflow.split("\n  release-only-guard:\n", 1)[1].split(
+            "\n  sync:\n", 1
+        )[0]
+        self.assertIn("path: release-source", guard_job)
+        self.assertIn("git -C release-source show", guard_job)

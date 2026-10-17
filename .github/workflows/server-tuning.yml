@@ -45,7 +45,14 @@ name: Server tuning
 #     skipped its own deploy). The release-only-guard job re-reads the
 #     SAME commit's Release-Only trailer via the SAME script
 #     server-update.yml's deployment-policy job uses, rather than trusting
-#     the upstream run's conclusion to imply its deploy decision.
+#     the upstream run's conclusion to imply its deploy decision. The
+#     sync job's gate below is deliberately `== 'true'` (not `!= 'false'`)
+#     with `!cancelled()` (not `always()`): a guard-job failure, an
+#     infra blip, or an operator cancel must all fail CLOSED (no live
+#     write) rather than fail open, matching server-update.yml's own
+#     `deploy == 'true'` polarity and the fail-closed contract
+#     scripts/server_update_policy.py already asserts for a malformed
+#     trailer (tests/test_server_update_policy.py::test_invalid_value_fails_closed).
 on:
   push:
     branches: [main]
@@ -73,9 +80,19 @@ jobs:
     outputs:
       deploy: ${{ steps.policy.outputs.deploy }}
     steps:
+      # Two checkouts, same shape as server-update.yml's own
+      # deployment-policy job: the default checkout is THIS workflow's own
+      # tree (so scripts/server_update_policy.py is whatever version ci.yml
+      # already tested on this branch, not whatever happens to exist at the
+      # release commit), and release-source/ is only ever read for its
+      # commit message.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
+          path: release-source
           persist-credentials: false
       - uses: actions/setup-python@v5
         with:
@@ -92,17 +109,17 @@ jobs:
             # may belong to an unrelated earlier commit at head_sha.
             echo 'deploy=true' >> "$GITHUB_OUTPUT"
           else
-            git show -s --format=%B HEAD > "$RUNNER_TEMP/release-message.txt"
+            git -C release-source show -s --format=%B > "$RUNNER_TEMP/release-message.txt"
             python3 scripts/server_update_policy.py "$RUNNER_TEMP/release-message.txt" >> "$GITHUB_OUTPUT"
           fi
 
   sync:
     needs: [release-only-guard]
     if: >-
-      always() &&
+      !cancelled() &&
       (github.event_name != 'workflow_run' ||
        (github.event.workflow_run.conclusion == 'success' &&
-        needs.release-only-guard.outputs.deploy != 'false'))
+        needs.release-only-guard.outputs.deploy == 'true'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
