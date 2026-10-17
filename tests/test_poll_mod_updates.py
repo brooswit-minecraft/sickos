@@ -332,8 +332,12 @@ class TestMainExitCode(unittest.TestCase):
         return exit_code, buf.getvalue()
 
     def test_expected_gaps_alone_do_not_fail_the_run(self):
+        # "A" uses a mod_id ON the known-anonymous-404 allowlist -- a
+        # resolution_failed for a mod_id NOT on it is a different test
+        # below, since that must fail, not warn.
+        known_404_mod_id = next(iter(poll_mod_updates.KNOWN_ANONYMOUS_404_MOD_IDS))
         outcomes = [
-            {"mod_id": "A", "mod_name": "A", "pin_path": "mods/a.pw.toml", "outcome": "resolution_failed", "error": "404"},
+            {"mod_id": known_404_mod_id, "mod_name": "A", "pin_path": "mods/a.pw.toml", "outcome": "resolution_failed", "error": "404"},
             {"mod_id": "B", "mod_name": "B", "pin_path": "mods/b.pw.toml", "outcome": "unsupported_version_scheme", "error": "x"},
             {"mod_id": "C", "mod_name": "C", "pin_path": "mods/c.pw.toml", "outcome": "breaking_change_requires_human_review", "error": "y"},
             {"mod_id": "D", "mod_name": "D", "pin_path": "mods/d.pw.toml", "outcome": "no_candidate", "error": None},
@@ -345,12 +349,43 @@ class TestMainExitCode(unittest.TestCase):
         self.assertIn("::warning::C (mods/c.pw.toml)", output)
 
     def test_a_real_unexpected_failure_still_fails_the_run(self):
+        known_404_mod_id = next(iter(poll_mod_updates.KNOWN_ANONYMOUS_404_MOD_IDS))
         outcomes = [
-            {"mod_id": "A", "mod_name": "A", "pin_path": "mods/a.pw.toml", "outcome": "resolution_failed", "error": "404"},
+            {"mod_id": known_404_mod_id, "mod_name": "A", "pin_path": "mods/a.pw.toml", "outcome": "resolution_failed", "error": "404"},
             {"mod_id": "E", "mod_name": "E", "pin_path": "mods/e.pw.toml", "outcome": "integrity_failure", "error": "bad hash"},
+            {"mod_id": "D", "mod_name": "D", "pin_path": "mods/d.pw.toml", "outcome": "no_candidate", "error": None},
         ]
         exit_code, _ = self._run_main_with(outcomes)
         self.assertEqual(exit_code, 1)
+
+    def test_resolution_failed_for_an_unlisted_mod_id_fails_the_run(self):
+        # The core of this review round's fix: "resolution_failed" is NOT
+        # a blanket expected gap. A project that is not on the
+        # individually-confirmed allowlist (e.g. a Modrinth 5xx, a DNS
+        # failure, a revoked token, or a newly-deleted/privated project)
+        # must fail the run, mixed in with otherwise-normal outcomes so
+        # it can't hide behind the aggregate guard either.
+        outcomes = [
+            {"mod_id": "SOME_OTHER_PROJECT", "mod_name": "F", "pin_path": "mods/f.pw.toml", "outcome": "resolution_failed", "error": "HTTP 503"},
+            {"mod_id": "D", "mod_name": "D", "pin_path": "mods/d.pw.toml", "outcome": "no_candidate", "error": None},
+        ]
+        exit_code, _ = self._run_main_with(outcomes)
+        self.assertEqual(exit_code, 1)
+
+    def test_every_pin_failing_to_resolve_fails_regardless_of_allowlist(self):
+        # Aggregate guard: even if every single resolution_failed outcome
+        # IS on the allowlist, a run where NOTHING else succeeded (no
+        # no_candidate/already_pinned/bumped at all) signals a systemic
+        # problem (outage, response-shape change), not the documented
+        # per-pin baseline.
+        outcomes = [
+            {"mod_id": mod_id, "mod_name": mod_id, "pin_path": f"mods/{mod_id}.pw.toml",
+             "outcome": "resolution_failed", "error": "HTTP 503"}
+            for mod_id in poll_mod_updates.KNOWN_ANONYMOUS_404_MOD_IDS
+        ]
+        exit_code, output = self._run_main_with(outcomes)
+        self.assertEqual(exit_code, 1)
+        self.assertIn("::error::every pin examined this run failed to resolve at all", output)
 
 
 if __name__ == "__main__":

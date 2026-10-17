@@ -171,12 +171,12 @@ class EngineTestCase(unittest.TestCase):
         return _git(self.repo, "status", "--porcelain").stdout
 
     def run_engine(self, pin, candidate, *, content=b"new mod jar", category=None, gate_commands=None,
-                   allow_breaking=False):
+                   allow_breaking=False, migration_text=None):
         return bump_mod.run_engine(
             self.repo, pin, candidate, category=category,
             downloader=make_downloader(content), run_command=subprocess.run,
             gate_commands=gate_commands or STUB_GATES, metadata_fetcher=self.fetch_mock,
-            allow_breaking=allow_breaking,
+            allow_breaking=allow_breaking, migration_text=migration_text,
         )
 
 
@@ -259,12 +259,28 @@ class TestSuccessfulBump(EngineTestCase):
 
         summary, exit_code, _ = self.run_engine(
             pin, candidate, content=content, category="breaking", allow_breaking=True,
+            migration_text="Back up your world before upgrading; delete config/example-mod.toml "
+                            "to regenerate it with the new key.",
         )
         self.assertEqual(exit_code, bump_mod.EXIT_OK)
         self.assertEqual(summary["mapping_rule"], "breaking_as_minor")
         notes_text = (self.repo / summary["notes_path"]).read_text(encoding="utf-8")
         self.assertIn("BREAKING", notes_text)
+        self.assertIn("Back up your world", notes_text)
         self.assertIn("renamed a key", notes_text)
+
+    def test_allow_breaking_without_migration_text_is_refused(self):
+        content = b"breaking jar"
+        candidate = make_candidate(content=content, version_number="2.0.0")
+        self.register(candidate.version_id, metadata_for(candidate))
+        self.register(OLD_VERSION_ID, {"id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0"})
+        pin = make_pin()
+        before = self.porcelain()
+
+        with self.assertRaises(bump_mod.EngineError) as ctx:
+            self.run_engine(pin, candidate, content=content, category="breaking", allow_breaking=True)
+        self.assertEqual(ctx.exception.outcome, "migration_text_required")
+        self.assertEqual(self.porcelain(), before)
 
     def test_unparsable_previous_metadata_fails_closed_not_open(self):
         # The previous-version lookup fails (404) -- e.g. the currently
@@ -416,6 +432,96 @@ class TestDependencyConflict(EngineTestCase):
         summary, exit_code, _ = self.run_engine(pin, candidate, content=content)
         self.assertEqual(exit_code, bump_mod.EXIT_OK)
         self.assertTrue(summary["changed"])
+
+
+class TestFenced(unittest.TestCase):
+    def test_embedded_triple_backtick_is_defanged(self):
+        rendered = bump_mod._fenced("before\n```\nafter")
+        # The fence markers around the WHOLE block are real; only the
+        # one embedded inside the content must be defanged so it cannot
+        # prematurely close that outer fence.
+        self.assertTrue(rendered.startswith("```\n"))
+        self.assertTrue(rendered.endswith("\n```"))
+        inner = rendered[4:-4]
+        self.assertNotIn("```", inner)
+        self.assertIn("before", inner)
+        self.assertIn("after", inner)
+
+    def test_long_text_is_truncated(self):
+        rendered = bump_mod._fenced("x" * (bump_mod.MAX_CHANGELOG_CHARS + 500))
+        self.assertIn("... (truncated)", rendered)
+        self.assertLess(len(rendered), bump_mod.MAX_CHANGELOG_CHARS + 100)
+
+
+class TestCliMain(unittest.TestCase):
+    """Exercises bump_mod.py's CLI wiring itself (MINECRAFT-362 review,
+    third round: a human must have a real runnable command for the
+    allow_breaking path). run_engine is mocked throughout -- what's under
+    test here is argument parsing/validation and file-reading, not the
+    engine logic already covered above."""
+
+    def setUp(self):
+        self.tmpdir = Path(tempfile.mkdtemp(prefix="bump-mod-cli-"))
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _base_args(self, extra=()):
+        return [
+            "--repo-root", str(self.tmpdir),
+            "--pin-path", "mods/example-mod.pw.toml",
+            "--mod-name", "Example Mod", "--mod-id", MOD_ID,
+            "--pinned-version-id", OLD_VERSION_ID,
+            "--version-id", "NEWID", "--version-number", "2.0.0",
+            "--file-name", "examplemod-2.0.0.jar", "--sha1", "a" * 40, "--sha512", "b" * 128,
+            "--download-url", "https://cdn.modrinth.com/x.jar",
+            *extra,
+        ]
+
+    def test_breaking_category_without_allow_breaking_is_refused_before_touching_the_engine(self):
+        with mock.patch.object(bump_mod, "run_engine") as mock_run_engine:
+            exit_code = bump_mod.cli_main(self._base_args(["--category", "breaking"]))
+        self.assertEqual(exit_code, 2)
+        mock_run_engine.assert_not_called()
+
+    def test_allow_breaking_without_migration_text_file_is_refused(self):
+        with mock.patch.object(bump_mod, "run_engine") as mock_run_engine:
+            exit_code = bump_mod.cli_main(
+                self._base_args(["--category", "breaking", "--allow-breaking"])
+            )
+        self.assertEqual(exit_code, 2)
+        mock_run_engine.assert_not_called()
+
+    def test_reads_migration_text_and_changelog_files_and_calls_run_engine(self):
+        migration_path = self.tmpdir / "migration.md"
+        migration_path.write_text("Back up your world first.", encoding="utf-8")
+        changelog_path = self.tmpdir / "changelog.md"
+        changelog_path.write_text("## Breaking\n- renamed a key", encoding="utf-8")
+
+        fake_summary = {"changed": True, "outcome": "bumped", "notes_path": "docs/releases/0.23.0.md"}
+        with mock.patch.object(bump_mod, "run_engine", return_value=(fake_summary, bump_mod.EXIT_OK, "ok")) as mock_run_engine:
+            exit_code = bump_mod.cli_main(self._base_args([
+                "--category", "breaking", "--allow-breaking",
+                "--migration-text-file", str(migration_path),
+                "--changelog-file", str(changelog_path),
+            ]))
+        self.assertEqual(exit_code, bump_mod.EXIT_OK)
+        mock_run_engine.assert_called_once()
+        _, kwargs = mock_run_engine.call_args
+        self.assertEqual(kwargs["allow_breaking"], True)
+        self.assertEqual(kwargs["migration_text"], "Back up your world first.")
+        self.assertEqual(kwargs["category"], "breaking")
+        candidate_arg = mock_run_engine.call_args[0][2]
+        self.assertEqual(candidate_arg.changelog, "## Breaking\n- renamed a key")
+
+    def test_engine_error_is_reported_with_its_own_exit_code(self):
+        with mock.patch.object(
+            bump_mod, "run_engine",
+            side_effect=bump_mod.EngineError(bump_mod.EXIT_DOWNGRADE_REFUSED, "downgrade_refused", "nope"),
+        ):
+            exit_code = bump_mod.cli_main(self._base_args())
+        self.assertEqual(exit_code, bump_mod.EXIT_DOWNGRADE_REFUSED)
 
 
 if __name__ == "__main__":

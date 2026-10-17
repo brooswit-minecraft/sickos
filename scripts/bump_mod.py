@@ -43,8 +43,10 @@ docs/mod-auto-bump.md's "Status" section for the full list):
 
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import urllib.error
@@ -55,7 +57,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import modrinth_metadata  # noqa: E402 - needs sys.path set up first
 import mod_eligibility  # noqa: E402
-from modrinth_compat import decide_update, find_dependency_conflicts  # noqa: E402
+from modrinth_compat import VersionCandidate, decide_update, find_dependency_conflicts  # noqa: E402
 
 
 def _load_da_engine():
@@ -186,7 +188,26 @@ def assert_only_pin_changed_under_mods(repo_root, pin_path, run_command=subproce
 # module's docstring).
 # --------------------------------------------------------------------------
 
-def render_notes(*, pin, new_pack_version, previous_pack_version, candidate, mapping_rule, category_note):
+MAX_CHANGELOG_CHARS = 4000
+
+
+def _fenced(text, *, max_chars=MAX_CHANGELOG_CHARS):
+    """Render `text` inside a fenced code block so none of ITS OWN
+    markdown (headings, links, anything) can restructure the surrounding
+    notes file -- a prior round spliced a mod's Modrinth changelog in
+    verbatim, letting an author-controlled "# " heading visually hijack
+    the release notes (MINECRAFT-362 review). Any triple-backtick inside
+    the text is defanged (a zero-width space inserted) so it cannot
+    prematurely close the fence, and the text is capped so one mod's
+    long changelog cannot make the notes file unbounded."""
+    text = text.strip().replace("```", "``​`")
+    if len(text) > max_chars:
+        text = text[:max_chars].rstrip() + "\n... (truncated)"
+    return "```\n" + text + "\n```"
+
+
+def render_notes(*, pin, new_pack_version, previous_pack_version, candidate, mapping_rule, category_note,
+                  migration_text=None):
     breaking = mapping_rule == "breaking_as_minor"
     heading = f"# Sickos {new_pack_version}" + (" -- BREAKING" if breaking else "")
     lines = [
@@ -205,17 +226,22 @@ def render_notes(*, pin, new_pack_version, previous_pack_version, candidate, map
         lines.append("")
         lines.append(
             "This release advances the minor version (Sickos is pre-1.0) and includes a "
-            "breaking change. No automated migration text is available for a generic mod "
-            "bump -- a human must write migration/reset instructions before this release ships. "
-            "(run_engine refuses to reach this point at all unless the caller explicitly passed "
-            "allow_breaking=True, having already confirmed real migration notes exist -- see "
-            "the mod's own changelog below.)"
+            "breaking change."
         )
+        lines.append("")
+        lines.append("### Migration / reset instructions")
+        lines.append("")
+        # run_engine refuses to reach this point at all unless allow_breaking
+        # was explicitly True AND migration_text was non-empty -- see its
+        # own gate -- so this is the real, human-authored text, never the
+        # old placeholder that said instructions were absent while
+        # providing none.
+        lines.append(migration_text.strip())
         lines.append("")
     if candidate.changelog:
         lines.append(f"## {pin.name}'s own Modrinth changelog")
         lines.append("")
-        lines.append(candidate.changelog.strip())
+        lines.append(_fenced(candidate.changelog))
         lines.append("")
     lines.append("## Listing review")
     lines.append("")
@@ -265,7 +291,8 @@ def _no_candidate_summary(pin):
 
 def run_engine(repo_root, pin, candidate, *, category=None,
                 downloader=default_downloader, run_command=subprocess.run,
-                gate_commands=None, metadata_fetcher=None, token=None, allow_breaking=False):
+                gate_commands=None, metadata_fetcher=None, token=None, allow_breaking=False,
+                migration_text=None):
     """Bump `pin` (scripts/mod_eligibility.EligiblePin) to `candidate`
     (scripts/modrinth_compat.VersionCandidate, already filtered for
     game-version/loader compatibility by the caller). Returns
@@ -416,19 +443,35 @@ def run_engine(repo_root, pin, candidate, *, category=None,
     # "migration/reset instructions" AC4 requires for a breaking change --
     # auto-publishing a placeholder saying "a human must write migration
     # instructions" is not the same as having them. Fail closed by
-    # default; a caller that has independently confirmed real migration
-    # notes exist (e.g. a human running this engine by hand after reading
-    # the candidate's changelog) can pass allow_breaking=True to proceed
-    # anyway (MINECRAFT-362 review).
-    if mapping_rule == "breaking_as_minor" and not allow_breaking:
-        raise EngineError(
-            EXIT_MIGRATION_MISSING, "breaking_change_requires_human_review",
-            f"{pin.name} candidate {candidate.version_number} is a breaking change; this "
-            "generic engine cannot auto-generate migration/reset instructions. Refusing to "
-            "auto-publish a placeholder in their place -- a human must review this release and "
-            "re-run with allow_breaking=True (or --allow-breaking) once real migration notes "
-            "are ready.",
-        )
+    # default; a human who has actually written real migration/reset
+    # instructions can run `scripts/bump_mod.py` directly (see its
+    # `__main__` CLI, `--help`) with `--allow-breaking` and
+    # `--migration-text-file <path>` to proceed. Both are required
+    # together: `allow_breaking=True` with no text is still refused below,
+    # since the point is to require the real text, not merely a flag
+    # (MINECRAFT-362 review -- the previous message here named a
+    # `--allow-breaking` flag that did not exist on any runnable command).
+    if mapping_rule == "breaking_as_minor":
+        if not allow_breaking:
+            raise EngineError(
+                EXIT_MIGRATION_MISSING, "breaking_change_requires_human_review",
+                f"{pin.name} candidate {candidate.version_number} is a breaking change; this "
+                "generic engine cannot auto-generate migration/reset instructions. Refusing to "
+                "auto-publish a placeholder in their place -- a human must review this release "
+                "and publish it by hand: `python3 scripts/bump_mod.py --repo-root . --pin-path "
+                f"{pin.pin_path} --mod-id {pin.mod_id} --version-id {candidate.version_id} "
+                "--category breaking --allow-breaking --migration-text-file <path> ...` "
+                "(run `python3 scripts/bump_mod.py --help` for the full set of required "
+                "candidate fields) once real migration/reset instructions are written.",
+            )
+        if not migration_text or not migration_text.strip():
+            raise EngineError(
+                EXIT_CONFIG_ERROR, "migration_text_required",
+                f"{pin.name} candidate {candidate.version_number}: allow_breaking=True was "
+                "passed without migration_text. A breaking release must carry real "
+                "migration/reset instructions, not just the flag that permits publishing one -- "
+                "pass --migration-text-file with real content.",
+            )
 
     releases_dir = repo_root / "docs" / "releases"
     notes_target = releases_dir / f"{new_pack_version}.md"
@@ -467,6 +510,7 @@ def run_engine(repo_root, pin, candidate, *, category=None,
         notes_content = render_notes(
             pin=pin, new_pack_version=new_pack_version, previous_pack_version=previous_pack_version,
             candidate=candidate, mapping_rule=mapping_rule, category_note=category_note,
+            migration_text=migration_text,
         )
         notes_path = write_notes(repo_root, new_pack_version, notes_content)
 
@@ -499,3 +543,116 @@ def run_engine(repo_root, pin, candidate, *, category=None,
         "error": None,
     }
     return summary, EXIT_OK, f"Bumped {pin.name} to {candidate.version_number} (Sickos {new_pack_version})."
+
+
+# --------------------------------------------------------------------------
+# CLI: a real, runnable entry point for the ONE case this module is
+# otherwise import-only for -- a human manually publishing a breaking
+# change with real migration/reset instructions in hand, after the
+# allow_breaking gate above refused to do it unattended (MINECRAFT-362
+# review: a prior round's error message named a `--allow-breaking` flag
+# that existed on no runnable command at all). Not used by
+# poll-mod-updates.py, which never passes allow_breaking/migration_text
+# and so never needs this; this is strictly for the human-in-the-loop
+# path.
+# --------------------------------------------------------------------------
+
+def _build_cli_parser():
+    parser = argparse.ArgumentParser(
+        description="Manually bump one enrolled mod's pin to a specific, already-known "
+                     "Modrinth version id -- primarily for publishing a breaking change by "
+                     "hand with real migration/reset instructions (run_engine's allow_breaking "
+                     "gate refuses this unattended). All of a candidate's identity/hash fields "
+                     "must be supplied explicitly; this CLI does not query Modrinth itself.",
+    )
+    parser.add_argument("--repo-root", default=".")
+    parser.add_argument("--pin-path", required=True, help="e.g. mods/example-mod.pw.toml")
+    parser.add_argument("--mod-name", default=None, help="Defaults to the pin's own [name].")
+    parser.add_argument("--mod-id", required=True, help="Modrinth project id.")
+    parser.add_argument("--side", default="both", choices=("both", "client", "server"))
+    parser.add_argument("--pinned-version-id", default=None,
+                         help="Defaults to reading the pin's current [update.modrinth] version.")
+    parser.add_argument("--version-id", required=True, help="Candidate Modrinth version id.")
+    parser.add_argument("--version-number", required=True)
+    parser.add_argument("--file-name", required=True)
+    parser.add_argument("--sha1", required=True)
+    parser.add_argument("--sha512", required=True)
+    parser.add_argument("--download-url", required=True)
+    parser.add_argument("--changelog-file", default=None,
+                         help="Optional: included verbatim (fenced) in the generated notes.")
+    parser.add_argument("--category", default=None, choices=("patch", "minor", "breaking"))
+    parser.add_argument("--allow-breaking", action="store_true",
+                         help="Required (together with --migration-text-file) to publish a "
+                              "--category breaking bump.")
+    parser.add_argument("--migration-text-file", default=None,
+                         help="Required when --allow-breaking is set: real migration/reset "
+                              "instructions, included in the generated notes.")
+    parser.add_argument("--summary-out", default=None)
+    return parser
+
+
+def _pin_from_cli(args):
+    pinned_version_id = args.pinned_version_id
+    mod_name = args.mod_name
+    if pinned_version_id is None or mod_name is None:
+        eligible, untracked = mod_eligibility.discover_eligible_pins(args.repo_root)
+        matching = next((p for p in eligible if p.pin_path == args.pin_path), None)
+        if matching is None:
+            raise SystemExit(
+                f"--pin-path {args.pin_path!r} is not an eligible, Modrinth-tracked pin under "
+                f"{args.repo_root} (see scripts/mod_eligibility.py); pass --pinned-version-id "
+                "and --mod-name explicitly if this pin is intentionally not yet enrolled."
+            )
+        pinned_version_id = pinned_version_id or matching.pinned_version_id
+        mod_name = mod_name or matching.name
+    return mod_eligibility.EligiblePin(
+        pin_path=args.pin_path, name=mod_name, side=args.side,
+        mod_id=args.mod_id, pinned_version_id=pinned_version_id,
+    )
+
+
+def cli_main(argv=None):
+    args = _build_cli_parser().parse_args(argv)
+
+    if args.category == "breaking" and not args.allow_breaking:
+        print("::error::--category breaking requires --allow-breaking (and --migration-text-file "
+              "with real content) -- see --help.", file=sys.stderr)
+        return 2
+    migration_text = None
+    if args.migration_text_file:
+        migration_text = Path(args.migration_text_file).read_text(encoding="utf-8")
+    if args.allow_breaking and not (migration_text and migration_text.strip()):
+        print("::error::--allow-breaking requires --migration-text-file with real, non-empty "
+              "content.", file=sys.stderr)
+        return 2
+
+    changelog = ""
+    if args.changelog_file:
+        changelog = Path(args.changelog_file).read_text(encoding="utf-8")
+
+    pin = _pin_from_cli(args)
+    candidate = VersionCandidate(
+        version_id=args.version_id, version_number=args.version_number, file_name=args.file_name,
+        sha1=args.sha1, sha512=args.sha512, download_url=args.download_url, changelog=changelog,
+    )
+    token = os.environ.pop("MODRINTH_TOKEN", None) or None
+
+    try:
+        summary, exit_code, message = run_engine(
+            args.repo_root, pin, candidate, category=args.category, token=token,
+            allow_breaking=args.allow_breaking, migration_text=migration_text,
+        )
+    except EngineError as error:
+        print(f"::error::{error.message}", file=sys.stderr)
+        return error.exit_code
+
+    print(message)
+    summary_text = json.dumps(summary, indent=2, sort_keys=True)
+    print(summary_text)
+    if args.summary_out:
+        Path(args.summary_out).write_text(summary_text + "\n", encoding="utf-8")
+    return exit_code
+
+
+if __name__ == "__main__":
+    sys.exit(cli_main())

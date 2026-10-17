@@ -85,29 +85,70 @@ import modrinth_compat  # noqa: E402
 EXCLUDED_PIN_PATHS = frozenset()
 
 # Outcomes that are a PERMANENT, per-pin property this poll cannot fix by
-# retrying, as opposed to an unexpected failure (MINECRAFT-362 review,
-# second round -- against live Modrinth resolution of all 78 eligible
-# pins today, 4 projects return HTTP 404 to an anonymous/no-token caller,
-# and 6 pins' currently-pinned version_number is not strict x.y.z semver,
-# so the no-downgrade comparator can never evaluate them):
-# - "resolution_failed": the project's version list is not resolvable
-#   with the token this run has (including none at all).
+# retrying, as opposed to an unexpected failure:
 # - "unsupported_version_scheme": the no-downgrade check cannot compare
 #   the pinned version's own version_number because it is not valid
-#   semver.
+#   semver -- established per-pin, by this exact comparison, every time.
 # - "breaking_change_requires_human_review": a real candidate exists but
 #   this generic engine refuses to auto-publish a breaking change with no
-#   migration notes (see bump_mod.run_engine's allow_breaking gate).
-# Without this distinction, main()'s exit code would be permanently
-# nonzero (10 of 78 pins hit one of the first two outcomes every single
-# run) -- a scheduled job that is red by construction from its first run
-# onward teaches everyone watching it to ignore red, which is worse than
-# not having the job. These are still printed as warnings (see main()),
-# and documented in docs/mod-auto-bump.md, so they stay visible without
-# failing the run.
-EXPECTED_GAP_OUTCOMES = frozenset({
-    "resolution_failed", "unsupported_version_scheme", "breaking_change_requires_human_review",
+#   migration notes (see bump_mod.run_engine's allow_breaking gate) --
+#   also established per-pin, every time, by the same gate.
+# "resolution_failed" is deliberately NOT unconditionally in this set
+# (MINECRAFT-362 review, third round): modrinth_compat.py's version-list
+# fetch catches bare `Exception`, so "resolution_failed" is a catch-all
+# for an HTTP 5xx, a timeout, a DNS failure, a malformed response, an
+# expired MODRINTH_TOKEN, or a project genuinely deleted/privated -- NONE
+# of which are the documented "4 projects Modrinth won't serve
+# anonymously" gap, and treating the whole class as expected would let a
+# Modrinth outage (or any of the above) stop the mechanism entirely while
+# the scheduled job stays green every 20 minutes. Only the 4 SPECIFIC,
+# individually-confirmed project ids below get the "expected" treatment
+# for that outcome; see `_is_expected_gap` and the aggregate guard in
+# `main()` for the rest of the fix.
+EXPECTED_GAP_OUTCOMES = frozenset({"unsupported_version_scheme", "breaking_change_requires_human_review"})
+
+# The 4 projects individually confirmed (by a live, read-only, authorized
+# resolution against all 78 eligible pins, done under this ticket's
+# review process) to return HTTP 404 to an anonymous/no-token caller, as
+# of this writing. MODRINTH_TOKEN is not set (see docs/mod-auto-bump.md's
+# "Status" -- still held), so these are presently permanent, but this is
+# an explicit allowlist, not a blanket exemption for the whole
+# "resolution_failed" outcome class: once a token is set, re-verify this
+# list rather than assuming it is still accurate, and remove any entry
+# that resolves.
+KNOWN_ANONYMOUS_404_MOD_IDS = frozenset({
+    "PZV7RorC",  # Dynamic Atmosphere
+    "n0hFQ5AT",  # Dynamic Skateboards
+    "BCtj6RgM",  # Dynamic Terrain
+    "srLLPzF8",  # Dynamic Vehicles
 })
+
+# The 6 pins individually confirmed (same live check) to have a
+# currently-pinned version_number that is not valid semver, so
+# bump_mod.run_engine's no-downgrade comparator can never evaluate them --
+# they always land on "unsupported_version_scheme" regardless of what
+# resolves. Named here (not only in docs) purely so main()'s standing
+# reminder notice (see below) can name them even on a run whose loop
+# never reaches them -- see this module's docstring for why one-bump-
+# per-run means most runs never reach most pins.
+KNOWN_NON_SEMVER_PIN_NAMES = (
+    "Create: Easy Structures (z69Pxatv)", "Cristel Lib (cl223EMc)", "Geophilic (hl5OLM95)",
+    "IceAndFire Community Edition (VpmCsizY)", "Quark (qnQsVE2z)", "Zeta (MVARlG2f)",
+)
+
+
+def _is_expected_gap(outcome):
+    """True if `outcome` (one entry from poll_and_bump's return list) is
+    a documented, permanent, per-pin gap rather than an unexpected
+    failure. `resolution_failed` only counts when the pin's mod_id is on
+    the individually-confirmed allowlist above -- NOT for the outcome
+    class as a whole (MINECRAFT-362 review, third round)."""
+    kind = outcome["outcome"]
+    if kind in EXPECTED_GAP_OUTCOMES:
+        return True
+    if kind == "resolution_failed":
+        return outcome.get("mod_id") in KNOWN_ANONYMOUS_404_MOD_IDS
+    return False
 
 
 def _load_build_generic_commit_message():
@@ -263,14 +304,45 @@ def main(argv=None):
         Path(args.summary_out).write_text(summary_text + "\n", encoding="utf-8")
 
     for outcome in outcomes:
-        if outcome["outcome"] in EXPECTED_GAP_OUTCOMES:
+        if _is_expected_gap(outcome):
             print(
                 f"::warning::{outcome['mod_name']} ({outcome['pin_path']}) not covered this run: "
                 f"outcome={outcome['outcome']!r}, error={outcome.get('error')}"
             )
 
+    # Standing reminder, independent of what this run's loop actually
+    # reached: one-bump-per-run (see poll_and_bump's docstring) means most
+    # runs stop long before reaching most pins, so the per-outcome
+    # warnings above are intermittent precisely on the runs that work --
+    # the exact runs where staying silent about a known gap is most
+    # likely to be mistaken for "nothing to report" (MINECRAFT-362
+    # review, third round, smaller item).
+    print(
+        "::notice::Known, standing coverage gaps (not re-evaluated this run; see "
+        "docs/mod-auto-bump.md's Status section): "
+        f"{len(KNOWN_ANONYMOUS_404_MOD_IDS)} pins need MODRINTH_TOKEN to resolve anonymously "
+        f"({', '.join(sorted(KNOWN_ANONYMOUS_404_MOD_IDS))}); "
+        f"{len(KNOWN_NON_SEMVER_PIN_NAMES)} pins have a non-semver pinned version and need a "
+        f"human bump ({', '.join(KNOWN_NON_SEMVER_PIN_NAMES)})."
+    )
+
     failed = [o for o in outcomes if o["outcome"] not in
-              ("no_candidate", "already_pinned", "bumped") and o["outcome"] not in EXPECTED_GAP_OUTCOMES]
+              ("no_candidate", "already_pinned", "bumped") and not _is_expected_gap(o)]
+
+    # Aggregate guard (MINECRAFT-362 review, third round): if literally
+    # EVERY pin examined this run failed to resolve at all, that is not
+    # the documented baseline (which always has some already_pinned/
+    # no_candidate/bumped mix even accounting for the known-gap pins) --
+    # it signals something systemic (a Modrinth outage, a response-shape
+    # change, a revoked token) that the per-pin allowlist above cannot
+    # and should not absorb. Fail regardless of which pins are on it.
+    if outcomes and all(o["outcome"] == "resolution_failed" for o in outcomes):
+        print("::error::every pin examined this run failed to resolve at all -- this looks like "
+              "a systemic problem (Modrinth outage, response-shape change, or a bad/expired "
+              "token), not the documented per-pin coverage gap. Failing regardless of the "
+              "known-anonymous-404 allowlist.")
+        failed = outcomes
+
     return 1 if failed else 0
 
 
