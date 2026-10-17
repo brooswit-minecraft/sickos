@@ -117,6 +117,47 @@ class TestHoldTrailer(unittest.TestCase):
         with self.assertRaises(ValueError):
             trailer_value("Release-Only", message)
 
+    def test_stranded_trailer_with_a_folded_continuation_line_fails_closed(self):
+        # Independent review found the first version of this fix used a
+        # hand-rolled "every line matches Key: value" regex that rejected
+        # a stranded paragraph containing a FOLDED continuation line (no
+        # colon at all -- git's own syntax for a wrapped trailer value),
+        # so the whole paragraph was silently treated as ordinary prose
+        # and the bypass still worked. git itself recognizes this as a
+        # valid trailer block; the detector must defer to git, not a regex.
+        message = (
+            "Subject\n"
+            "\n"
+            "Release-Only: true\n"
+            "Release-Hold: true\n"
+            "Release-Hold-Reason: Wait for\n"
+            " operator approval\n"
+            "\n"
+            "Co-authored-by: Example example@example.com (mailto:example@example.com)\n"
+        )
+        with self.assertRaises(ValueError):
+            has_trailer("Release-Only", message)
+        with self.assertRaises(ValueError):
+            parse_hold(message)
+
+    def test_stranded_trailer_with_an_empty_value_fails_closed(self):
+        # Same review finding, other half: an EMPTY trailer value
+        # (`Release-Hold-Reason:` with nothing after the colon) is also
+        # valid git trailer syntax and was also rejected by the old regex.
+        message = (
+            "Subject\n"
+            "\n"
+            "Release-Only: true\n"
+            "Release-Hold: true\n"
+            "Release-Hold-Reason:\n"
+            "\n"
+            "Co-authored-by: Example example@example.com (mailto:example@example.com)\n"
+        )
+        with self.assertRaises(ValueError):
+            has_trailer("Release-Only", message)
+        with self.assertRaises(ValueError):
+            parse_hold(message)
+
     def test_stranded_release_hold_also_fails_closed(self):
         # Same mechanism, but for the publication-hold trailer parse_hold
         # itself uses -- item 3 of the MINECRAFT-258 review: this was a
