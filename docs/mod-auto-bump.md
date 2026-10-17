@@ -21,7 +21,14 @@ and splits them into:
   - `EXCLUDED_MOD_NAMES` (Herobrine API, Baritone): local-only client
     addons that must never enter the public pack. Neither currently has a
     pin at all; this is defence in depth against one being added by
-    mistake.
+    mistake. `scripts/poll-mod-updates.py` reports a pin matching this
+    list as its own `"excluded_local_only"` outcome, unconditionally
+    expected rather than reconciled against a per-pin list -- its
+    `pin_path` can never be known in advance (a human names the file),
+    so a list-based guard would otherwise fail every run forever the
+    moment one of these intentionally-excluded pins exists, defeating
+    the exclusion mechanism this ticket itself requires (thirteenth
+    review round).
   - No `[update.modrinth]` table: a GitHub-release-only first-party mod.
     At the time of writing this is 4 pins: `dynamic-despawn.pw.toml` and
     `magicavoxel-loader.pw.toml`, plus `dynamic-battle-axes.pw.toml` and
@@ -581,7 +588,7 @@ an unexpected failure elsewhere in the same run never blocks pushing a
 bump this run already made -- the job still fails afterward (so the
 failure is visible), but only after that push.
 
-26 tests in `tests/test_poll_mod_updates.py` cover: the same
+33 tests in `tests/test_poll_mod_updates.py` cover: the same
 game-version+loader threading reaching the category gate end-to-end
 through `poll_and_bump` (not only `run_engine` directly), Dynamic Atmosphere's
 pin considered like any other (no-op when nothing is newer for it, bumped
@@ -721,7 +728,10 @@ whatever the earlier run already pushed.
   previously-computed-but-unchecked `before_head`/`after_head` assertion
   restored in the breaking-change test (ninth round -- it had been
   silently dropped, leaving that test unable to catch a regression that
-  refuses the bump outcome yet commits anyway) (31 tests).
+  refuses the bump outcome yet commits anyway, and (thirteenth round)
+  `EXCLUDED_MOD_NAMES` pins reported as their own unconditionally-
+  expected `"excluded_local_only"` outcome rather than reconciled by
+  `pin_path` the way genuinely-untracked pins are) (33 tests).
   `run_engine`'s category determination and no-downgrade
   check both now take/use a `game_version` hint and an identity-checked
   previous-pin metadata, threaded through from this script's own
@@ -783,7 +793,9 @@ whatever the earlier run already pushed.
     those entries' `version_number`s are valid semver even after
     normalization -- `resolve_latest_compatible_version` itself raises
     `NoParseableCandidateError`, outcome `"no_parseable_candidate"`.
-    Need a human bump, or a comparator this document does not attempt.
+    These 5 pins' UNPARSEABLE strings are the Modrinth CANDIDATES
+    themselves, not the pin, so a human bump cannot fix any of them --
+    only a different comparator this document does not attempt would.
   - **4 pins** (`KNOWN_ONLY_PRERELEASE_PIN_NAMES`: Biomes O' Plenty,
     GlitchCore, Serene Seasons, TerraBlender) have compatible entries,
     but every one is a beta/alpha -- `resolve_latest_compatible_version`
@@ -794,11 +806,27 @@ whatever the earlier run already pushed.
   All four classes report as `::warning::` lines (when a run's loop
   reaches them) and a standing `::notice::` reminder every run
   regardless of what that run's loop reached, so this list stays
-  visible without paging on it every 20 minutes -- NOT as a failed run,
-  except the first class, which fails the run for any `mod_id` NOT on
-  its allowlist (the signal a genuinely unexpected failure -- an
-  outage, a revoked token, a new 404 -- still needs). This count is
-  itself a snapshot, not a guarantee -- the same undercounting mistake
-  a prior round corrected could recur if a pin's scheme is discovered
-  later without updating this document and the four `KNOWN_*` lists
-  together.
+  visible without paging on it every 20 minutes -- NOT as a failed run
+  for a pin ON its matching list. This is true of all four classes
+  equally (eleventh review round generalized it past just the first):
+  each is checked against its OWN `KNOWN_*_PIN_IDS` dict by `mod_id`,
+  so EVERY one of them fails the run for a pin hitting that outcome
+  while NOT on its matching list -- the signal a genuinely unexpected
+  failure (an outage, a revoked token, a new 404, a mod quietly
+  changing version scheme) still needs, not only for
+  `"resolution_failed"`. This count is itself a snapshot, not a
+  guarantee -- the same undercounting mistake a prior round corrected
+  could recur if a pin's scheme is discovered later without updating
+  this document and the four `KNOWN_*` lists together.
+
+  A fifth, related-but-distinct gap: 4 pins (`dynamic-battle-axes`,
+  `dynamic-despawn`, `dynamic-whips`, `magicavoxel-loader`) have no
+  `[update.modrinth]` table at all -- see "Enrollment" above for how
+  these are reported and reconciled (twelfth review round). A sixth,
+  deliberately NOT a gap: a pin named in `EXCLUDED_MOD_NAMES`
+  (Herobrine API, Baritone) reports its own `"excluded_local_only"`
+  outcome, unconditionally expected rather than reconciled against a
+  per-pin list -- its `pin_path` can never be known in advance, so a
+  list-based guard would otherwise fail every run forever the moment
+  one of these intentionally-excluded pins exists (thirteenth review
+  round).

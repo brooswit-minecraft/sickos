@@ -202,10 +202,12 @@ KNOWN_ONLY_PRERELEASE_PIN_IDS = {
 # module's guards). Each of these needs a GitHub-release-based identity
 # check (not yet implemented, see mod_eligibility.py) before it can be
 # auto-bumped at all; a human bump is the only remedy today.
-KNOWN_UNTRACKED_PIN_PATHS = frozenset({
-    "mods/dynamic-battle-axes.pw.toml", "mods/dynamic-despawn.pw.toml",
-    "mods/dynamic-whips.pw.toml", "mods/magicavoxel-loader.pw.toml",
-})
+KNOWN_UNTRACKED_PIN_PATHS = {
+    "mods/dynamic-battle-axes.pw.toml": "Dynamic Battle Axes",
+    "mods/dynamic-despawn.pw.toml": "Dynamic Despawn",
+    "mods/dynamic-whips.pw.toml": "Dynamic Whips",
+    "mods/magicavoxel-loader.pw.toml": "MagicaVoxel Loader",
+}
 
 # Display-only convenience views, built from the dicts above so there is
 # one source of truth for membership AND display text.
@@ -214,31 +216,43 @@ KNOWN_NO_PARSEABLE_CANDIDATE_PIN_NAMES = tuple(
     f"{name} ({mod_id})" for mod_id, name in KNOWN_NO_PARSEABLE_CANDIDATE_PIN_IDS.items()
 )
 KNOWN_ONLY_PRERELEASE_PIN_NAMES = tuple(f"{name} ({mod_id})" for mod_id, name in KNOWN_ONLY_PRERELEASE_PIN_IDS.items())
-KNOWN_UNTRACKED_PIN_NAMES = tuple(sorted(KNOWN_UNTRACKED_PIN_PATHS))
+KNOWN_UNTRACKED_PIN_NAMES = tuple(
+    f"{name} ({pin_path})" for pin_path, name in sorted(KNOWN_UNTRACKED_PIN_PATHS.items())
+)
 
 # Outcome kinds with no static per-pin list: `modrinth_compat`/`bump_mod`
-# establish these fresh, per candidate, every run (a dependency
+# establish the first three fresh, per candidate, every run (a dependency
 # declaration or a competing pin can change at any time), so there is no
-# fixed set to reconcile against the way the four list-based outcomes
-# above have -- these stay unconditionally expected by outcome string
-# alone.
+# fixed set to reconcile against the way the list-based outcomes above
+# have. "excluded_local_only" is different -- it IS fully determined in
+# advance (mod_eligibility.EXCLUDED_MOD_NAMES is a fixed, reviewed list
+# of mod NAMES), but not by anything a PIN_PATH allowlist could express,
+# since an excluded mod's pin_path is whatever a human names the file --
+# unlistable by path, not unpredictable in principle (MINECRAFT-362
+# review, thirteenth round). All four stay unconditionally expected by
+# outcome string alone.
 _UNLISTABLE_EXPECTED_GAP_OUTCOMES = frozenset({
     "breaking_change_requires_human_review", "downgrade_refused", "dependency_conflict",
+    "excluded_local_only",
 })
 
 
 def _is_expected_gap(outcome):
     """True if `outcome` (one entry from poll_and_bump's return list) is
     a documented, permanent, per-pin gap rather than an unexpected
-    failure (or a coverage regression). Four outcome kinds are checked
-    against their own static KNOWN_*_PIN_IDS list BY mod_id -- a pin
-    hitting one of these outcomes while NOT on the matching list is
-    something this poll has never seen before for that pin, which must
-    fail the run rather than silently blend into "the documented
-    baseline" (MINECRAFT-362 review, eleventh round). The remaining
-    kinds have no fixed set to check against (see
-    _UNLISTABLE_EXPECTED_GAP_OUTCOMES) and stay unconditionally
-    expected."""
+    failure (or a coverage regression). Five outcome kinds are checked
+    against their own static KNOWN_*_PIN_IDS/KNOWN_UNTRACKED_PIN_PATHS
+    list BY mod_id or pin_path -- a pin hitting one of these outcomes
+    while NOT on the matching list is something this poll has never seen
+    before for that pin, which must fail the run rather than silently
+    blend into "the documented baseline" (MINECRAFT-362 review, eleventh
+    and twelfth rounds). "excluded_local_only" is deliberately NOT one of
+    these -- it is a fixed, reviewed set of mod NAMES
+    (mod_eligibility.EXCLUDED_MOD_NAMES), not something a pin_path
+    allowlist could express, so it stays unconditionally expected
+    (thirteenth round). The remaining kinds have no fixed set to check
+    against at all (see _UNLISTABLE_EXPECTED_GAP_OUTCOMES) and stay
+    unconditionally expected too."""
     kind = outcome["outcome"]
     mod_id = outcome.get("mod_id")
     if kind == "resolution_failed":
@@ -324,10 +338,28 @@ def poll_and_bump(repo_root, *, token=None, fetcher=None, run_command=subprocess
     # invisible to every guard in this module. mod_eligibility.py's own
     # docstring already says callers must report these as a gap, never
     # silently skip them -- this was the one caller that still did.
+    #
+    # discover_eligible_pins files TWO different things into its one
+    # `untracked` list (MINECRAFT-362 review, thirteenth round): a pin
+    # with no [update.modrinth] table (a real, unintentional coverage
+    # gap -- reconciled below by pin_path against
+    # KNOWN_UNTRACKED_PIN_PATHS), and a pin named in
+    # mod_eligibility.EXCLUDED_MOD_NAMES (Herobrine API, Baritone -- a
+    # DELIBERATE, permanent non-enrollment this ticket itself requires,
+    # not a gap at all). Round 12's pin_path-based reconciliation treated
+    # both the same way, which meant the one case this ticket names by
+    # name as a requirement -- excluding a local-only addon -- would fail
+    # every scheduled run forever the moment such a pin existed, since no
+    # EXCLUDED_MOD_NAMES pin's path can be on a static allowlist in
+    # advance. Given its own distinct outcome kind instead, so
+    # _is_expected_gap can treat it as unconditionally expected (like
+    # downgrade_refused/dependency_conflict) rather than needing a list.
     for pin in untracked:
+        is_deliberate_exclusion = pin.reason == "excluded local-only mod"
         outcomes.append({
             "mod_name": pin.name, "mod_id": None, "pin_path": pin.pin_path,
-            "outcome": "untracked", "changed": False, "error": pin.reason,
+            "outcome": "excluded_local_only" if is_deliberate_exclusion else "untracked",
+            "changed": False, "error": pin.reason,
         })
 
     for pin in eligible:

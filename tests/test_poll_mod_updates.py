@@ -428,6 +428,36 @@ class TestPollAndBump(unittest.TestCase):
         self.assertEqual(len(untracked), 1)
         self.assertEqual(len(bumped), 1)
 
+    def test_excluded_local_only_pin_is_its_own_outcome_not_a_coverage_regression(self):
+        # MINECRAFT-362 review, thirteenth round, required item 1: a pin
+        # named in mod_eligibility.EXCLUDED_MOD_NAMES (Herobrine API,
+        # Baritone) lands in discover_eligible_pins' `untracked` list
+        # alongside a genuinely-untracked pin, but for a completely
+        # different, DELIBERATE reason -- this ticket itself requires
+        # these never enter the public pack. Round 12 reconciled the
+        # whole `untracked` list by pin_path, which meant adding exactly
+        # the pin this ticket names as a requirement would fail every
+        # scheduled run forever (no EXCLUDED_MOD_NAMES pin's path can be
+        # on a static allowlist in advance). It must get its own outcome
+        # kind, unconditionally expected, never reconciled by path.
+        (self.repo / "mods" / "baritone.pw.toml").write_text(
+            'name = "Baritone"\n'
+            'filename = "baritone-1.0.0.jar"\n'
+            'side = "client"\n'
+            "\n"
+            "[download]\n"
+            'url = "https://example.invalid/baritone-1.0.0.jar"\n'
+            'hash-format = "sha512"\n'
+            f'hash = "{"e" * 128}"\n',
+            encoding="utf-8",
+        )
+        outcomes = self.run_poll()
+        excluded = [o for o in outcomes if o["outcome"] == "excluded_local_only"]
+        self.assertEqual(len(excluded), 1)
+        self.assertEqual(excluded[0]["pin_path"], "mods/baritone.pw.toml")
+        self.assertEqual(excluded[0]["mod_name"], "Baritone")
+        self.assertTrue(poll_mod_updates._is_expected_gap(excluded[0]))
+
 
 class TestMainExitCode(unittest.TestCase):
     """Exercises main()'s pass/fail classification directly (item 2,
@@ -635,6 +665,24 @@ class TestMainExitCode(unittest.TestCase):
         exit_code, output = self._run_main_with(outcomes)
         self.assertEqual(exit_code, 0)
         self.assertIn(f"::warning::Untracked ({known_untracked_path})", output)
+
+    def test_excluded_local_only_pin_warns_and_keeps_the_run_green(self):
+        # MINECRAFT-362 review, thirteenth round, required item 1: an
+        # EXCLUDED_MOD_NAMES pin (Herobrine API, Baritone) must warn, not
+        # fail -- the whole point of giving it its own outcome kind
+        # rather than reusing "untracked" is that its pin_path can NEVER
+        # be on a static allowlist in advance (a human names the file),
+        # so a path-keyed guard would otherwise fail every run forever
+        # the moment one of these pins exists, defeating the exclusion
+        # mechanism this ticket itself requires.
+        outcomes = [
+            self._HEALTHY_PIN,
+            {"mod_id": None, "mod_name": "Baritone", "pin_path": "mods/baritone.pw.toml",
+             "outcome": "excluded_local_only", "error": "excluded local-only mod"},
+        ]
+        exit_code, output = self._run_main_with(outcomes)
+        self.assertEqual(exit_code, 0)
+        self.assertIn("::warning::Baritone (mods/baritone.pw.toml)", output)
 
     def test_unlisted_untracked_pin_is_a_coverage_regression(self):
         # MINECRAFT-362 review, twelfth round, required item 2: a pin
