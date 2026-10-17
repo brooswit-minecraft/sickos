@@ -251,6 +251,22 @@ class TestPollAndBump(unittest.TestCase):
         by_mod = {o["mod_id"]: o for o in outcomes}
         self.assertEqual(by_mod["ALPHA1"]["outcome"], "no_candidate")
 
+    def test_only_prerelease_entries_is_a_distinct_outcome_end_to_end(self):
+        # MINECRAFT-362 review, tenth round, end-to-end through
+        # poll_and_bump (not just main()'s classification in isolation).
+        entry = version_entry("ALPHA1", "ALPHANEW", "1.1.0-beta.1", b"only beta", version_type="beta")
+        self.modrinth.version_lists["ALPHA1"] = [entry]
+        outcomes = self.run_poll()
+        by_mod = {o["mod_id"]: o for o in outcomes}
+        self.assertEqual(by_mod["ALPHA1"]["outcome"], "only_prerelease_available")
+
+    def test_no_parseable_candidate_is_a_distinct_outcome_end_to_end(self):
+        entry = version_entry("ALPHA1", "ALPHANEW", "not-semver-at-all", b"unparseable")
+        self.modrinth.version_lists["ALPHA1"] = [entry]
+        outcomes = self.run_poll()
+        by_mod = {o["mod_id"]: o for o in outcomes}
+        self.assertEqual(by_mod["ALPHA1"]["outcome"], "no_parseable_candidate")
+
     def test_downgrade_is_reported_not_crashed(self):
         self.modrinth.register_latest("ALPHA1", "ALPHANEW", "0.5.0", b"older build")
         self.modrinth.register_old_pin_metadata("ALPHAOLD", "ALPHA1", "1.0.0")
@@ -424,6 +440,24 @@ class TestMainExitCode(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertIn("::warning::F (mods/f.pw.toml)", output)
         self.assertIn("::warning::G (mods/g.pw.toml)", output)
+
+    def test_no_parseable_candidate_and_only_prerelease_are_expected_gaps(self):
+        # MINECRAFT-362 review, tenth round: a prior round's own fix
+        # (modrinth_compat raising a distinct exception instead of
+        # silently returning None) was wired to the wrong outcome class
+        # here -- it landed as "resolution_failed", which only the 4
+        # allowlisted mod_ids escape, so these pins hard-failed the run
+        # every single time. Both are deterministic per-pin facts, like
+        # downgrade_refused/dependency_conflict above, not a systemic
+        # failure.
+        outcomes = [
+            {"mod_id": "H", "mod_name": "H", "pin_path": "mods/h.pw.toml", "outcome": "no_parseable_candidate", "error": "x"},
+            {"mod_id": "I", "mod_name": "I", "pin_path": "mods/i.pw.toml", "outcome": "only_prerelease_available", "error": "y"},
+        ]
+        exit_code, output = self._run_main_with(outcomes)
+        self.assertEqual(exit_code, 0)
+        self.assertIn("::warning::H (mods/h.pw.toml)", output)
+        self.assertIn("::warning::I (mods/i.pw.toml)", output)
 
     def test_a_real_unexpected_failure_still_fails_the_run(self):
         known_404_mod_id = next(iter(poll_mod_updates.KNOWN_ANONYMOUS_404_MOD_IDS))

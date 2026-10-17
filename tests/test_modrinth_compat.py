@@ -148,14 +148,16 @@ class TestResolveLatestCompatibleVersion(unittest.TestCase):
 
     def test_all_compatible_entries_unparsable_is_a_distinct_error_not_none(self):
         # "Every compatible entry failed to parse" must not be
-        # indistinguishable from "upstream has nothing newer" -- the
-        # former is an unexpected/reportable failure (CompatResolutionError,
-        # which poll-mod-updates.py surfaces as resolution_failed), the
-        # latter a clean, silent no_candidate.
+        # indistinguishable from "upstream has nothing newer" -- it is a
+        # permanent, deterministic per-pin property (NoParseableCandidateError),
+        # not the TRUE catch-all CompatResolutionError class (which
+        # poll-mod-updates.py allowlists by mod_id, not unconditionally --
+        # MINECRAFT-362 review, tenth round) and not the silent `None`
+        # "nothing newer upstream" case either.
         fetcher = mock.Mock(return_value=[
             version_entry("V1", "not-a-version-at-all"),
         ])
-        with self.assertRaises(CompatResolutionError):
+        with self.assertRaises(modrinth_compat.NoParseableCandidateError):
             resolve_latest_compatible_version("EXAMPLE", game_version="1.21.1", loader="neoforge", fetcher=fetcher)
 
     def test_prerelease_that_sorts_higher_is_not_picked(self):
@@ -166,8 +168,23 @@ class TestResolveLatestCompatibleVersion(unittest.TestCase):
         candidate = resolve_latest_compatible_version("EXAMPLE", game_version="1.21.1", loader="neoforge", fetcher=fetcher)
         self.assertEqual(candidate.version_id, "V1")
 
-    def test_no_release_versions_returns_none(self):
+    def test_only_prerelease_available_raises_distinct_error_not_none(self):
+        # MINECRAFT-362 review, tenth round: a compatible entry existing
+        # but never being release-grade is NOT "nothing newer upstream"
+        # (None) -- it is a different, permanent per-pin fact (the
+        # project has never published a release for this target) with a
+        # different remedy (nothing a human bump fixes; only the author
+        # publishing a release does).
         fetcher = mock.Mock(return_value=[version_entry("V1", "1.0.0-alpha.1", version_type="alpha")])
+        with self.assertRaises(modrinth_compat.OnlyPrereleaseAvailableError):
+            resolve_latest_compatible_version("EXAMPLE", game_version="1.21.1", loader="neoforge", fetcher=fetcher)
+
+    def test_genuinely_no_compatible_entry_at_all_returns_none(self):
+        # The one case None still means: zero entries declare this
+        # (game_version, loader) at all, regardless of version_type.
+        fetcher = mock.Mock(return_value=[
+            version_entry("V1", "1.0.0", game_versions=("1.20.1",), loaders=("fabric",)),
+        ])
         candidate = resolve_latest_compatible_version("EXAMPLE", game_version="1.21.1", loader="neoforge", fetcher=fetcher)
         self.assertIsNone(candidate)
 

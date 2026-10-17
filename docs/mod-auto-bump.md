@@ -496,10 +496,21 @@ the allowlist if LITERALLY EVERY pin examined failed to resolve at all
 (the signature of a systemic problem, not the documented per-pin
 baseline, which always has some mix of `already_pinned`/`no_candidate`/
 `bumped` even accounting for the known-gap pins). The non-semver pins
-(see `KNOWN_NON_SEMVER_PIN_NAMES` -- 12 as of this writing, see "Status"
+(see `KNOWN_NON_SEMVER_PIN_NAMES` -- 3 as of this writing, see "Status"
 below) don't need an allowlist the same way, since
 `"unsupported_version_scheme"` is already established per-pin by a
-single deterministic comparison, not a catch-all.
+single deterministic comparison, not a catch-all. The same is true of
+the two outcomes `resolve_latest_compatible_version` itself raises
+(`"no_parseable_candidate"`, `"only_prerelease_available"` -- see
+`KNOWN_NO_PARSEABLE_CANDIDATE_PIN_NAMES`/`KNOWN_ONLY_PRERELEASE_PIN_NAMES`
+below): each is a deterministic per-pin fact the resolver itself
+establishes, never a wrapper around `modrinth_compat.py`'s bare-`Exception`
+catch-all the way `"resolution_failed"` is, so both are unconditionally
+in `EXPECTED_GAP_OUTCOMES` too (tenth review round -- a prior round
+raised the first of these as the plain `CompatResolutionError` base
+class, which this script then mapped to `"resolution_failed"`, landing
+it in the one outcome class that is NOT unconditionally exempt and
+hard-failing the run for every pin on this specific gap).
 
 Because `poll_and_bump` stops at the first bump, most runs never reach
 most pins, so the per-outcome `::warning::` lines above are intermittent
@@ -539,7 +550,7 @@ an unexpected failure elsewhere in the same run never blocks pushing a
 bump this run already made -- the job still fails afterward (so the
 failure is visible), but only after that push.
 
-19 tests in `tests/test_poll_mod_updates.py` cover: the same
+22 tests in `tests/test_poll_mod_updates.py` cover: the same
 game-version+loader threading reaching the category gate end-to-end
 through `poll_and_bump` (not only `run_engine` directly), Dynamic Atmosphere's
 pin considered like any other (no-op when nothing is newer for it, bumped
@@ -602,7 +613,10 @@ whatever the earlier run already pushed.
   `semver_delta_category` used it -- Xaero's Minimap/World Map and
   Cristel Lib were, until this round, permanently invisible to the
   resolver or vulnerable to a downgrade slipping past the un-normalized
-  comparison) (40 tests).
+  comparison; and (tenth round) `NoParseableCandidateError`/
+  `OnlyPrereleaseAvailableError`, each raised instead of a silent `None`
+  so "nothing newer upstream" cannot be confused with "every candidate
+  was unparseable" or "only prereleases exist") (41 tests).
 - `scripts/modrinth_metadata.py` -- identity/hash verification, extracted
   from and still used by the DA engine (12 tests).
 - `scripts/semver_compare.py` -- no-downgrade comparator, extracted from
@@ -663,7 +677,10 @@ whatever the earlier run already pushed.
   the previously-computed-but-unchecked `before_head`/`after_head`
   assertion restored in the breaking-change test (ninth round -- it had
   been silently dropped, leaving that test unable to catch a regression
-  that refuses the bump outcome yet commits anyway) (19 tests).
+  that refuses the bump outcome yet commits anyway), and
+  `NoParseableCandidateError`/`OnlyPrereleaseAvailableError` each
+  mapped to their OWN expected-gap outcome rather than the generic,
+  non-exempt `"resolution_failed"` (tenth round) (22 tests).
   `run_engine`'s category determination and no-downgrade
   check both now take/use a `game_version` hint and an identity-checked
   previous-pin metadata, threaded through from this script's own
@@ -699,28 +716,44 @@ whatever the earlier run already pushed.
   (established by a live, authorized, read-only resolution against
   Modrinth, done under the review process for this ticket -- no
   dispatch, credential, write, or publication probe; recount as of the
-  ninth review round, up from an originally-undercounted 10 -- a live
-  check of all 74 anonymously-resolvable pins' pinned `version_number`
-  found 15 failing raw `parse_semver`, not 6, though 3 of those 15
-  turned out to use the same loader/game-version-prefixed scheme this
-  round's resolver/`decide_update` normalization fix now handles
-  correctly, so they are fixed, not gaps): 4 projects return HTTP 404 to
-  an anonymous caller (Dynamic Atmosphere, Dynamic Skateboards, Dynamic
-  Terrain, Dynamic Vehicles) and need `MODRINTH_TOKEN` set to become
-  resolvable -- still held, per the no-live-run item above; 12 pins'
-  currently-pinned `version_number` is not valid semver even after
-  normalization (see `KNOWN_NON_SEMVER_PIN_NAMES` for the exact list)
-  and so can never pass the no-downgrade comparator -- these need either
-  a human bump to a parseable version, or a different comparator this
-  document does not attempt. Both classes report as `::warning::` lines
-  (when a run's loop reaches them) and the
-  `"resolution_failed"`/`"unsupported_version_scheme"` outcomes (see
-  "Trigger" above), not a failed run -- the 4 anonymous-404 ids are an
-  explicit, individually-confirmed allowlist (`KNOWN_ANONYMOUS_404_MOD_IDS`),
-  NOT a blanket exemption for every `"resolution_failed"`, and `main()`
-  also prints a standing reminder every run regardless of what that
-  run's loop reached, so this list stays visible without paging on it
-  every 20 minutes. This count is itself a snapshot, not a guarantee --
-  the same undercounting mistake this round corrected could recur if a
-  pin's scheme is discovered later without updating this document and
-  `KNOWN_NON_SEMVER_PIN_NAMES` together.
+  tenth review round). Four classes, each with its OWN outcome string
+  and its own remedy -- conflating them, or conflating any of them with
+  the TRUE catch-all `"resolution_failed"`, was itself the tenth round's
+  bug (see "Not every non-success outcome..." above):
+  - **4 pins** (`KNOWN_ANONYMOUS_404_MOD_IDS`: Dynamic Atmosphere,
+    Dynamic Skateboards, Dynamic Terrain, Dynamic Vehicles) return HTTP
+    404 to an anonymous caller -- outcome `"resolution_failed"`,
+    allowlisted by `mod_id` specifically (not the whole outcome class).
+    Need `MODRINTH_TOKEN` set to become resolvable -- still held, per
+    the no-live-run item above.
+  - **3 pins** (`KNOWN_NON_SEMVER_PIN_NAMES`: Create: Easy Structures,
+    Geophilic, IceAndFire Community Edition) resolve a real candidate,
+    but their own PINNED `version_number` is not valid semver even
+    after normalization, so the no-downgrade comparator can never
+    evaluate them -- outcome `"unsupported_version_scheme"`. Need a
+    human bump to a parseable pinned version.
+  - **5 pins** (`KNOWN_NO_PARSEABLE_CANDIDATE_PIN_NAMES`: Quark, Zeta,
+    Create: Dynamic Village, Create: Pillager Arise, Dungeons and
+    Taverns) have compatible RELEASE entries on Modrinth, but NONE of
+    those entries' `version_number`s are valid semver even after
+    normalization -- `resolve_latest_compatible_version` itself raises
+    `NoParseableCandidateError`, outcome `"no_parseable_candidate"`.
+    Need a human bump, or a comparator this document does not attempt.
+  - **4 pins** (`KNOWN_ONLY_PRERELEASE_PIN_NAMES`: Biomes O' Plenty,
+    GlitchCore, Serene Seasons, TerraBlender) have compatible entries,
+    but every one is a beta/alpha -- `resolve_latest_compatible_version`
+    raises `OnlyPrereleaseAvailableError`, outcome
+    `"only_prerelease_available"`. A human bump cannot fix this; only
+    the mod author publishing a release build does.
+
+  All four classes report as `::warning::` lines (when a run's loop
+  reaches them) and a standing `::notice::` reminder every run
+  regardless of what that run's loop reached, so this list stays
+  visible without paging on it every 20 minutes -- NOT as a failed run,
+  except the first class, which fails the run for any `mod_id` NOT on
+  its allowlist (the signal a genuinely unexpected failure -- an
+  outage, a revoked token, a new 404 -- still needs). This count is
+  itself a snapshot, not a guarantee -- the same undercounting mistake
+  a prior round corrected could recur if a pin's scheme is discovered
+  later without updating this document and the four `KNOWN_*` lists
+  together.

@@ -51,7 +51,39 @@ USER_AGENT = "brooswit-minecraft/sickos (MINECRAFT-362 mod auto-bump resolver)"
 
 
 class CompatResolutionError(Exception):
-    """Fetching or parsing Modrinth's version list for a project failed."""
+    """Fetching or parsing Modrinth's version list for a project failed --
+    the TRUE catch-all/systemic class (HTTP 5xx, timeout, DNS failure,
+    malformed response, expired token, a project genuinely deleted/
+    privated). scripts/poll-mod-updates.py's EXPECTED_GAP_OUTCOMES
+    allowlists this by mod_id (KNOWN_ANONYMOUS_404_MOD_IDS) rather than
+    as a whole class, specifically so this constructor stays reserved
+    for the unexpected case -- the two subclasses below are each a
+    PERMANENT, per-pin, deterministically-reproducible property instead
+    (MINECRAFT-362 review, tenth round), and are classified as expected
+    gaps unconditionally, never through that allowlist."""
+
+
+class NoParseableCandidateError(CompatResolutionError):
+    """At least one otherwise-compatible RELEASE entry exists for this
+    project, but none had a parseable version_number even after
+    stripping any leading game-version/loader component -- e.g. the
+    whole version list uses some other, undocumented scheme. Distinct
+    from returning None (which means "no compatible entry exists at
+    all," the only case that is genuinely "nothing newer upstream") and
+    distinct from the base CompatResolutionError (this is a permanent,
+    deterministic per-pin property, not a transient/systemic failure)."""
+
+
+class OnlyPrereleaseAvailableError(CompatResolutionError):
+    """At least one otherwise-compatible entry exists for this project,
+    but every one of them has `version_type != "release"` -- e.g. the
+    mod has only ever published a beta/alpha build for this (game_version,
+    loader). Distinct from returning None for the same reason as
+    NoParseableCandidateError above: this is not "nothing newer
+    upstream," it is "nothing RELEASE-grade upstream," a different,
+    equally permanent and deterministic per-pin fact with a different
+    remedy (wait for the author to publish a release; a human bump
+    cannot fix it, unlike NoParseableCandidateError's pins)."""
 
 
 @dataclass(frozen=True)
@@ -175,11 +207,24 @@ def resolve_latest_compatible_version(mod_id, *, game_version, loader, fetcher):
     the public pack ahead of its own eventual full release
     (MINECRAFT-362 review).
 
-    Raises CompatResolutionError -- a distinct outcome from returning
-    None -- if at least one otherwise-compatible RELEASE entry existed
-    but none had a parseable version_number after normalization: that is
-    an unexpected/reportable failure, not "upstream genuinely has nothing
-    newer" (which is the only case `None` means).
+    `None` means ONLY "no entry declaring (game_version, loader)
+    compatibility exists at all for this project" -- genuinely nothing
+    upstream to consider. Two related-but-distinct situations instead
+    raise their own exception (MINECRAFT-362 review, tenth round: a
+    prior round made the first of these distinct from `None`, but wired
+    it to the wrong outcome class on the caller side -- see
+    scripts/poll-mod-updates.py's EXPECTED_GAP_OUTCOMES):
+
+    - `NoParseableCandidateError`: at least one compatible RELEASE entry
+      exists, but none had a parseable version_number after
+      normalization -- a permanent, deterministic per-pin property
+      (some other, undocumented version scheme), not "nothing newer."
+    - `OnlyPrereleaseAvailableError`: at least one compatible entry
+      exists, but every one has `version_type != "release"` -- this
+      project has never published a release-grade build for this
+      (game_version, loader), also permanent and deterministic, and
+      with a different remedy than the above (nothing a human bump can
+      fix; only the mod author publishing a release helps).
     """
     versions_json = fetch_project_versions(mod_id, game_version=game_version, loader=loader, fetcher=fetcher)
     if not isinstance(versions_json, list):
@@ -188,14 +233,19 @@ def resolve_latest_compatible_version(mod_id, *, game_version, loader, fetcher):
     best = None
     best_normalized = None
     unparsable_count = 0
+    prerelease_only_count = 0
     for entry in versions_json:
         if not isinstance(entry, dict):
-            continue
-        if entry.get("version_type") != "release":
             continue
         if game_version not in (entry.get("game_versions") or ()):
             continue
         if loader not in (entry.get("loaders") or ()):
+            continue
+        # Compatible by (game_version, loader) from here on -- now check
+        # version_type, so a prerelease-only project can be told apart
+        # from a project with no compatible entry at all.
+        if entry.get("version_type") != "release":
+            prerelease_only_count += 1
             continue
         candidate = version_candidate_from_json(entry)
         if candidate is None or not candidate.version_number:
@@ -208,13 +258,20 @@ def resolve_latest_compatible_version(mod_id, *, game_version, loader, fetcher):
             best = candidate
             best_normalized = normalized
 
-    if best is None and unparsable_count > 0:
-        raise CompatResolutionError(
+    if best is not None:
+        return best
+    if unparsable_count > 0:
+        raise NoParseableCandidateError(
             f"{unparsable_count} compatible release version(s) for {mod_id} exist but none had "
             "a parseable version_number after stripping any leading game-version/loader "
             "component -- refusing to report this as 'nothing newer upstream'"
         )
-    return best
+    if prerelease_only_count > 0:
+        raise OnlyPrereleaseAvailableError(
+            f"{prerelease_only_count} compatible version(s) for {mod_id} exist but none has "
+            "version_type == 'release' -- refusing to report this as 'nothing newer upstream'"
+        )
+    return None
 
 
 _BREAKING_RE = re.compile(r"^#{1,6}\s*breaking\b", re.IGNORECASE | re.MULTILINE)

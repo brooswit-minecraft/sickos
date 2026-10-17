@@ -125,6 +125,14 @@ EXCLUDED_PIN_PATHS = frozenset()
 EXPECTED_GAP_OUTCOMES = frozenset({
     "unsupported_version_scheme", "breaking_change_requires_human_review",
     "downgrade_refused", "dependency_conflict",
+    # Both added tenth round: each is a permanent, deterministic per-pin
+    # property raised by modrinth_compat.resolve_latest_compatible_version
+    # itself (NoParseableCandidateError / OnlyPrereleaseAvailableError),
+    # not the TRUE catch-all CompatResolutionError class -- see
+    # modrinth_compat.py's own docstrings on those two exceptions, and
+    # the comment on "resolution_failed" below for why that one stays
+    # OUT of this set.
+    "no_parseable_candidate", "only_prerelease_available",
 })
 
 # The 4 projects individually confirmed (by a live, read-only, authorized
@@ -143,35 +151,48 @@ KNOWN_ANONYMOUS_404_MOD_IDS = frozenset({
     "srLLPzF8",  # Dynamic Vehicles
 })
 
-# The 6 pins individually confirmed (same live check) to have a
-# currently-pinned version_number that is not valid semver, so
-# bump_mod.run_engine's no-downgrade comparator can never evaluate them --
-# they always land on "unsupported_version_scheme" regardless of what
-# resolves. Named here (not only in docs) purely so main()'s standing
-# reminder notice (see below) can name them even on a run whose loop
-# never reaches them -- see this module's docstring for why one-bump-
-# per-run means most runs never reach most pins. A SNAPSHOT, same caveat
-# as KNOWN_ANONYMOUS_404_MOD_IDS above: if a human bumps one of these 6
-# pins to a parseable semver version (e.g. via scripts/bump_mod.py's
-# CLI), this list goes stale for that pin and should be updated, not
-# trusted as still-accurate indefinitely.
+# The following three lists are a SNAPSHOT from a live, read-only check
+# of all 78 eligible pins (same caveat as KNOWN_ANONYMOUS_404_MOD_IDS
+# above): if a human bumps a pin, or its upstream project publishes a
+# release, the corresponding entry goes stale and should be updated, not
+# trusted as still-accurate indefinitely. They exist (not only in docs)
+# purely so main()'s standing reminder notice (see below) can name these
+# pins even on a run whose loop never reaches them -- see this module's
+# docstring for why one-bump-per-run means most runs never reach most
+# pins. MINECRAFT-362 review, tenth round: a single list here previously
+# conflated three outcomes with different code paths and different
+# remedies -- a live check found the 12 pins it named actually split
+# three ways (3 / 5 / 4), and 2 of those (Xaero's Minimap/World Map) had
+# already been fixed by the ninth round's resolver normalization and
+# should not have been listed at all.
+
+# 3 pins: a real candidate DOES resolve, but the no-downgrade check
+# (bump_mod.run_engine, via decide_update) cannot compare it against
+# this pin's own unparsable pinned version -- outcome
+# "unsupported_version_scheme". Needs a human bump to a parseable
+# version.
 KNOWN_NON_SEMVER_PIN_NAMES = (
-    # MINECRAFT-362 review, ninth round: a live check of all 74 pins that
-    # resolve anonymously found 15 with a pinned version_number that
-    # fails parse_semver, not the 6 previously named here -- Cristel Lib
-    # and Xaero's Minimap/World Map were in that 15, but all three use
-    # exactly the "<loader>-<game_version>-<mod_version>" (or "<game_
-    # version>-<loader>-<mod_version>") scheme this round's resolver/
-    # decide_update normalization fix (strip_known_version_prefixes) now
-    # handles, so they are NOT listed here -- they resolve and compare
-    # correctly now. The other 9 (7 new here, 2 already present) use
-    # genuinely non-semver schemes this document does not attempt to
-    # parse (extra components, a leading "v", etc.) and remain real gaps.
     "Create: Easy Structures (z69Pxatv)", "Geophilic (hl5OLM95)",
-    "IceAndFire Community Edition (VpmCsizY)", "Quark (qnQsVE2z)", "Zeta (MVARlG2f)",
-    "Biomes O' Plenty (HXF82T3G)", "Create: Dynamic Village (YCPmkFAm)",
+    "IceAndFire Community Edition (VpmCsizY)",
+)
+
+# 5 pins: modrinth_compat.resolve_latest_compatible_version itself raises
+# NoParseableCandidateError -- compatible RELEASE entries exist, but none
+# parses as semver even after normalization (some other, undocumented
+# version scheme). Needs a human bump, or a comparator this document
+# does not attempt.
+KNOWN_NO_PARSEABLE_CANDIDATE_PIN_NAMES = (
+    "Quark (qnQsVE2z)", "Zeta (MVARlG2f)", "Create: Dynamic Village (YCPmkFAm)",
     "Create: Pillager Arise (VT2rW2wr)", "Dungeons and Taverns (tpehi7ww)",
-    "GlitchCore (s3dmwKy5)", "Serene Seasons (e0bNACJD)", "TerraBlender (kkmrDlKT)",
+)
+
+# 4 pins: resolve_latest_compatible_version raises OnlyPrereleaseAvailableError
+# -- compatible entries exist, but every one is a beta/alpha, never a
+# release, for this (game_version, loader). A human bump cannot fix
+# this; only the mod author publishing a release build does.
+KNOWN_ONLY_PRERELEASE_PIN_NAMES = (
+    "Biomes O' Plenty (HXF82T3G)", "GlitchCore (s3dmwKy5)",
+    "Serene Seasons (e0bNACJD)", "TerraBlender (kkmrDlKT)",
 )
 
 
@@ -259,6 +280,20 @@ def poll_and_bump(repo_root, *, token=None, fetcher=None, run_command=subprocess
             candidate = modrinth_compat.resolve_latest_compatible_version(
                 pin.mod_id, game_version=game_version, loader=loader, fetcher=fetcher,
             )
+        # Order matters: both subclasses must be caught before the base
+        # CompatResolutionError, which stays the catch-all for anything
+        # else (MINECRAFT-362 review, tenth round -- a prior round raised
+        # the first of these as the bare base class, which this script
+        # then surfaced as "resolution_failed", landing it in the one
+        # outcome EXPECTED_GAP_OUTCOMES does NOT unconditionally exempt).
+        except modrinth_compat.NoParseableCandidateError as error:
+            outcome.update(outcome="no_parseable_candidate", changed=False, error=str(error))
+            outcomes.append(outcome)
+            continue
+        except modrinth_compat.OnlyPrereleaseAvailableError as error:
+            outcome.update(outcome="only_prerelease_available", changed=False, error=str(error))
+            outcomes.append(outcome)
+            continue
         except modrinth_compat.CompatResolutionError as error:
             outcome.update(outcome="resolution_failed", changed=False, error=str(error))
             outcomes.append(outcome)
@@ -355,8 +390,14 @@ def main(argv=None):
         "docs/mod-auto-bump.md's Status section): "
         f"{len(KNOWN_ANONYMOUS_404_MOD_IDS)} pins need MODRINTH_TOKEN to resolve anonymously "
         f"({', '.join(sorted(KNOWN_ANONYMOUS_404_MOD_IDS))}); "
-        f"{len(KNOWN_NON_SEMVER_PIN_NAMES)} pins have a non-semver pinned version and need a "
-        f"human bump ({', '.join(KNOWN_NON_SEMVER_PIN_NAMES)})."
+        f"{len(KNOWN_NON_SEMVER_PIN_NAMES)} pins have a non-semver PINNED version and need a "
+        f"human bump ({', '.join(KNOWN_NON_SEMVER_PIN_NAMES)}); "
+        f"{len(KNOWN_NO_PARSEABLE_CANDIDATE_PIN_NAMES)} pins have no parseable CANDIDATE on "
+        f"Modrinth and need a human bump or a different comparator "
+        f"({', '.join(KNOWN_NO_PARSEABLE_CANDIDATE_PIN_NAMES)}); "
+        f"{len(KNOWN_ONLY_PRERELEASE_PIN_NAMES)} pins have never published a release build for "
+        f"this target and need the mod author to publish one, not a human bump "
+        f"({', '.join(KNOWN_ONLY_PRERELEASE_PIN_NAMES)})."
     )
 
     failed = [o for o in outcomes if o["outcome"] not in
