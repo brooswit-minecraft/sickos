@@ -490,6 +490,12 @@ and recovery after a partial failure -- is documented in
 
 ### Automated Dynamic Atmosphere bumps
 
+This is the first (and so far only live) instance of a generalized
+"a managed mod's verified release updates the pack" automation; see
+[docs/mod-auto-bump.md](docs/mod-auto-bump.md) for the design shared
+across any enrolled mod and an honest list of what is and is not
+implemented yet.
+
 `.github/workflows/da-auto-bump.yml` triggers on a `repository_dispatch`
 sent by Dynamic Atmosphere's own release workflow (`event_type:
 dynamic-atmosphere-released`), runs `scripts/bump-dynamic-atmosphere.py`

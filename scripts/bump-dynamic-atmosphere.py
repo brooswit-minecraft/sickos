@@ -17,8 +17,12 @@ import sys
 import tempfile
 import tomllib
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import modrinth_metadata  # noqa: E402 - needs sys.path set up first
 
 USER_AGENT = "brooswit-minecraft/sickos (SICKOS-75 DA auto-bump engine)"
 DA_MOD_ID = "PZV7RorC"
@@ -167,68 +171,14 @@ def validate_payload(payload):
 
 # --------------------------------------------------------------------------
 # Semver-with-prerelease comparison for DA version strings like
-# "0.19.0-alpha.1". Standard semver precedence (see semver.org #11):
-#   - compare (major, minor, patch) numerically first;
-#   - a version WITH a prerelease suffix is OLDER than the same numeric
-#     triple with no suffix;
-#   - otherwise compare prerelease identifiers left to right, split on '.':
-#     a numeric identifier compares numerically, an alphanumeric identifier
-#     compares lexically (ASCII), a numeric identifier is always older than
-#     an alphanumeric one, and if all shared identifiers are equal, the
-#     prerelease with MORE identifiers is newer.
-# Build metadata (a "+..." suffix) is not used by this pack's DA versions
-# and is intentionally ignored for ordering if present, per semver's own
-# rule that build metadata never affects precedence.
+# "0.19.0-alpha.1". The actual comparator lives in semver_compare.py,
+# shared with the generalized multi-mod resolver (MINECRAFT-362) so there
+# is one implementation of "is this a downgrade?", not two that could
+# drift. Re-exported here under their original names so this module's
+# existing callers and tests are unaffected.
 # --------------------------------------------------------------------------
 
-_SEMVER_RE = re.compile(
-    r"^(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)"
-    r"(?:-(?P<prerelease>[0-9A-Za-z.-]+))?"
-    r"(?:\+[0-9A-Za-z.-]+)?$"
-)
-
-
-def parse_semver(version):
-    match = _SEMVER_RE.match(version)
-    if not match:
-        return None
-    core = (int(match.group("major")), int(match.group("minor")), int(match.group("patch")))
-    prerelease = match.group("prerelease")
-    identifiers = tuple(prerelease.split(".")) if prerelease else None
-    return core, identifiers
-
-
-def _identifier_key(identifier):
-    return (0, int(identifier)) if identifier.isdigit() else (1, identifier)
-
-
-def compare_semver(left, right):
-    """Return -1, 0, or 1 comparing two version strings. Raises ValueError if unparsable."""
-    left_parsed = parse_semver(left)
-    right_parsed = parse_semver(right)
-    if left_parsed is None or right_parsed is None:
-        raise ValueError(f"cannot compare non-semver version(s): {left!r}, {right!r}")
-
-    left_core, left_pre = left_parsed
-    right_core, right_pre = right_parsed
-    if left_core != right_core:
-        return -1 if left_core < right_core else 1
-
-    if left_pre is None and right_pre is None:
-        return 0
-    if left_pre is None:
-        return 1
-    if right_pre is None:
-        return -1
-
-    for left_id, right_id in zip(left_pre, right_pre):
-        left_key = _identifier_key(left_id)
-        right_key = _identifier_key(right_id)
-        if left_key != right_key:
-            return -1 if left_key < right_key else 1
-    if len(left_pre) != len(right_pre):
-        return -1 if len(left_pre) < len(right_pre) else 1
-    return 0
+from semver_compare import parse_semver, compare_semver  # noqa: E402 - needs sys.path set up first
 
 
 # --------------------------------------------------------------------------
@@ -516,6 +466,73 @@ def fetch_release_body(github_release_url, override_path):
 
 
 # --------------------------------------------------------------------------
+# Independent integrity gate (AC3): the dispatch payload is untrusted input,
+# so its sha1/sha512/url are NOT accepted on their own authority. They must
+# match the file entry Modrinth itself publishes for the resolved version
+# (GET /v2/version/{id}), and the downloaded jar must match that entry too.
+# Any mismatch, missing entry, non-200 or transport failure (including a
+# project Modrinth does not serve anonymously) fails closed before any repo
+# file is written. An optional MODRINTH_TOKEN in the environment is sent as
+# the Authorization header, for the day the project is only readable
+# with a token; it is never logged or written anywhere.
+# --------------------------------------------------------------------------
+
+# Captured once by main() and REMOVED from os.environ, so the make/packwiz/git
+# subprocesses the gates spawn never inherit it. Only the metadata lookup below
+# (api.modrinth.com) ever sees it.
+_MODRINTH_TOKEN = None
+
+
+def fetch_modrinth_version_metadata(version_id):
+    url = f"https://api.modrinth.com/v2/version/{urllib.parse.quote(version_id, safe='')}"
+    headers = {"User-Agent": USER_AGENT}
+    token = _MODRINTH_TOKEN
+    if token:
+        headers["Authorization"] = token
+    request = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return json.loads(response.read())
+
+
+def verify_against_modrinth_metadata(payload, fetcher):
+    """Return the matched Modrinth file entry, or raise EngineError (fail closed).
+
+    The actual identity/hash checks live in modrinth_metadata.py, shared
+    with the generalized multi-mod resolver (MINECRAFT-362) so there is one
+    implementation of this gate, not two that could drift.
+    """
+    version_id = payload["modrinth_version_id"]
+
+    def refuse(reason):
+        raise EngineError(
+            EXIT_INTEGRITY_FAILURE, "integrity_failure",
+            f"Modrinth version metadata check failed for {version_id}: {reason}",
+        )
+
+    try:
+        metadata = fetcher(version_id)
+    except urllib.error.HTTPError as error:
+        refuse(f"metadata lookup returned HTTP {error.code} (a project Modrinth does not "
+               "serve to this caller cannot be verified, so the bump is refused)")
+    except Exception as error:  # noqa: BLE001 - any lookup failure fails closed
+        refuse(f"metadata lookup failed: {error!r}")
+
+    try:
+        return modrinth_metadata.verify_version_file_metadata(
+            metadata,
+            expected_version_id=version_id,
+            expected_project_id=DA_MOD_ID,
+            expected_version_number=payload["version"],
+            expected_file_name=payload["file_name"],
+            expected_sha512=payload["sha512"],
+            expected_sha1=payload["sha1"],
+            expected_download_url=payload["download_url"],
+        )
+    except modrinth_metadata.MetadataVerificationError as error:
+        refuse(str(error))
+
+
+# --------------------------------------------------------------------------
 # AC8: Modrinth vouch check. Never fails the run or changes the exit code --
 # so the whole check, including reading the control mod's pin file, is
 # wrapped: ANY exception (a transport failure urllib does not wrap in
@@ -799,7 +816,7 @@ def assert_only_da_pin_changed_under_mods(repo_root, run_command=subprocess.run)
 
 def run_engine(repo_root, payload_raw, *, release_body_override=None,
                 downloader=default_downloader, run_command=subprocess.run,
-                gate_commands=None):
+                gate_commands=None, metadata_fetcher=None):
     repo_root = Path(repo_root)
     assert_restore_targets_clean(repo_root, run_command=run_command)
     payload = validate_payload(payload_raw)
@@ -877,6 +894,7 @@ def run_engine(repo_root, payload_raw, *, release_body_override=None,
                 "own section of the DA GitHub release body",
             )
 
+    verify_against_modrinth_metadata(payload, metadata_fetcher or fetch_modrinth_version_metadata)
     download_and_verify(payload["download_url"], payload["sha1"], payload["sha512"], downloader)
 
     vouch = run_vouch_check(repo_root, payload["sha512"])
@@ -981,6 +999,9 @@ def main(argv=None):
     parser.add_argument("--release-body", default=None,
                          help="local file to use instead of fetching the GitHub release body")
     args = parser.parse_args(argv)
+
+    global _MODRINTH_TOKEN
+    _MODRINTH_TOKEN = os.environ.pop("MODRINTH_TOKEN", None) or None
 
     with open(args.payload, "r", encoding="utf-8") as handle:
         payload_raw = json.load(handle)

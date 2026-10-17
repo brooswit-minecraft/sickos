@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.error
 from unittest import mock
 
 
@@ -138,12 +139,36 @@ def make_downloader(content):
     return downloader
 
 
+# Honest Modrinth version metadata, keyed by version id, registered by make_payload()
+# so every test's payload verifies unless a test deliberately overrides its entry.
+MODRINTH_METADATA = {}
+
+
+def modrinth_metadata_for(payload, *, project_id="PZV7RorC", version_id=None):
+    return {
+        "id": version_id or payload["modrinth_version_id"],
+        "project_id": project_id,
+        "version_number": payload["version"],
+        "files": [{
+            "filename": payload["file_name"],
+            "url": payload["download_url"],
+            "hashes": {"sha1": payload["sha1"], "sha512": payload["sha512"]},
+        }],
+    }
+
+
+def fake_modrinth_fetch(version_id):
+    if version_id not in MODRINTH_METADATA:
+        raise urllib.error.HTTPError("https://api.modrinth.com/v2/version/x", 404, "Not Found", {}, None)
+    return MODRINTH_METADATA[version_id]
+
+
 def make_payload(*, version="0.20.0-alpha.1", modrinth_version_id="NEWID5678",
                   content=b"new da jar contents", category="minor",
                   download_url=None, file_name=None, sha1=None, sha512=None):
     content_sha1 = hashlib.sha1(content).hexdigest() if sha1 is None else sha1
     content_sha512 = hashlib.sha512(content).hexdigest() if sha512 is None else sha512
-    return {
+    payload = {
         "version": version,
         "modrinth_version_id": modrinth_version_id,
         "sha1": content_sha1,
@@ -153,6 +178,8 @@ def make_payload(*, version="0.20.0-alpha.1", modrinth_version_id="NEWID5678",
         "category": category,
         "github_release_url": f"https://github.com/brooswit-minecraft/dynamic-atmosphere/releases/tag/v{version}",
     }
+    MODRINTH_METADATA[modrinth_version_id] = modrinth_metadata_for(payload)
+    return payload
 
 
 def stub_vouch(control_status, da_status):
@@ -165,6 +192,10 @@ def stub_vouch(control_status, da_status):
 
 class EngineTestCase(unittest.TestCase):
     def setUp(self):
+        MODRINTH_METADATA.clear()
+        patcher = mock.patch.object(bump, "fetch_modrinth_version_metadata", side_effect=fake_modrinth_fetch)
+        self.fetch_mock = patcher.start()
+        self.addCleanup(patcher.stop)
         self.repo = build_fixture_repo()
         self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
 
@@ -796,3 +827,150 @@ class TestSharedContractFixture(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestModrinthMetadataGate(EngineTestCase):
+    """AC3: the payload is verified against Modrinth's own version-file metadata, fail closed."""
+
+    CONTENT = b"metadata gate jar"
+
+    def attempt(self, payload, expect_code=None):
+        before = self.porcelain()
+        with self.assertRaises(bump.EngineError) as ctx:
+            self.run_engine(payload, content=self.CONTENT)
+        self.assertEqual(ctx.exception.exit_code, bump.EXIT_INTEGRITY_FAILURE)
+        self.assertEqual(self.porcelain(), before)
+        self.assertFalse((self.repo / "docs" / "releases").exists())
+        return ctx.exception.message
+
+    def test_matching_metadata_bumps(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        summary, exit_code, _ = self.run_engine(payload, content=self.CONTENT)
+        self.assertEqual(exit_code, bump.EXIT_OK)
+        self.assertTrue(summary["changed"])
+        self.fetch_mock.assert_called_once_with(payload["modrinth_version_id"])
+
+    def test_payload_sha512_differs_from_modrinth_fails_closed(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        MODRINTH_METADATA[payload["modrinth_version_id"]]["files"][0]["hashes"]["sha512"] = "e" * 128
+        self.assertIn("sha512", self.attempt(payload))
+
+    def test_payload_sha1_differs_from_modrinth_fails_closed(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        MODRINTH_METADATA[payload["modrinth_version_id"]]["files"][0]["hashes"]["sha1"] = "e" * 40
+        self.assertIn("sha1", self.attempt(payload))
+
+    def test_payload_and_download_agree_but_modrinth_differs_fails_closed(self):
+        # A forged payload whose hashes match the (attacker-served) bytes it points at.
+        payload = make_payload(category="patch", content=b"forged bytes")
+        MODRINTH_METADATA[payload["modrinth_version_id"]] = modrinth_metadata_for(
+            make_payload(category="patch", content=b"the real released jar",
+                         modrinth_version_id="OTHERID99")
+            | {"modrinth_version_id": payload["modrinth_version_id"]}
+        )
+        self.attempt_forged(payload)
+
+    def attempt_forged(self, payload):
+        before = self.porcelain()
+        with self.assertRaises(bump.EngineError) as ctx:
+            self.run_engine(payload, content=b"forged bytes")
+        self.assertEqual(ctx.exception.exit_code, bump.EXIT_INTEGRITY_FAILURE)
+        self.assertEqual(self.porcelain(), before)
+
+    def test_download_url_differs_from_modrinth_fails_closed(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        MODRINTH_METADATA[payload["modrinth_version_id"]]["files"][0]["url"] = "https://evil.example/x.jar"
+        self.assertIn("url", self.attempt(payload))
+
+    def test_wrong_project_fails_closed(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        MODRINTH_METADATA[payload["modrinth_version_id"]]["project_id"] = "SOMEOTHER"
+        self.assertIn("project_id", self.attempt(payload))
+
+    def test_forged_older_bytes_labelled_as_newer_version_fails_closed(self):
+        # Valid, genuinely published OLDER release (hashes, url, file all real) presented
+        # under a NEWER payload version string: version_number must equal payload.version.
+        payload = make_payload(version="0.21.0-alpha.1", category="patch", content=self.CONTENT)
+        MODRINTH_METADATA[payload["modrinth_version_id"]]["version_number"] = "0.20.0-alpha.1"
+        message = self.attempt(payload)
+        self.assertIn("version_number", message)
+        self.assertIn("0.20.0-alpha.1", message)
+
+    def test_metadata_without_version_number_fails_closed(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        del MODRINTH_METADATA[payload["modrinth_version_id"]]["version_number"]
+        self.assertIn("version_number", self.attempt(payload))
+
+    def test_metadata_version_id_mismatch_fails_closed(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        MODRINTH_METADATA[payload["modrinth_version_id"]]["id"] = "DIFFERENT"
+        self.assertIn("does not match", self.attempt(payload))
+
+    def test_no_file_with_payload_name_fails_closed(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        MODRINTH_METADATA[payload["modrinth_version_id"]]["files"][0]["filename"] = "other.jar"
+        self.assertIn("exactly one file", self.attempt(payload))
+
+    def test_lookup_404_private_project_fails_closed(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        del MODRINTH_METADATA[payload["modrinth_version_id"]]
+        self.assertIn("HTTP 404", self.attempt(payload))
+
+    def test_lookup_transport_error_fails_closed(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        self.fetch_mock.side_effect = OSError("network down")
+        self.assertIn("lookup failed", self.attempt(payload))
+
+    def test_already_pinned_noop_makes_no_metadata_lookup(self):
+        payload = make_payload(
+            version="0.19.0-alpha.1", modrinth_version_id=OLD_VERSION_ID,
+            content=b"x", sha1="0" * 40, sha512=OLD_DA_HASH,
+        )
+        summary, exit_code, _ = self.run_engine(payload)
+        self.assertEqual(summary["outcome"], "already_pinned")
+        self.fetch_mock.assert_not_called()
+
+
+class TestMetadataFetcherAuth(unittest.TestCase):
+    def fetch(self, version_id, token):
+        captured = {}
+
+        class Resp:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): return b"{}"
+
+        def fake_urlopen(request, timeout=0):
+            captured["url"] = request.full_url
+            captured["auth"] = request.get_header("Authorization")
+            return Resp()
+
+        with mock.patch.object(bump.urllib.request, "urlopen", fake_urlopen), \
+                mock.patch.object(bump, "_MODRINTH_TOKEN", token):
+            bump.fetch_modrinth_version_metadata(version_id)
+        return captured
+
+    def test_token_sent_only_when_set_and_version_id_is_quoted(self):
+        captured = self.fetch("a/b", None)
+        self.assertIsNone(captured["auth"])
+        self.assertTrue(captured["url"].endswith("/v2/version/a%2Fb"))
+        self.assertEqual(self.fetch("abc", "tok")["auth"], "tok")
+
+    def test_main_removes_token_from_environment_before_gates_run(self):
+        seen = {}
+
+        def fake_run_engine(repo_root, payload_raw, **kwargs):
+            seen["env_token"] = bump.os.environ.get("MODRINTH_TOKEN")
+            seen["module_token"] = bump._MODRINTH_TOKEN
+            return {"changed": False}, bump.EXIT_OK, "ok"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            payload_path = Path(tmp) / "p.json"
+            payload_path.write_text("{}", encoding="utf-8")
+            with mock.patch.dict(bump.os.environ, {"MODRINTH_TOKEN": "secret-tok"}), \
+                    mock.patch.object(bump, "run_engine", fake_run_engine), \
+                    mock.patch.object(bump, "_MODRINTH_TOKEN", None):
+                self.assertEqual(bump.main(["--payload", str(payload_path), "--repo-root", tmp]), bump.EXIT_OK)
+                self.assertNotIn("MODRINTH_TOKEN", bump.os.environ)
+        self.assertIsNone(seen["env_token"])
+        self.assertEqual(seen["module_token"], "secret-tok")

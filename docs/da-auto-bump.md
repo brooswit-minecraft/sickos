@@ -72,7 +72,7 @@ these environment variables to build.
 | 0 | `EXIT_OK` | Success: either a clean bump was prepared and staged, or the payload's version was already pinned (a clean no-op). Check the summary's `changed`/`outcome` fields to tell which. |
 | 1 | *(none)* | An unhandled exception. Always a bug in this script; never a designed outcome. |
 | 2 | `EXIT_INVALID_PAYLOAD` | The payload failed validation (see "Payload validation" below). No file was touched. |
-| 3 | `EXIT_INTEGRITY_FAILURE` | The downloaded jar's sha1 or sha512 did not match the payload, or the download itself failed. No repo file was touched; the temp jar is always deleted. |
+| 3 | `EXIT_INTEGRITY_FAILURE` | The payload's sha1/sha512/url/filename did not match the file entry Modrinth publishes for the version (`GET /v2/version/{id}`; non-200, transport error, wrong project or missing entry all count), or the downloaded jar's sha1 or sha512 did not match, or the download itself failed. No repo file was touched; the temp jar is always deleted. |
 | 4 | `EXIT_DOWNGRADE_REFUSED` | The payload's DA version is older than the currently pinned version. No file was touched. |
 | 5 | `EXIT_ANOMALY` | Either (a) the payload's `modrinth_version_id` matches the pinned one but the sha512 differs, or (b) the payload's version string equals the pinned version string but the `modrinth_version_id` differs. Both are refused rather than silently resolved. No file was touched. |
 | 6 | `EXIT_GATE_FAILURE` | `make refresh`, `make check`, or `make build` failed. The repo is restored to its pre-run state (see "Fail-closed restore" below). |
@@ -240,12 +240,48 @@ For the two default-to-minor cases, the notes file explicitly states that
 the category was missing or unrecognised and that minor was used as the
 default -- never silently.
 
+## Independent Modrinth metadata gate
+
+The dispatch payload is untrusted, so its hashes are not accepted on their
+own authority. Before downloading, the engine fetches
+`https://api.modrinth.com/v2/version/<modrinth_version_id>` and requires:
+`id` equals the payload's `modrinth_version_id`; `project_id` is
+`PZV7RorC`; `version_number` equals the payload's `version` (the
+version that drives the downgrade check and the release notes); exactly one file has the payload's `file_name`; and that
+file's `hashes.sha512`, `hashes.sha1` and `url` equal the payload's. The
+downloaded jar is then hashed and must match too. Any failure (including
+HTTP 404 or a transport error) is `EXIT_INTEGRITY_FAILURE` and nothing in
+the repo is touched. The "vouch check" below stays informational only.
+
+**Authenticated access.** The workflow passes the repository's existing
+`MODRINTH_TOKEN` secret (the one `release.yml` already uses; no secret is
+added or changed) to the engine step only. The engine sends it solely as the
+`Authorization` header of the `api.modrinth.com` metadata request, and
+removes it from its own environment before it runs `make`/packwiz/git, so no
+other subprocess inherits it. It is never logged or written. **Unverified:**
+whether that token can read DA project `PZV7RorC` has not been tested (live
+runs are held). If it cannot, the gate returns `EXIT_INTEGRITY_FAILURE`
+(HTTP 401/403/404) and refuses the bump rather than trusting the payload. With
+no token (for example a local run) and the project private, the same
+refusal happens.
+
 ## Pin write
 
 The DA pin (`mods/dynamic-atmosphere.pw.toml`) is rewritten directly from
 the payload with a small hand-written TOML emitter (`render_da_pin()`) --
-never via `packwiz update`, because DA's Modrinth project (`PZV7RorC`) is
-not publicly listed and packwiz cannot resolve it through the API. Every
+never via `packwiz update`. Concrete conflict (checked 2026-10-15):
+anonymous `GET /v2/project/PZV7RorC`, `GET /v2/version/<pinned id>` and
+`GET /v2/version_file/<pinned sha512>` all return 404, and `packwiz update`
+resolves a mod only through that API and can only move to the latest
+version, not to the version a dispatch names. packwiz still validates the
+result: `make refresh`, `make check` and `make build` run packwiz over the
+rewritten pin before anything is committed. Re-evaluate using `packwiz
+update` once the project is publicly resolvable.
+This direct-pin write, backed by the metadata gate above, is the accepted
+alternative to the literal `packwiz update` requirement -- an engineering
+implementation decision for MINECRAFT-362 (see `docs/mod-auto-bump.md`'s
+"Direct-pin vs. `packwiz update`" section for the generalized rationale
+that applies to any enrolled mod, not only DA). Every
 string value is TOML-escaped. `name` and `side` are preserved from the
 existing pin; `filename`, `download.url`, `download.hash` (with
 `hash-format` fixed at `sha512`), and `update.modrinth.version` come from
