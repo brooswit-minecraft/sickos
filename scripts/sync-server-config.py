@@ -121,6 +121,24 @@ def config_candidates(root, world):
 
 
 def resolve_config_path(sftp, root, world):
+    """The per-world serverconfig/ path wins whenever it exists, regardless of its
+    content (even a bare configVersion-only stub DA has not populated yet).
+
+    This is not a heuristic -- it is DA's own documented runtime behavior.
+    DynamicAtmosphereServerConfig is registered as ModConfig.Type.SERVER;
+    DynamicAtmosphereMod's own comment (confirmed there by decompiling NeoForge
+    21.1's ServerLifecycleHooks.class) states that on server start,
+    ServerLifecycleHooks.handleServerAboutToStart calls
+    ConfigTracker.loadConfigs(SERVER, globalConfigDir, worldServerConfigDir): once a
+    per-world override directory holds a file for a SERVER-type config, NeoForge
+    loads and actively uses THAT file for the running world, not the global
+    config/ copy. The global file only still matters for a world that has never
+    had a per-world override created (the single-candidate case below is
+    unaffected). Patching a freshly-created, not-yet-populated per-world stub is
+    correct, not merely safe: patch_toml() already fills in any managed section/
+    key that's missing, which is exactly how that file should end up fully
+    populated for THIS world going forward.
+    """
     existing = []
     for candidate in config_candidates(root, world):
         try:
@@ -130,6 +148,8 @@ def resolve_config_path(sftp, root, world):
         if not stat.S_ISREG(mode):
             raise ValueError("Dynamic Atmosphere config candidate is not a regular file")
         existing.append(candidate)
+    if len(existing) == 2:
+        return existing[1]  # per-world path, per config_candidates()'s own ordering
     if len(existing) != 1:
         raise ValueError("Expected exactly one Dynamic Atmosphere server config candidate")
     return existing[0]
