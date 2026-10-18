@@ -578,6 +578,76 @@ class TestRealPackwizDryRun(EngineTestCase):
         self.assertEqual(summary["outcome"], "bumped")
 
 
+class TestRuntimeCompatibilityCheck(EngineTestCase):
+    """MINECRAFT-362 review, twenty-second review round, required item:
+    scripts/dependency_closure_check.py deliberately never fails a
+    platform (minecraft/neoforge/...) requirement mismatch -- it is only
+    NOTED, since an upper-bound mismatch routinely still loads. A
+    LOWER-bound mismatch is different: a jar built against a NEWER
+    NeoForge than this pack pins will not load at all, and nothing else
+    checks this (modrinth_compat resolves compatibility only at
+    Modrinth's (game_version, loader) NAME granularity, never a loader
+    VERSION). check_runtime_compatibility_or_die closes this, called
+    right after download_and_verify with the SAME verified jar bytes --
+    no re-download, no stubbed gate needed, since this runs in-process,
+    not as a subprocess gate. build_fixture_repo's own pack.toml pins
+    `neoforge = "21.1.250"`."""
+
+    def test_candidate_jar_requiring_a_newer_neoforge_fails_closed(self):
+        jar_bytes = _build_neoforge_jar("examplemod", "1.1.0", requires=[("neoforge", "[21.2,)")])
+        candidate = make_candidate(
+            content=jar_bytes, file_name="examplemod-1.1.0.jar",
+            sha1=hashlib.sha1(jar_bytes).hexdigest(), sha512=hashlib.sha512(jar_bytes).hexdigest(),
+        )
+        self.register(candidate.version_id, metadata_for(candidate))
+        self.register(OLD_VERSION_ID, {"id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0"})
+        pin = make_pin()
+
+        before = self.porcelain()
+        with self.assertRaises(bump_mod.EngineError) as ctx:
+            self.run_engine(pin, candidate, content=jar_bytes)
+        self.assertEqual(ctx.exception.exit_code, bump_mod.EXIT_CONFIG_ERROR)
+        self.assertEqual(ctx.exception.outcome, "runtime_incompatible")
+        self.assertIn("neoforge", ctx.exception.message)
+        self.assertIn("21.1.250", ctx.exception.message)
+        self.assertEqual(self.porcelain(), before)
+        self.assertFalse((self.repo / "docs" / "releases").exists() and
+                          any((self.repo / "docs" / "releases").iterdir()))
+
+    def test_candidate_jar_requiring_an_already_satisfied_neoforge_still_bumps(self):
+        jar_bytes = _build_neoforge_jar("examplemod", "1.1.0", requires=[("neoforge", "[21.1,)")])
+        candidate = make_candidate(
+            content=jar_bytes, file_name="examplemod-1.1.0.jar",
+            sha1=hashlib.sha1(jar_bytes).hexdigest(), sha512=hashlib.sha512(jar_bytes).hexdigest(),
+        )
+        self.register(candidate.version_id, metadata_for(candidate))
+        self.register(OLD_VERSION_ID, {"id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0"})
+        pin = make_pin()
+
+        summary, exit_code, _ = self.run_engine(pin, candidate, content=jar_bytes)
+        self.assertEqual(exit_code, bump_mod.EXIT_OK)
+        self.assertTrue(summary["changed"])
+
+    def test_candidate_jar_with_an_upper_bound_only_mismatch_still_bumps(self):
+        # The exact "noted, not failed" shape dependency_closure_check.py
+        # itself documents (Simple Clouds declares `minecraft
+        # [1.21,1.21.1)` and starts fine on 1.21.1): an UPPER bound below
+        # the pinned version must not fail closed, only a LOWER bound
+        # above it.
+        jar_bytes = _build_neoforge_jar("examplemod", "1.1.0", requires=[("minecraft", "[1.21,1.21.1)")])
+        candidate = make_candidate(
+            content=jar_bytes, file_name="examplemod-1.1.0.jar",
+            sha1=hashlib.sha1(jar_bytes).hexdigest(), sha512=hashlib.sha512(jar_bytes).hexdigest(),
+        )
+        self.register(candidate.version_id, metadata_for(candidate))
+        self.register(OLD_VERSION_ID, {"id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0"})
+        pin = make_pin()
+
+        summary, exit_code, _ = self.run_engine(pin, candidate, content=jar_bytes)
+        self.assertEqual(exit_code, bump_mod.EXIT_OK)
+        self.assertTrue(summary["changed"])
+
+
 class TestGateFailureRestoresRepo(EngineTestCase):
     def test_failing_check_gate_restores_repo(self):
         content = b"gate failure jar"
@@ -589,6 +659,11 @@ class TestGateFailureRestoresRepo(EngineTestCase):
         with self.assertRaises(bump_mod.EngineError) as ctx:
             self.run_engine(pin, candidate, content=content, gate_commands=FAILING_CHECK_GATES)
         self.assertEqual(ctx.exception.exit_code, bump_mod.EXIT_GATE_FAILURE)
+        # Anchors the OTHER half of the twenty-second-round split: a
+        # non-dependency_closure gate (here, `check`) still gets the
+        # generic "gate_failed" outcome, not the dependency_closure-only
+        # "dependency_closure_gate_failed".
+        self.assertEqual(ctx.exception.outcome, "gate_failed")
         self.assertEqual(self.porcelain(), before)
         self.assertFalse((self.repo / "docs" / "releases").exists() and
                           any((self.repo / "docs" / "releases").iterdir()))
@@ -660,7 +735,27 @@ class TestRealDependencyClosureGate(EngineTestCase):
     other-mod.pw.toml (OTHER_MOD_ID) stands in for a real "othermod"
     dependency; example-mod.pw.toml (MOD_ID) is bumped to a candidate
     whose real jar requires it at a version range the pinned "othermod"
-    jar version does or does not satisfy."""
+    jar version does or does not satisfy.
+
+    `refresh`/`check` also run the REAL packwiz binary (MINECRAFT-362
+    review, twenty-second round, smaller item (c) -- a prior round left
+    this gate's own test disjoint from `TestRealPackwizDryRun`, so the
+    checker never saw a packwiz-refreshed index): `packwiz refresh`
+    only reads each pin's own declared hash field and rewrites
+    `index.toml` from it, it does not download anything, so the
+    `file://` fixtures below work unmodified. `build` stays stubbed
+    (`true`): `packwiz modrinth export` tries to fetch every pin's
+    `download.url` for real, which these fixtures do not need to depend
+    on -- same reasoning `TestRealPackwizDryRun` already documents for
+    its own `build` gate. Skips (not fails) where packwiz is not
+    installed."""
+
+    PACKWIZ = _find_packwiz()
+
+    def setUp(self):
+        super().setUp()
+        if self.PACKWIZ is None:
+            self.skipTest("packwiz not installed; run `make tools` to enable this test")
 
     def _pin_other_mod_to_a_real_local_jar(self, version):
         jar_bytes = _build_neoforge_jar("othermod", version)
@@ -689,7 +784,11 @@ class TestRealDependencyClosureGate(EngineTestCase):
 
     def _real_dependency_closure_gates(self):
         return {
-            "refresh": ["true"], "check": ["true"], "build": ["true"],
+            "refresh": [self.PACKWIZ, "refresh"],
+            "check": ["bash", "-c",
+                      f'"{self.PACKWIZ}" refresh >/dev/null && '
+                      'git diff --quiet -- pack.toml index.toml mods'],
+            "build": ["true"],
             "dependency_closure": ["python3", str(REAL_DEPENDENCY_CLOSURE_SCRIPT)],
         }
 
@@ -717,6 +816,11 @@ class TestRealDependencyClosureGate(EngineTestCase):
         with self.assertRaises(bump_mod.EngineError) as ctx:
             self.run_engine(pin, candidate, content=jar_bytes, gate_commands=self._real_dependency_closure_gates())
         self.assertEqual(ctx.exception.exit_code, bump_mod.EXIT_GATE_FAILURE)
+        # MINECRAFT-362 review, twenty-second round, smaller item: the
+        # dependency_closure gate gets its own outcome string, distinct
+        # from refresh/check/build's generic "gate_failed" -- see
+        # bump-dynamic-atmosphere.py's run_gate docstring.
+        self.assertEqual(ctx.exception.outcome, "dependency_closure_gate_failed")
         self.assertEqual(self.porcelain(), before)
         self.assertFalse((self.repo / "docs" / "releases").exists() and
                           any((self.repo / "docs" / "releases").iterdir()))

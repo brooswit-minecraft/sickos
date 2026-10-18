@@ -68,6 +68,7 @@ import modrinth_metadata  # noqa: E402 - needs sys.path set up first
 import mod_eligibility  # noqa: E402
 import server_update_policy  # noqa: E402
 import semver_compare  # noqa: E402
+import dependency_closure_check  # noqa: E402
 from modrinth_compat import (  # noqa: E402
     VersionCandidate, decide_update, find_dependency_conflicts, version_candidate_from_json,
 )
@@ -108,6 +109,7 @@ load_pack_version = _da.load_pack_version
 bump_pack_version = _da.bump_pack_version
 write_pack_version = _da.write_pack_version
 download_and_verify = _da.download_and_verify
+check_runtime_compatibility_or_die = _da.check_runtime_compatibility_or_die
 default_downloader = _da.default_downloader
 default_gate_commands = _da.default_gate_commands
 run_gate = _da.run_gate
@@ -623,7 +625,16 @@ def run_engine(repo_root, pin, candidate, *, category=None,
             "downgrade it."
         )
 
-    download_and_verify(candidate.download_url, candidate.sha1, candidate.sha512, downloader)
+    jar_bytes = download_and_verify(candidate.download_url, candidate.sha1, candidate.sha512, downloader)
+    # Twenty-second review round: the candidate's own real jar can
+    # declare a platform (minecraft/neoforge/...) requirement whose
+    # LOWER bound this pack's own pinned version does not meet -- see
+    # bump-dynamic-atmosphere.py's own block comment on
+    # check_runtime_compatibility_or_die for why nothing else catches
+    # this.
+    check_runtime_compatibility_or_die(
+        jar_bytes, dependency_closure_check.pack_versions(repo_root / "pack.toml"),
+    )
 
     notes_path = None
     try:

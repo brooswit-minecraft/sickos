@@ -373,6 +373,37 @@ jar the way the generalized path's own test (no such restriction) does
 -- see `docs/mod-auto-bump.md`'s "Dependency closure" section for that
 full real-jar, real-checker reproduction.
 
+`default_gate_commands` now runs this gate with `--strict`, and a
+failure now raises its own outcome, `"dependency_closure_gate_failed"`,
+distinct from `refresh`/`check`/`build`'s generic `"gate_failed"` --
+both twenty-second review round, shared code with the generalized path
+(`run_gate`/`default_gate_commands` in `scripts/bump-dynamic-atmosphere.py`
+live there, re-exported by `bump_mod.py`, not duplicated) -- see
+`docs/mod-auto-bump.md`'s "Dependency closure" section for the full
+reasoning.
+
+## Runtime/platform compatibility (twenty-second review round)
+
+`download_and_verify` now returns the verified jar bytes instead of
+discarding them, so `run_engine` can pass them to
+`check_runtime_compatibility_or_die(jar_bytes, pack_versions(pack.toml))`
+right after download -- the same function, same call shape, the
+generalized path uses (see `docs/mod-auto-bump.md`'s "Runtime/platform
+compatibility" section for the full explanation of what it checks and
+why it's a separate check rather than a `dependency_closure_check.py`
+edit). Raises `EngineError(EXIT_CONFIG_ERROR, "runtime_incompatible",
+...)` on a lower-bound-only platform violation, with the same clean
+rollback every other pre-commit check gets.
+
+Test coverage is `tests/test_bump_dynamic_atmosphere.py`'s own
+`TestRuntimeCompatibilityCheck` class -- unlike
+`TestDependencyClosureGateWiring` above, this one CAN use real jar
+bytes despite the same `validate_payload` URL-format restriction: the
+check runs in-process against bytes the test's stubbed `downloader`
+already delivered, with no second real network fetch, so the
+restriction that blocks a true `file://`-based dependency_closure GATE
+test simply doesn't apply here.
+
 ## Pin write
 
 The DA pin (`mods/dynamic-atmosphere.pw.toml`) is rewritten directly from

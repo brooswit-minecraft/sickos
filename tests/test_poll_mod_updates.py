@@ -567,6 +567,46 @@ class TestMainExitCode(unittest.TestCase):
         self.assertIn("::warning::F (mods/f.pw.toml)", output)
         self.assertIn("::warning::G (mods/g.pw.toml)", output)
 
+    def test_dependency_closure_gate_failed_is_an_expected_gap_but_generic_gate_failed_is_not(self):
+        # MINECRAFT-362 review, twenty-second round, smaller item:
+        # run_gate now gives the dependency_closure gate its own outcome
+        # string so it can join dependency_conflict/downgrade_refused's
+        # unconditionally-expected bucket, while refresh/check/build
+        # failing (generic "gate_failed") stays red-by-construction on
+        # purpose -- that trio failing means the build pipeline itself
+        # is broken, which must fail a poll run loudly.
+        outcomes = [
+            self._HEALTHY_PIN,
+            {"mod_id": "H", "mod_name": "H", "pin_path": "mods/h.pw.toml",
+             "outcome": "dependency_closure_gate_failed", "error": "refused"},
+        ]
+        exit_code, output = self._run_main_with(outcomes)
+        self.assertEqual(exit_code, 0)
+        self.assertIn("::warning::H (mods/h.pw.toml)", output)
+
+        outcomes_with_real_failure = [
+            self._HEALTHY_PIN,
+            {"mod_id": "I", "mod_name": "I", "pin_path": "mods/i.pw.toml",
+             "outcome": "gate_failed", "error": "check gate failed"},
+        ]
+        exit_code, _ = self._run_main_with(outcomes_with_real_failure)
+        self.assertEqual(exit_code, 1)
+
+    def test_runtime_incompatible_is_an_expected_gap(self):
+        # MINECRAFT-362 review, twenty-second round: check_runtime_
+        # compatibility_or_die's own outcome -- a real candidate jar
+        # requiring a newer platform (minecraft/neoforge/etc.) than this
+        # pack runs -- is exactly as unpredictable per-candidate as
+        # dependency_conflict, so it must not hard-fail a poll run.
+        outcomes = [
+            self._HEALTHY_PIN,
+            {"mod_id": "J", "mod_name": "J", "pin_path": "mods/j.pw.toml",
+             "outcome": "runtime_incompatible", "error": "neoforge too old"},
+        ]
+        exit_code, output = self._run_main_with(outcomes)
+        self.assertEqual(exit_code, 0)
+        self.assertIn("::warning::J (mods/j.pw.toml)", output)
+
     def test_no_parseable_candidate_and_only_prerelease_are_expected_gaps(self):
         # MINECRAFT-362 review, tenth round: a prior round's own fix
         # (modrinth_compat raising a distinct exception instead of

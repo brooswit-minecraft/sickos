@@ -8,6 +8,7 @@ Never pushes, commits, tags, or touches Modrinth. Stdlib only.
 
 import argparse
 import hashlib
+import io
 import json
 import os
 import re
@@ -20,12 +21,14 @@ import types
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import modrinth_metadata  # noqa: E402 - needs sys.path set up first
 import mod_eligibility  # noqa: E402
 import modrinth_compat  # noqa: E402
+import dependency_closure_check  # noqa: E402
 
 USER_AGENT = "brooswit-minecraft/sickos (SICKOS-75 DA auto-bump engine)"
 DA_MOD_ID = "PZV7RorC"
@@ -637,16 +640,42 @@ def default_gate_commands(repo_root):
         # [2.0,)` against a pinned `othermod 1.0.0` bumped successfully
         # under the Modrinth-metadata-only check, but this real-jar
         # checker correctly refuses it).
+        #
+        # --strict (MINECRAFT-362 review, twenty-second round): this gate
+        # runs unattended, so a warning (e.g. "no nested jars found
+        # anywhere") has no human present to notice it either -- unlike
+        # ci.yml's own `dependency-check` job, which is non-strict by
+        # default (see reusable-dependency-check.yml) because a human
+        # reviews that job's output on every PR. Confirmed live against
+        # the current pack before adding this: 36 nested jars, 71
+        # satisfied required dependencies, zero warnings -- --strict does
+        # not change today's outcome, only tomorrow's if that regresses.
         "dependency_closure": shlex.split(
-            os.environ.get("DA_BUMP_DEPENDENCY_CLOSURE_CMD", "python3 scripts/dependency_closure_check.py")
+            os.environ.get(
+                "DA_BUMP_DEPENDENCY_CLOSURE_CMD", "python3 scripts/dependency_closure_check.py --strict"
+            )
         ),
     }
 
 
 def run_gate(repo_root, run_command, commands, name):
+    """MINECRAFT-362 review, twenty-second round: `dependency_closure`
+    failing is NOT the same kind of event as `refresh`/`check`/`build`
+    failing. Those three failing means packwiz/the build pipeline is
+    broken -- unexpected, infrastructure-level, should fail a poll run
+    loudly. `dependency_closure` failing means the real, vendored
+    checker looked at this SPECIFIC candidate's real jar and correctly
+    refused it (same per-candidate unpredictability as
+    `dependency_conflict` -- see modrinth_compat.find_dependency_conflicts'
+    own docstring) -- expected in the same sense a human reviewer finding
+    a real problem is "expected" to happen sometimes, not a bug in this
+    tooling. Giving it a distinct outcome string lets
+    poll-mod-updates.py's `_is_expected_gap` tell the two apart instead of
+    both collapsing into one generic, always-unexpected `gate_failed`."""
     result = run_command(commands[name], cwd=str(repo_root))
     if result.returncode != 0:
-        raise EngineError(EXIT_GATE_FAILURE, "gate_failed", f"gate {name!r} failed (exit {result.returncode})")
+        outcome = "dependency_closure_gate_failed" if name == "dependency_closure" else "gate_failed"
+        raise EngineError(EXIT_GATE_FAILURE, outcome, f"gate {name!r} failed (exit {result.returncode})")
 
 
 # --------------------------------------------------------------------------
@@ -655,6 +684,12 @@ def run_gate(repo_root, run_command, commands, name):
 # --------------------------------------------------------------------------
 
 def download_and_verify(download_url, expected_sha1, expected_sha512, downloader):
+    """Download, hash-verify, and return the jar's own bytes (MINECRAFT-362
+    review, twenty-second round: previously verified and discarded the
+    bytes without returning them -- callers now need them for
+    `check_runtime_compatibility_or_die` below, which has to read the
+    SAME verified jar's own declared platform requirements, not
+    re-download a second copy)."""
     fd, temp_path = tempfile.mkstemp(prefix="da-bump-", suffix=".jar")
     os.close(fd)
     try:
@@ -667,9 +702,9 @@ def download_and_verify(download_url, expected_sha1, expected_sha512, downloader
         sha1 = hashlib.sha1()
         sha512 = hashlib.sha512()
         with open(temp_path, "rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                sha1.update(chunk)
-                sha512.update(chunk)
+            data = handle.read()
+        sha1.update(data)
+        sha512.update(data)
         got_sha1 = sha1.hexdigest()
         got_sha512 = sha512.hexdigest()
         if got_sha1 != expected_sha1 or got_sha512 != expected_sha512:
@@ -678,9 +713,100 @@ def download_and_verify(download_url, expected_sha1, expected_sha512, downloader
                 f"downloaded jar hash mismatch: sha1 expected={expected_sha1} got={got_sha1}, "
                 f"sha512 expected={expected_sha512} got={got_sha512}",
             )
+        return data
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
+
+
+# --------------------------------------------------------------------------
+# Runtime compatibility: the candidate's own jar can declare a platform
+# (minecraft/neoforge/forge/java/fml) requirement scripts/dependency_closure_check.py
+# deliberately never fails on (MINECRAFT-362 review, twenty-second
+# round): that checker only NOTES a platform range mismatch, since an
+# upper-bound mismatch routinely still loads fine (confirmed live:
+# Simple Clouds declares `minecraft [1.21,1.21.1)` and starts on
+# 1.21.1). A LOWER-bound mismatch is different -- a jar built against a
+# NEWER NeoForge than this pack pins will not load at all, and nothing
+# else in either engine checks this: modrinth_compat resolves
+# compatibility only at Modrinth's own (game_version, loader) NAME
+# granularity ("1.21.1" + "neoforge"), never a loader VERSION, and
+# scripts/verify-neoforge-runtime.py (the one script in this repo that
+# does check a NeoForge range) is not a gate on either engine -- it only
+# runs in CI, after a push, evaluating Quark's own declared range, not
+# a freshly-bumped candidate's.
+# --------------------------------------------------------------------------
+
+def _lower_bound_violated(pinned_version, range_spec):
+    """True if `pinned_version` fails the LOWER bound of every
+    alternative in `range_spec` (a Maven version range, same syntax
+    scripts/dependency_closure_check.py's own `in_range` parses) --
+    upper bounds are deliberately ignored, for the reason the block
+    comment above this section explains. Reuses that module's own
+    `_RANGE` token scanner and `compare` ordering rather than a second,
+    divergent range parser."""
+    range_spec = (range_spec or "").strip()
+    if not range_spec:
+        return False
+    for match in dependency_closure_check._RANGE.finditer(range_spec):
+        part = match.group(0).strip()
+        if part[0] not in "[(":
+            # Bare version: a soft minimum, same as dependency_closure_check.in_range.
+            if dependency_closure_check.compare(pinned_version, part) >= 0:
+                return False
+            continue
+        lower_inclusive = part[0] == "["
+        body = part[1:-1]
+        lower = body.split(",", 1)[0].strip() if "," in body else body.strip()
+        if not lower:
+            continue  # this alternative has no lower bound at all -- satisfied
+        comparison = dependency_closure_check.compare(pinned_version, lower)
+        if comparison > 0 or (comparison == 0 and lower_inclusive):
+            return False
+    return True
+
+
+def check_runtime_compatibility_or_die(jar_bytes, pinned_versions):
+    """Raise EngineError if the candidate's own jar declares a platform
+    requirement whose LOWER bound exceeds this pack's own pinned
+    version for that platform component. `pinned_versions` is
+    `pack.toml`'s own `[versions]` table (`{"minecraft": "1.21.1",
+    "neoforge": "21.1.250", ...}` -- keyed by loader name, same shape
+    `dependency_closure_check.pack_versions` already returns).
+
+    A jar that fails to parse at all (not a real zip, or no recognised
+    mods.toml inside it) is not this function's problem -- the identity/
+    hash gate already verified these exact bytes match what Modrinth/the
+    payload declared, and scripts/dependency_closure_check.py's own
+    FAIL on an unreadable jar covers that failure mode; this check skips
+    silently rather than raising a second, confusing error for the same
+    root cause.
+    """
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(jar_bytes))
+    except zipfile.BadZipFile:
+        return
+    with zf:
+        _mods, deps = dependency_closure_check.read_mods(zf)
+    violations = []
+    for dependency in deps:
+        dependency_id = dependency["id"]
+        if dependency_id not in dependency_closure_check.PLATFORM:
+            continue
+        pinned = pinned_versions.get(dependency_id)
+        if not pinned or not dependency["range"]:
+            continue
+        if _lower_bound_violated(pinned, dependency["range"]):
+            violations.append(
+                f"declares {dependency_id} {dependency['range']!r}, whose lower bound "
+                f"exceeds this pack's own pinned {dependency_id} {pinned!r}"
+            )
+    if violations:
+        raise EngineError(
+            EXIT_CONFIG_ERROR, "runtime_incompatible",
+            "candidate's own jar requires a newer platform version than this pack pins: "
+            + "; ".join(violations),
+        )
 
 
 def default_downloader(url, dest_path):
@@ -967,12 +1093,13 @@ def run_engine(repo_root, payload_raw, *, release_body_override=None,
     # Dependency check (MINECRAFT-362 review, eighteenth round): this
     # dispatch path never called modrinth_compat.find_dependency_conflicts
     # at all, unlike the generalized poll path -- a DA candidate
-    # declaring an existing pinned project incompatible, or requiring an
-    # unverifiable project, would still pin and publish successfully.
-    # Same check, same narrow scope, as bump_mod.py's own call: reads the
-    # pack's CURRENT on-disk pins (and versions) before this run writes
-    # anything, against the dependencies Modrinth's own metadata (just
-    # verified above) declares for this exact version.
+    # declaring an existing pinned project incompatible would still pin
+    # and publish successfully. Same check, same narrow scope, as
+    # bump_mod.py's own call (incompatible-and-pinned only, as of the
+    # twenty-first round -- see that module's own docstring): reads the
+    # pack's CURRENT on-disk pins before this run writes anything,
+    # against the dependencies Modrinth's own metadata (just verified
+    # above) declares for this exact version.
     eligible_pins, _untracked = mod_eligibility.discover_eligible_pins(repo_root)
     pinned_versions_by_mod_id = {eligible_pin.mod_id: eligible_pin.pinned_version_id for eligible_pin in eligible_pins}
     dependency_candidate = types.SimpleNamespace(
@@ -986,7 +1113,15 @@ def run_engine(repo_root, payload_raw, *, release_body_override=None,
             f"Dynamic Atmosphere {payload['version']} has dependency conflicts: " + "; ".join(conflicts),
         )
 
-    download_and_verify(payload["download_url"], payload["sha1"], payload["sha512"], downloader)
+    jar_bytes = download_and_verify(payload["download_url"], payload["sha1"], payload["sha512"], downloader)
+    # Twenty-second review round: the candidate's own real jar can
+    # declare a platform (minecraft/neoforge/...) requirement whose
+    # LOWER bound this pack's own pinned version does not meet --
+    # nothing else on this path checks that (see this function's own
+    # block comment above `check_runtime_compatibility_or_die`).
+    check_runtime_compatibility_or_die(
+        jar_bytes, dependency_closure_check.pack_versions(Path(repo_root) / "pack.toml"),
+    )
 
     vouch = run_vouch_check(repo_root, payload["sha512"])
 

@@ -166,6 +166,110 @@ cannot point at a local `file://` jar the real checker could fetch
 offline/deterministically the way the generalized path's candidate,
 with no such restriction, can).
 
+`default_gate_commands` now runs this gate with `--strict` (twenty-second
+round): it runs unattended, so a warning (e.g. "no nested jars found
+anywhere") has no human present to notice it the way a PR reviewer
+watching `ci.yml`'s own non-strict `dependency-check` job does. Confirmed
+live before adding this: today's real pack has 36 nested jars and 71
+satisfied required dependencies, zero warnings -- `--strict` changes
+nothing today, only if that regresses later. Override via
+`DA_BUMP_DEPENDENCY_CLOSURE_CMD`.
+
+A dependency_closure gate failure now gets its OWN outcome string,
+`"dependency_closure_gate_failed"`, distinct from `refresh`/`check`/
+`build`'s generic `"gate_failed"` (`run_gate` in
+`scripts/bump-dynamic-atmosphere.py`, twenty-second round). The
+distinction matters one layer up, in `scripts/poll-mod-updates.py`'s
+`_is_expected_gap`: that trio failing means the build pipeline itself is
+broken and must fail a poll run loudly, but a dependency_closure failure
+means the real checker looked at a real candidate jar and correctly
+refused it -- exactly as unpredictable per-candidate as
+`dependency_conflict` (see below), so it joins that same unconditionally-
+expected bucket instead of being red-by-construction.
+
+Nothing previously re-checked that the vendored copy's header-claimed
+commit still matches what `ci.yml`'s pinned
+`reusable-dependency-check.yml` ref actually checks out --
+`scripts/check_vendored_dependency_closure_sync.py` (twenty-second
+round) does, by reading both pins and fetching the live workflow file
+from GitHub (two unauthenticated reads). It is deliberately NOT wired
+into the test suite or any CI gate -- a network hiccup must never fail a
+build the way a flaky network-dependent unit test would -- run it by
+hand (or from a separate, non-blocking job) whenever bumping either pin.
+
+## Runtime/platform compatibility -- the lower-bound-only gap (twenty-second review round)
+
+`dependency_closure_check.py` is vendored VERBATIM and must never be
+hand-edited -- but it deliberately never fails on a
+`minecraft`/`neoforge`/`forge`/`java`/`fml` ("platform") mismatch; those
+are only NOTED. That leaves a real gap the vendored file can't close
+without becoming a fork: a candidate's own jar can require a NEWER
+NeoForge (or Minecraft) than what this pack actually runs, and nothing
+previously caught it before commit.
+
+`check_runtime_compatibility_or_die` (new, in
+`scripts/bump-dynamic-atmosphere.py`, reused by `bump_mod.py` the same
+way `download_and_verify` already is) closes this -- as a SEPARATE
+check, not a vendored-file edit. It reuses only the vendored module's
+own public-by-import helpers (`PLATFORM`, `_RANGE`, `compare`,
+`read_mods`, `pack_versions`) to read the CANDIDATE's own jar manifest,
+filter to platform-id dependencies, and check each one's lower bound
+only -- an upper-bound-only mismatch (e.g. a candidate capped at
+`[1.21,1.21.1)` against a pack already on `1.21.1`) is deliberately left
+alone, same "only noted" semantics the vendored checker itself uses for
+platform deps, just applied to the one direction (too-old) that is
+actually safe to fail closed on; the other direction (too-new) still
+just means the vendored checker's own existing "noted, not failed"
+behaviour for upper bounds. Runs right after each engine's
+`download_and_verify` call (which now returns the verified jar bytes
+instead of discarding them, so this check needs no second download);
+raises `EngineError(EXIT_CONFIG_ERROR, "runtime_incompatible", ...)` on
+a violation, same exit code `dependency_conflict` already uses for "the
+data says this candidate can't go in this pack," with the same clean
+rollback every other pre-commit check gets.
+
+Test coverage: `tests/test_bump_mod.py`'s `TestRuntimeCompatibilityCheck`
+and `tests/test_bump_dynamic_atmosphere.py`'s own class of the same name
+-- both cover a lower-bound violation (fails closed), a satisfied lower
+bound (still bumps), and (generalized path only) an upper-bound-only
+mismatch (still bumps, confirming the "noted, not failed" semantics are
+preserved). Unlike the dependency_closure GATE, this check runs
+IN-PROCESS against bytes the test's own stubbed `downloader` already
+delivered -- no second network fetch happens, so DA's
+`validate_payload` URL-format requirement does not block using real jar
+bytes here the way it blocks a true end-to-end `file://` test of the
+dependency_closure gate itself.
+
+`runtime_incompatible` joins `scripts/poll-mod-updates.py`'s
+`_UNLISTABLE_EXPECTED_GAP_OUTCOMES` (same bucket as
+`dependency_conflict`/`dependency_closure_gate_failed` above): a real
+candidate jar's real manifest correctly refusing a real pack is exactly
+as unpredictable per-candidate as those two, so a poll run hitting it
+should not hard-fail the whole run any more than they do.
+
+## GitHub-release-only managed mods -- explicit scope gap (twenty-second review round)
+
+Four managed mods have a packwiz pin with no `[update.modrinth]` table
+at all -- `dynamic-despawn`, `magicavoxel-loader`, `dynamic-battle-axes`,
+`dynamic-whips` (GitHub-release-only first-party mods; see
+`scripts/mod_eligibility.py`'s own docstring, which has tracked this
+exact count across several rounds). `discover_eligible_pins` already
+reports each as `UntrackedPin`, and `poll-mod-updates.py` already
+surfaces that honestly (`"untracked"`, not silently skipped) -- so
+nothing about these four mods causes a false "all clear."
+
+But no automated verified-release path reaches them: Modrinth's
+version-file API (`sha1`/`sha512`/`download_url`, the identity this
+whole ticket's fail-closed shape is built on) has no GitHub equivalent
+wired up here. Building one would mean a THIRD source of truth (GitHub's
+release-asset API, different auth/hash/identity shape from Modrinth's)
+feeding the same write paths, which both the GitHub-review persona (Jira
+comment 47919, task-review-opus) and this round's own judgment agree
+should not be built as a 22nd-round addendum without the ticket owner
+explicitly deciding it belongs in this ticket's scope at all -- rather
+than a separate, dedicated ticket. See the round-22 Jira comment for the
+explicit scope-adjustment request posed to the owner.
+
 ## Identity/hash verification -- shared with DA, not duplicated
 
 `scripts/modrinth_metadata.py`'s `verify_version_file_metadata()` is the
@@ -902,15 +1006,19 @@ runs, not a captured sha from whenever the job was first queued.
   `unsupported_version_scheme`, `no_parseable_candidate`,
   `only_prerelease_available`, `untracked` -- see "Enrollment" above)
   each against its OWN explicit `KNOWN_*_PIN_IDS`/`KNOWN_UNTRACKED_PIN_PATHS`
-  allowlist (never the whole outcome class), three genuinely
+  allowlist (never the whole outcome class), a growing set of genuinely
   unlistable-in-advance outcomes (`breaking_change_requires_human_review`,
   `downgrade_refused`, `dependency_conflict` -- the last briefly had its
   own allowlist in the nineteenth round, reverted in the twenty-first
   once its root cause was fixed at the source instead, see
-  "Compatibility and no-downgrade resolution" above) staying
-  unconditionally expected, two more
-  (`excluded_local_only`/`excluded_pin_path`) unconditionally expected
-  for a different reason (no meaningful mod_id to reconcile by), and an
+  "Compatibility and no-downgrade resolution" above; joined in the
+  twenty-second round by `dependency_closure_gate_failed` and
+  `runtime_incompatible`, see "Runtime/platform compatibility" and
+  "Dependency closure" above) staying unconditionally expected --
+  `_UNLISTABLE_EXPECTED_GAP_OUTCOMES` is the live set, not a number
+  worth repeating here -- plus `excluded_local_only`/`excluded_pin_path`
+  unconditionally expected for a different reason (no meaningful mod_id
+  to reconcile by), and an
   aggregate guard stated as a POSITIVE invariant -- at least one
   `already_pinned`/`bumped` outcome this run, deliberately not
   satisfied by `no_candidate` -- that fails the run both on zero

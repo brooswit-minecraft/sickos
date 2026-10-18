@@ -266,9 +266,24 @@ KNOWN_UNTRACKED_PIN_NAMES = tuple(
 # (`incompatible`-and-pinned), which is exactly as unpredictable in
 # advance as `downgrade_refused`. All four below stay unconditionally
 # expected by outcome string alone.
+#
+# `dependency_closure_gate_failed` and `runtime_incompatible` both join
+# this set in the twenty-second round: run_gate
+# (scripts/bump-dynamic-atmosphere.py) now gives the dependency_closure
+# gate its OWN outcome string, distinct from refresh/check/build's
+# `gate_failed` (still NOT in this set -- those three failing means the
+# build pipeline itself is broken, which must fail a poll run loudly,
+# not blend in as expected); and check_runtime_compatibility_or_die
+# raises `runtime_incompatible` when a candidate's own jar requires a
+# platform version (minecraft/neoforge/etc.) newer than what this pack
+# runs. Both mean the real data -- a real jar's real manifest -- looked
+# at a real candidate and correctly refused it, exactly as unpredictable
+# per-candidate as `dependency_conflict`, so both get the same
+# unconditional treatment.
 _UNLISTABLE_EXPECTED_GAP_OUTCOMES = frozenset({
     "breaking_change_requires_human_review", "downgrade_refused", "dependency_conflict",
-    "excluded_local_only", "excluded_pin_path",
+    "dependency_closure_gate_failed", "excluded_local_only", "excluded_pin_path",
+    "runtime_incompatible",
 })
 
 

@@ -1,5 +1,6 @@
 import hashlib
 import importlib.util
+import io
 import json
 from pathlib import Path
 import shutil
@@ -8,6 +9,7 @@ import sys
 import tempfile
 import unittest
 import urllib.error
+import zipfile
 from unittest import mock
 
 
@@ -1097,7 +1099,10 @@ class TestDependencyClosureGateWiring(EngineTestCase):
         with self.assertRaises(bump.EngineError) as ctx:
             self.run_engine(payload, content=self.CONTENT, gates=gates)
         self.assertEqual(ctx.exception.exit_code, bump.EXIT_GATE_FAILURE)
-        self.assertEqual(ctx.exception.outcome, "gate_failed")
+        # MINECRAFT-362 review, twenty-second round: dependency_closure
+        # gets its OWN outcome string, distinct from refresh/check/build's
+        # generic "gate_failed" -- see run_gate's own docstring.
+        self.assertEqual(ctx.exception.outcome, "dependency_closure_gate_failed")
         self.assertEqual(self.porcelain(), before)
         self.assertFalse((self.repo / "docs" / "releases").exists() and
                           any((self.repo / "docs" / "releases").iterdir()))
@@ -1128,6 +1133,55 @@ class TestDependencyClosureGateWiring(EngineTestCase):
         with self.assertRaises(bump.EngineError):
             self.run_engine(payload, content=self.CONTENT, gates=gates, run_command=recording_run_command)
         self.assertNotIn(marker, calls)
+
+
+def _build_neoforge_jar(mod_id, version, requires=()):
+    """Same minimal, real, valid NeoForge jar builder as
+    tests/test_bump_mod.py's own copy -- see that file for why this
+    needs to be a real zip, not a mock."""
+    lines = ['modLoader="javafml"', 'loaderVersion="[1,)"', 'license="Test"', "",
+             "[[mods]]", f'modId="{mod_id}"', f'version="{version}"', f'displayName="{mod_id}"']
+    for dep_mod_id, version_range in requires:
+        lines += ["", f"[[dependencies.{mod_id}]]", f'modId="{dep_mod_id}"',
+                  'type="required"', f'versionRange="{version_range}"',
+                  'ordering="NONE"', 'side="BOTH"']
+    toml_text = "\n".join(lines) + "\n"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("META-INF/neoforge.mods.toml", toml_text)
+    return buf.getvalue()
+
+
+class TestRuntimeCompatibilityCheck(EngineTestCase):
+    """MINECRAFT-362 review, twenty-second round, required item: same
+    check as tests/test_bump_mod.py's TestRuntimeCompatibilityCheck,
+    for this engine. Unlike the dependency_closure GATE (a subprocess,
+    which DA's own validate_payload's cdn.modrinth.com URL requirement
+    rules out testing for real), check_runtime_compatibility_or_die
+    runs in-process against the SAME stubbed-downloader bytes every
+    other test in this file already uses -- no payload-URL restriction
+    applies, since nothing here actually fetches `download_url` over a
+    real network. build_fixture_repo's own pack.toml pins
+    `neoforge = "21.1.250"`."""
+
+    def test_candidate_jar_requiring_a_newer_neoforge_fails_closed(self):
+        jar_bytes = _build_neoforge_jar("dynamicatmosphere", "0.19.1-alpha.1", requires=[("neoforge", "[21.2,)")])
+        payload = make_payload(version="0.19.1-alpha.1", category="patch", content=jar_bytes)
+        before = self.porcelain()
+        with self.assertRaises(bump.EngineError) as ctx:
+            self.run_engine(payload, content=jar_bytes)
+        self.assertEqual(ctx.exception.exit_code, bump.EXIT_CONFIG_ERROR)
+        self.assertEqual(ctx.exception.outcome, "runtime_incompatible")
+        self.assertIn("neoforge", ctx.exception.message)
+        self.assertIn("21.1.250", ctx.exception.message)
+        self.assertEqual(self.porcelain(), before)
+
+    def test_candidate_jar_requiring_an_already_satisfied_neoforge_still_bumps(self):
+        jar_bytes = _build_neoforge_jar("dynamicatmosphere", "0.19.1-alpha.1", requires=[("neoforge", "[21.1,)")])
+        payload = make_payload(version="0.19.1-alpha.1", category="patch", content=jar_bytes)
+        summary, exit_code, _ = self.run_engine(payload, content=jar_bytes)
+        self.assertEqual(exit_code, bump.EXIT_OK)
+        self.assertTrue(summary["changed"])
 
 
 class TestMetadataFetcherAuth(unittest.TestCase):
