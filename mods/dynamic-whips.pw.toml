@@ -1,8 +1,15 @@
 name = "Dynamic Whips"
-filename = "dynamicwhips-0.7.0.jar"
+filename = "dynamicwhips-0.9.0.jar"
 side = "both"
 
 [download]
-url = "https://github.com/brooswit-minecraft/dynamic-whips/releases/download/v0.7.0/dynamicwhips-0.7.0.jar"
-hash-format = "sha512"
-hash = "7b4caa0d58502452872613f623235cb6c27bfb6e9941cfe42223eba5437bc2dac6752f746ba98726565b4302372308d915cef3090c055aea3a208584e19879a5"
+url = "https://github.com/brooswit-minecraft/dynamic-whips/releases/download/v0.9.0/dynamicwhips-0.9.0.jar"
+hash-format = "sha256"
+hash = "8ce50cd34afe73c9b72568c6cf0d3dd0bb21bbdd28e800cc1b061223e52d27f5"
+
+[update]
+[update.github]
+branch = "3d6b0d41c06ace94a074456062ce09d8db98adde"
+regex = "^.+(?<!-api|-dev|-dev-preshadow|-sources)\\.jar$"
+slug = "brooswit-minecraft/dynamic-whips"
+tag = "v0.9.0"
