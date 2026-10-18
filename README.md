@@ -626,9 +626,9 @@ rather than partially applied. The allow-list currently covers:
   (default 300) — the main simulation/production cadence; lower is faster.
 - `vapor.rainCloudHeight` (default 192) and `heavyGas.dissipationFactor` (default 3) —
   shared by Void Gas, Ender Gas and Slime's own dissipation.
-- Per-material emission amounts under `enderGas.*`, `voidGas.*`, `dust.*`,
-  `exhaust.*` and `slime.*` (e.g. `enderGas.portalBlockEmission`, default 100, zero
-  disables it).
+- Per-material emission amounts under `obsidianPowder.*`, `voidGas.*`, `dust.*`,
+  `exhaust.*` and `slime.*` (e.g. `obsidianPowder.portalBlockEmission`, default 100,
+  zero disables it).
 - `integrations.createFanTransportPerRpm` (default 1.0), `integrations.createFanIntervalTicks`
   (100 ticks, five seconds) and `integrations.maxFanChunksPerTick` (32) — the
   independent Create fan pass; it never uses the ordinary simulation skip setting.
