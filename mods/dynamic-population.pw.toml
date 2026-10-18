@@ -1,0 +1,15 @@
+name = "Dynamic Population"
+filename = "dynamicpopulation-0.2.0-alpha.1.jar"
+side = "both"
+
+[download]
+url = "https://github.com/brooswit-minecraft/dynamic-population/releases/download/v0.2.0-alpha.1/dynamicpopulation-0.2.0-alpha.1.jar"
+hash-format = "sha256"
+hash = "b02f4aa472dec991bcd0c89f4a5238b1e4489bdb933e5fcad0f14662dd3618c4"
+
+[update]
+[update.github]
+branch = "4183c7b165d369bb5d842b8c20065dc1f7472527"
+regex = "^.+(?<!-api|-dev|-dev-preshadow|-sources)\\.jar$"
+slug = "brooswit-minecraft/dynamic-population"
+tag = "v0.2.0-alpha.1"
