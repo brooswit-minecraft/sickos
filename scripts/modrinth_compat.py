@@ -18,20 +18,23 @@ identity/hash gate (modrinth_metadata.py) and no-downgrade comparator
 (semver_compare.py) are exactly what a resolved candidate would be
 verified against -- not a second, divergent implementation of either.
 
-Dependency validation here is intentionally narrow: `find_dependency_conflicts`
-catches a candidate that declares another project `incompatible` while
-that project is currently pinned, and (seventeenth review round) a
-candidate that declares another project `required` at an EXACT version
-while that project is pinned to a DIFFERENT one -- both unambiguous,
-verifiable conflicts scoped to projects already pinned in this pack. It
-does NOT resolve a `required`/`optional` dependency's semver *range*
-against what else is pinned, nor a `required` dependency on a project
-not pinned at all (a full dependency-graph solve, including
-transitively-missing requirements), since Modrinth's own dependency
-entries do not carry enough information for this pack to tell a
-genuinely-missing requirement from one that is local-only/out-of-pack
-by design (see `find_dependency_conflicts`'s docstring). That fuller
-solve remains a documented gap, not silently assumed covered.
+Dependency validation here is intentionally narrow but fails CLOSED, not
+open: `find_dependency_conflicts` catches a candidate that declares
+another project `incompatible` while that project is currently pinned;
+one that declares another project `required` at an EXACT version while
+that project is pinned to a DIFFERENT one (seventeenth review round);
+and (eighteenth review round) one that `required`s ANY project not
+currently pinned at all, unless that project's id is explicitly
+confirmed local-only/out-of-pack (`KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS`,
+currently empty). A prior version of this module treated an unpinned
+`required` dependency as unverifiable-therefore-ignored, since Modrinth's
+own dependency entries do not carry enough information for this pass to
+tell a genuinely-missing requirement from a local-only one by design --
+that produced an unsafe default ("cannot verify" treated as "assume
+fine"). It does NOT resolve a `required`/`optional` dependency's semver
+*range* against what else is pinned (a full dependency-graph solve,
+including transitive requirements) -- that fuller solve remains a
+documented gap, not silently assumed covered.
 """
 
 from __future__ import annotations
@@ -357,6 +360,23 @@ def decide_update(pin, candidate, *, previous_version_number=None, game_version=
     return "downgrade_refused" if comparison <= 0 else "candidate"
 
 
+# Modrinth project ids (NOT mod names) individually confirmed to be the
+# local-only addons mod_eligibility.EXCLUDED_MOD_NAMES excludes by name
+# (Herobrine API, Baritone -- MINECRAFT-362's own requirement that these
+# never enter the public pack). A `required` dependency naming one of
+# these project ids is deliberately NOT a conflict below, even though
+# neither currently has a pin at all: refusing every unmet `required`
+# entry (eighteenth review round) would otherwise refuse ANY candidate
+# that happens to require one of these exact, already-excluded addons,
+# which would be exactly as wrong as the thing this round's fix exists
+# to stop -- an unverifiable requirement blocking a bump that is
+# genuinely fine. Currently empty because neither excluded mod's real
+# Modrinth project id has been confirmed in this codebase (both have no
+# pin to read one from) -- add an id here only once confirmed, never
+# guessed, same discipline as every other KNOWN_* list in this ticket.
+KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS = frozenset()
+
+
 def find_dependency_conflicts(candidate, pinned_versions_by_mod_id):
     """Check `candidate.dependencies` (Modrinth's own declared list, as
     returned by GET /v2/project/{id}/version) against what is currently
@@ -364,7 +384,7 @@ def find_dependency_conflicts(candidate, pinned_versions_by_mod_id):
     pinned_version_id for every currently-eligible pin (a plain
     iterable of mod_ids also works for membership-only checks, since
     `in` behaves the same on a set or a dict's keys -- only the
-    required-dependency check below needs the version values).
+    required-dependency version check below needs the version values).
 
     Returns a list of human-readable conflict strings; empty means no
     conflict found. Deliberately narrow, not a full dependency-graph
@@ -372,30 +392,34 @@ def find_dependency_conflicts(candidate, pinned_versions_by_mod_id):
     names a project and sometimes an exact version id, never a semver
     *range* this pack could evaluate without also fetching whatever is
     pinned for every dependency, transitively -- that solve is out of
-    scope. Two things ARE unambiguous and checked here, both scoped to
-    projects already pinned in this pack (never a solve over the whole
-    dependency graph):
+    scope, and an `optional` dependency is never checked. Within that
+    scope, THREE things are checked:
 
     - A candidate that declares another project `incompatible` while
       that project is currently pinned in this pack is a real,
       verifiable conflict, regardless of version.
     - A candidate that declares another project `required` AT AN EXACT
       version_id, while that project IS currently pinned to a
-      DIFFERENT version, is also a real, verifiable conflict (MINECRAFT-
-      362 review, seventeenth round): Modrinth already told this pack
+      DIFFERENT version, is also a real, verifiable conflict
+      (seventeenth review round): Modrinth already told this pack
       exactly which version it needs, and this pack already has that
       project pinned to a known, different one -- no transitive lookup
       needed, unlike a semver-range `required` entry.
-
-    A `required` dependency whose project is not currently pinned AT
-    ALL is still NOT reported as a conflict, nor is a `required`
-    dependency with no exact `version_id` (only a project reference) --
-    Modrinth has no way to tell this pack whether that project is
-    itself local-only/out of the public pack (like Herobrine API/
-    Baritone) or genuinely missing, so treating every unmet `required`
-    entry as fatal would produce false positives this pass cannot
-    distinguish from true ones; this stays exactly as narrow as the
-    docstring above describes.
+    - A candidate that declares another project `required` -- with or
+      without an exact version_id -- while that project is NOT
+      currently pinned at all, is ALSO now a conflict (eighteenth
+      review round, reversing the seventeenth round's stance): a prior
+      version of this function treated this as unverifiable-therefore-
+      ignored, on the reasoning that Modrinth cannot tell a genuinely
+      missing requirement from a local-only/out-of-pack mod like
+      Herobrine API/Baritone. That reasoning produced an unsafe
+      default: "cannot verify" was treated as "assume fine," so a
+      candidate requiring a project this pack has never heard of would
+      still bump and publish. The correct default is the opposite --
+      refuse an unverifiable requirement, and carve out ONLY the
+      specific, confirmed exception
+      (`KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS` above) rather than every
+      unpinned project by default.
     """
     conflicts = []
     for dependency in candidate.dependencies:
@@ -410,14 +434,24 @@ def find_dependency_conflicts(candidate, pinned_versions_by_mod_id):
                     "incompatible, and it is currently pinned in this pack"
                 )
         elif dependency_type == "required":
-            required_version_id = dependency.get("version_id")
-            if not required_version_id or project_id not in pinned_versions_by_mod_id:
+            if project_id in KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS:
                 continue
-            pinned_version_id = pinned_versions_by_mod_id[project_id]
-            if pinned_version_id != required_version_id:
+            required_version_id = dependency.get("version_id")
+            if project_id not in pinned_versions_by_mod_id:
                 conflicts.append(
-                    f"{candidate.version_number} requires project {project_id!r} at exact "
-                    f"version {required_version_id!r}, but this pack has it pinned to "
-                    f"version {pinned_version_id!r}"
+                    f"{candidate.version_number} requires project {project_id!r}"
+                    + (f" at exact version {required_version_id!r}" if required_version_id else "")
+                    + ", which is not currently pinned in this pack and is not on "
+                    "KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS -- cannot verify this "
+                    "requirement is satisfied"
                 )
+                continue
+            if required_version_id:
+                pinned_version_id = pinned_versions_by_mod_id[project_id]
+                if pinned_version_id != required_version_id:
+                    conflicts.append(
+                        f"{candidate.version_number} requires project {project_id!r} at exact "
+                        f"version {required_version_id!r}, but this pack has it pinned to "
+                        f"version {pinned_version_id!r}"
+                    )
     return conflicts

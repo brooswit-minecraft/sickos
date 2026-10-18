@@ -1009,6 +1009,62 @@ class TestModrinthMetadataGate(EngineTestCase):
         self.fetch_mock.assert_not_called()
 
 
+class TestDependencyConflict(EngineTestCase):
+    """MINECRAFT-362 review, eighteenth round: this dispatch path never
+    called modrinth_compat.find_dependency_conflicts at all, unlike the
+    generalized poll path -- a DA candidate declaring an existing pinned
+    project incompatible, or requiring an unverifiable project, would
+    still pin and publish successfully (confirmed live by the reviewer
+    with otherwise-valid identity/hashes/compatibility metadata).
+    `create.pw.toml` (CONTROL_MOD_ID) is the one other mod this fixture
+    repo already has pinned."""
+
+    CONTENT = b"dependency conflict jar"
+
+    def test_incompatible_with_a_currently_pinned_mod_fails_closed(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        MODRINTH_METADATA[payload["modrinth_version_id"]]["dependencies"] = [
+            {"project_id": CONTROL_MOD_ID, "dependency_type": "incompatible"},
+        ]
+        before = self.porcelain()
+        with self.assertRaises(bump.EngineError) as ctx:
+            self.run_engine(payload, content=self.CONTENT)
+        self.assertEqual(ctx.exception.exit_code, bump.EXIT_CONFIG_ERROR)
+        self.assertEqual(ctx.exception.outcome, "dependency_conflict")
+        self.assertIn(CONTROL_MOD_ID, ctx.exception.message)
+        self.assertEqual(self.porcelain(), before)
+
+    def test_required_dependency_not_pinned_at_all_fails_closed(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        MODRINTH_METADATA[payload["modrinth_version_id"]]["dependencies"] = [
+            {"project_id": "SOME_UNRELATED_MOD", "dependency_type": "required"},
+        ]
+        before = self.porcelain()
+        with self.assertRaises(bump.EngineError) as ctx:
+            self.run_engine(payload, content=self.CONTENT)
+        self.assertEqual(ctx.exception.exit_code, bump.EXIT_CONFIG_ERROR)
+        self.assertEqual(ctx.exception.outcome, "dependency_conflict")
+        self.assertIn("SOME_UNRELATED_MOD", ctx.exception.message)
+        self.assertEqual(self.porcelain(), before)
+
+    def test_no_dependencies_field_at_all_still_bumps(self):
+        # The honest-metadata default (modrinth_metadata_for above) has
+        # no "dependencies" key at all -- must not crash or refuse.
+        payload = make_payload(category="patch", content=self.CONTENT)
+        summary, exit_code, _ = self.run_engine(payload, content=self.CONTENT)
+        self.assertEqual(exit_code, bump.EXIT_OK)
+        self.assertTrue(summary["changed"])
+
+    def test_required_dependency_matching_the_pin_still_bumps(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        MODRINTH_METADATA[payload["modrinth_version_id"]]["dependencies"] = [
+            {"project_id": CONTROL_MOD_ID, "dependency_type": "required"},
+        ]
+        summary, exit_code, _ = self.run_engine(payload, content=self.CONTENT)
+        self.assertEqual(exit_code, bump.EXIT_OK)
+        self.assertTrue(summary["changed"])
+
+
 class TestMetadataFetcherAuth(unittest.TestCase):
     def fetch(self, version_id, token):
         captured = {}

@@ -708,7 +708,13 @@ class TestDependencyConflict(EngineTestCase):
         self.assertEqual(exit_code, bump_mod.EXIT_OK)
         self.assertTrue(summary["changed"])
 
-    def test_required_dependency_not_pinned_does_not_block_the_bump(self):
+    def test_required_dependency_not_pinned_at_all_now_fails_closed(self):
+        # MINECRAFT-362 review, eighteenth round, required item: this
+        # test previously asserted the unsafe success case the review
+        # flagged by exact name -- a candidate requiring a project this
+        # pack has never heard of bumped successfully anyway. Reversed:
+        # an unverifiable required dependency must now refuse, same
+        # outcome/exit code as the incompatible-and-pinned case.
         content = b"needs something jar"
         candidate = make_candidate(
             content=content,
@@ -718,7 +724,40 @@ class TestDependencyConflict(EngineTestCase):
         self.register(OLD_VERSION_ID, {"id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0"})
         pin = make_pin()
 
-        summary, exit_code, _ = self.run_engine(pin, candidate, content=content)
+        before = self.porcelain()
+        with self.assertRaises(bump_mod.EngineError) as ctx:
+            self.run_engine(pin, candidate, content=content)
+        self.assertEqual(ctx.exception.exit_code, bump_mod.EXIT_CONFIG_ERROR)
+        self.assertEqual(ctx.exception.outcome, "dependency_conflict")
+        self.assertIn("SOME_UNRELATED_MOD", ctx.exception.message)
+        self.assertEqual(self.porcelain(), before)
+
+    def test_required_dependency_on_a_known_local_only_project_still_bumps(self):
+        # The one carved-out exception, exercised through the real
+        # engine: a required dependency on a project id explicitly on
+        # KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS must not block the bump.
+        content = b"needs a known local-only mod jar"
+        candidate = make_candidate(
+            content=content,
+            dependencies=({"project_id": "LOCAL_ONLY_PROJECT", "dependency_type": "required"},),
+        )
+        self.register(candidate.version_id, metadata_for(candidate))
+        self.register(OLD_VERSION_ID, {"id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0"})
+        pin = make_pin()
+
+        # Patches find_dependency_conflicts' own __globals__ directly,
+        # not a `modrinth_compat` attribute on bump_mod -- bump_mod
+        # imports the bare name (`from modrinth_compat import
+        # find_dependency_conflicts`), so there is no `bump_mod.
+        # modrinth_compat` to patch; this reaches the actual module
+        # namespace the function reads its globals from regardless of
+        # which of this test suite's several module-loading mechanisms
+        # ultimately won the race to populate sys.modules.
+        with mock.patch.dict(
+            bump_mod.find_dependency_conflicts.__globals__,
+            {"KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS": frozenset({"LOCAL_ONLY_PROJECT"})},
+        ):
+            summary, exit_code, _ = self.run_engine(pin, candidate, content=content)
         self.assertEqual(exit_code, bump_mod.EXIT_OK)
         self.assertTrue(summary["changed"])
 

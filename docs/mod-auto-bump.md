@@ -94,18 +94,30 @@ and splits them into:
 **Explicit scope limit**: compatibility here means the candidate's own
 declared `game_versions`/`loaders`. `modrinth_compat.py` also has
 `find_dependency_conflicts(candidate, pinned_versions_by_mod_id)`, wired
-into `scripts/bump_mod.py`'s write path: it refuses a candidate that
-declares another *currently-pinned* project `incompatible`, and
-(seventeenth review round) one that `required`s a currently-pinned
-project at an EXACT version this pack has pinned to something else --
-both unambiguous conflicts. It does **not** attempt a full
-dependency-graph solve (a `required`/`optional` dependency's semver
-*range*, or treating a `required` dependency on a project that is not
-currently pinned at all -- or pinned with no exact `version_id` named --
-as a conflict; Modrinth's data cannot tell this pass whether that
-absence is a genuinely missing requirement or a local-only/out-of-pack
-mod by design, like Herobrine API/Baritone). That fuller solve is a real
-gap, not an oversight -- see "Status."
+into BOTH `scripts/bump_mod.py`'s write path AND (eighteenth review
+round) `scripts/bump-dynamic-atmosphere.py`'s dispatch path -- the
+latter had never called it at all before this round, so a DA candidate
+declaring an existing pinned project `incompatible`, or requiring an
+unverifiable one, would still pin and publish successfully. It refuses:
+a candidate that declares another *currently-pinned* project
+`incompatible`; one that `required`s a currently-pinned project at an
+EXACT version this pack has pinned to something else (seventeenth
+round); and (eighteenth round, reversing a prior stance) one that
+`required`s ANY project NOT currently pinned at all, with or without an
+exact version_id. That last case was previously treated as
+unverifiable-therefore-ignored, on the reasoning that Modrinth's data
+cannot tell this pass whether the absence is a genuinely missing
+requirement or a local-only/out-of-pack mod by design (like Herobrine
+API/Baritone) -- that reasoning produced an unsafe default
+("cannot verify" treated as "assume fine"), confirmed live: a candidate
+requiring a project this pack had never heard of bumped and published
+successfully. The default is now the opposite -- refuse an unverifiable
+requirement -- with the narrow exception of a project id explicitly
+confirmed on `KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS` (currently empty;
+see "Status"). It still does **not** attempt a full dependency-graph
+solve: a `required`/`optional` dependency's semver *range* is out of
+scope regardless of whether the project is pinned. That fuller solve is
+a real gap, not an oversight -- see "Status."
 
 ## Identity/hash verification -- shared with DA, not duplicated
 
@@ -335,7 +347,7 @@ notes file the way a verbatim splice did in the prior round, and capped
 at `MAX_CHANGELOG_CHARS` so one mod's long changelog cannot make the
 notes file unbounded.
 
-46 tests in `tests/test_bump_mod.py` cover: a real engine-level
+47 tests in `tests/test_bump_mod.py` cover: a real engine-level
 game-version+loader-prefixed major bump reaching the breaking gate
 (not just `semver_delta_category` in isolation), a previous-pin
 metadata id mismatch failing closed, already-pinned/no-candidate
@@ -726,10 +738,12 @@ runs, not a captured sha from whenever the job was first queued.
   comparison; and (tenth round) `NoParseableCandidateError`/
   `OnlyPrereleaseAvailableError`, each raised instead of a silent `None`
   so "nothing newer upstream" cannot be confused with "every candidate
-  was unparseable" or "only prereleases exist"), and (seventeenth round)
+  was unparseable" or "only prereleases exist"); (seventeenth round)
   `find_dependency_conflicts` extended to catch a `required` dependency
   at an exact version mismatching a currently-pinned project's own
-  version (46 tests).
+  version; and (eighteenth round) the same function reversed to refuse
+  a `required` dependency on any project not pinned at all, rather than
+  ignoring it as unverifiable (47 tests).
 - `scripts/modrinth_metadata.py` -- identity/hash verification, extracted
   from and still used by the DA engine, plus (seventeenth round) an
   optional `(game_version, loader)` compatibility check against the
@@ -752,11 +766,16 @@ runs, not a captured sha from whenever the job was first queued.
   into `verify_against_modrinth_metadata` -- unlike the generalized
   path's defense-in-depth re-check, this was the FIRST and ONLY such
   check anywhere on this dispatch path, since a dispatch payload has no
-  earlier compatibility filter at all (79 tests, up from 74 -- 2 new in
-  the eighth round, 3 more in the seventeenth proving a wrong loader,
-  wrong game version, and metadata missing both fields all fail closed;
-  several others adjusted to use a genuinely-matching-category version
-  delta rather than relying on the old payload-only default).
+  earlier compatibility filter at all; and (eighteenth round)
+  `modrinth_compat.find_dependency_conflicts` wired in for the first
+  time, reading `verify_against_modrinth_metadata`'s now-full metadata
+  return value for its `dependencies` field (83 tests, up from 74 -- 2
+  new in the eighth round, 3 more in the seventeenth proving a wrong
+  loader, wrong game version, and metadata missing both fields all fail
+  closed, 4 more in the eighteenth proving the dependency check works
+  on this path too; several others adjusted to use a genuinely-matching-
+  category version delta rather than relying on the old payload-only
+  default).
 - The direct-pin-vs-packwiz decision above.
 - `Release-Only: true` on DA's generated commits (see `da-auto-bump.md`).
 - `scripts/bump_mod.py` -- the generalized write path, with the
@@ -791,7 +810,10 @@ runs, not a captured sha from whenever the job was first queued.
   round) two tests exercising `find_dependency_conflicts`'s new exact-
   version `required` check through the real engine, and two more
   exercising the new `(game_version, loader)` defense-in-depth re-check
-  against a freshly-refetched candidate's own metadata (46 tests).
+  against a freshly-refetched candidate's own metadata; and (eighteenth
+  round) one test proving a required dependency on a project not pinned
+  at all now fails closed, plus one proving the known-local-only
+  exception still bumps (47 tests).
 - `scripts/poll-mod-updates.py` + `.github/workflows/mod-auto-bump-poll.yml`
   -- the generalized trigger, now covering Dynamic Atmosphere's own pin
   too, reading `pack.toml`'s `[versions]` shape strictly (raises rather
@@ -853,29 +875,34 @@ runs, not a captured sha from whenever the job was first queued.
   asserting the YAML itself pins it, since no Python-level test
   otherwise exercises the real `actions/checkout` behavior (2 tests).
 - `modrinth_compat.find_dependency_conflicts` -- refuses a candidate that
-  declares a currently-pinned project `incompatible`, and (seventeenth
-  round) one that `required`s a currently-pinned project at an exact
-  version this pack has pinned to something else (11 tests, plus 5
-  integration tests through `bump_mod.run_engine`).
+  declares a currently-pinned project `incompatible`; one that
+  `required`s a currently-pinned project at an exact version this pack
+  has pinned to something else (seventeenth round); and (eighteenth
+  round) one that `required`s ANY project not currently pinned at all,
+  unless its id is on `KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS` (12 tests,
+  plus 6 integration tests through `bump_mod.run_engine`). Wired into
+  BOTH write paths as of the eighteenth round: `scripts/bump_mod.py`'s
+  (unchanged this round) and `scripts/bump-dynamic-atmosphere.py`'s
+  (new this round -- see below; 4 integration tests through
+  `bump.run_engine`).
 
 **Not implemented -- real gaps, not oversights:**
-- **Full dependency-graph validation**: `find_dependency_conflicts` only
-  catches the unambiguous `incompatible`-and-currently-pinned case and
-  the `required`-at-an-exact-version-that-mismatches-the-pin case (see
-  above; seventeenth round added the second). It does not resolve a
-  `required` dependency's semver RANGE, and a `required` dependency on
-  a project that is not currently pinned at all -- or with no exact
-  `version_id` named -- is not treated as a conflict (this pass cannot
-  tell a genuinely missing requirement from a local-only/out-of-pack mod
-  by design).
-- **DA's own dispatch-driven engine** (`scripts/bump-dynamic-atmosphere.py`)
-  does not call `find_dependency_conflicts` at all, unlike the
-  generalized write path (seventeenth review round, noted but not
-  fixed this round: a candidate DA's dispatch resolves could declare
-  another currently-pinned project `incompatible`, or require one at a
-  version this pack does not have, with nothing here catching it on
-  that path -- only the poll's recovery route through the generalized
-  engine would).
+- **Full dependency-graph validation**: `find_dependency_conflicts`
+  catches `incompatible`-and-currently-pinned, `required`-at-an-exact-
+  version-that-mismatches-the-pin, and (eighteenth round) `required`-
+  and-not-pinned-at-all. It does not resolve a `required`/`optional`
+  dependency's semver RANGE against what else is pinned, nor a
+  transitive requirement -- that fuller graph solve remains out of
+  scope regardless of pinning state.
+- **`KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS` is currently EMPTY**
+  (eighteenth review round): it exists to carve out
+  `mod_eligibility.EXCLUDED_MOD_NAMES`' local-only addons (Herobrine
+  API, Baritone) from the new not-pinned-required-dependency refusal
+  above, but neither excluded mod's real Modrinth project id has been
+  confirmed in this codebase -- both have no pin at all to read one
+  from. A candidate requiring either of them by its real Modrinth id
+  would refuse today, until that id is confirmed and added here with
+  real evidence, never guessed.
 - The 4 GitHub-release-only mods (`dynamic-despawn`, `magicavoxel-loader`,
   `dynamic-battle-axes`, `dynamic-whips`) have no verified-identity
   mechanism at all yet -- a different source (GitHub's release-asset API,

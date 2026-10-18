@@ -320,6 +320,32 @@ runs are held). If it cannot, the gate returns `EXIT_INTEGRITY_FAILURE`
 no token (for example a local run) and the project private, the same
 refusal happens.
 
+## Dependency check -- new as of the eighteenth review round
+
+This dispatch path never called `modrinth_compat.find_dependency_conflicts`
+at all before this round, unlike the generalized poll path -- a DA
+candidate declaring an existing pinned project `incompatible`, or
+requiring a project this pack cannot verify, would still pin and
+publish successfully (confirmed live: with otherwise-valid identity,
+hashes, and `(game_version, loader)` compatibility, a candidate
+declaring a currently-pinned project incompatible, and separately one
+requiring a missing project, both returned `exit=0, outcome=bumped,
+changed=true`). `verify_against_modrinth_metadata` now returns the
+FULL, verified metadata dict (not only the matched file entry) so its
+own `dependencies` field is available; `run_engine` reads the pack's
+current on-disk pins (and their versions) via
+`mod_eligibility.discover_eligible_pins` and passes both into the same
+`find_dependency_conflicts` the generalized path uses, before
+`download_and_verify` runs. Same narrow scope on both paths (see
+`docs/mod-auto-bump.md`'s "Compatibility and no-downgrade resolution"
+section): refuses a currently-pinned `incompatible` declaration, a
+`required` dependency at an exact version mismatching the pin, and
+(the gap this round closed) a `required` dependency on ANY project not
+currently pinned at all, with the narrow, currently-empty exception of
+`modrinth_compat.KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS`. A conflict
+raises `EXIT_CONFIG_ERROR` / `"dependency_conflict"`, same exit
+code/outcome `scripts/bump_mod.py` uses for the identical check.
+
 ## Pin write
 
 The DA pin (`mods/dynamic-atmosphere.pw.toml`) is rewritten directly from

@@ -30,18 +30,16 @@ docs/mod-auto-bump.md's "Status" section for the full list):
 - The Modrinth "vouch check" (AC8) was a DA-specific sanity check against
   a control mod; it has no generic analogue and is not attempted here.
 - No FULL dependency-graph validation against other pinned mods (semver
-  *ranges*, transitively-missing requirements). This engine does refuse
-  a candidate that declares another currently-pinned project
-  `incompatible`, and (seventeenth review round) one that `required`s a
-  currently-pinned project at an EXACT version this pack has pinned to
-  something else (modrinth_compat.find_dependency_conflicts, checked
-  below against the pack's current on-disk pins and versions) -- both
-  unambiguous conflicts Modrinth's own data can answer with no guessing.
-  A `required` dependency on a project that is not currently pinned at
-  all, or with no exact version_id, is NOT treated as a conflict, for
-  the reason find_dependency_conflicts documents: this pass cannot
-  distinguish a genuinely missing requirement from one that is
-  local-only/out-of-pack by design.
+  *ranges* against what else is pinned, transitive requirements). This
+  engine DOES refuse: a candidate that declares another currently-pinned
+  project `incompatible`; one that `required`s a currently-pinned
+  project at an EXACT version this pack has pinned to something else
+  (seventeenth review round); and (eighteenth review round) one that
+  `required`s ANY project not currently pinned at all, unless that
+  project's id is explicitly confirmed local-only/out-of-pack
+  (modrinth_compat.KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS, currently
+  empty) -- see modrinth_compat.find_dependency_conflicts, checked below
+  against the pack's current on-disk pins and versions.
 """
 
 from __future__ import annotations
@@ -523,11 +521,13 @@ def run_engine(repo_root, pin, candidate, *, category=None,
 
     # Dependency check (narrow, see modrinth_compat.find_dependency_conflicts):
     # refuse a candidate that declares another currently-pinned project
-    # incompatible, OR that requires a currently-pinned project at an
+    # incompatible; OR that requires a currently-pinned project at an
     # exact version this pack has pinned to something else (seventeenth
-    # review round). Reads the pack's CURRENT on-disk pins, before this
-    # run writes anything -- the version, not only the mod_id, is needed
-    # now for the second check.
+    # review round); OR that requires ANY project not currently pinned
+    # at all, unless explicitly confirmed local-only (eighteenth review
+    # round). Reads the pack's CURRENT on-disk pins, before this run
+    # writes anything -- the version, not only the mod_id, is needed for
+    # the second check.
     eligible_pins, _untracked = mod_eligibility.discover_eligible_pins(repo_root)
     pinned_versions_by_mod_id = {eligible_pin.mod_id: eligible_pin.pinned_version_id for eligible_pin in eligible_pins}
     conflicts = find_dependency_conflicts(candidate, pinned_versions_by_mod_id)

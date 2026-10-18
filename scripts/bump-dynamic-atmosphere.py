@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+import types
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -24,6 +25,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import modrinth_metadata  # noqa: E402 - needs sys.path set up first
 import mod_eligibility  # noqa: E402
+import modrinth_compat  # noqa: E402
 
 USER_AGENT = "brooswit-minecraft/sickos (SICKOS-75 DA auto-bump engine)"
 DA_MOD_ID = "PZV7RorC"
@@ -498,7 +500,10 @@ def fetch_modrinth_version_metadata(version_id):
 
 
 def verify_against_modrinth_metadata(payload, fetcher, *, game_version=None, loader=None):
-    """Return the matched Modrinth file entry, or raise EngineError (fail closed).
+    """Return the full, verified Modrinth version metadata dict (not
+    just the matched file entry -- callers need `dependencies` too, for
+    the dependency-conflict check below), or raise EngineError (fail
+    closed).
 
     The actual identity/hash checks live in modrinth_metadata.py, shared
     with the generalized multi-mod resolver (MINECRAFT-362) so there is one
@@ -531,7 +536,7 @@ def verify_against_modrinth_metadata(payload, fetcher, *, game_version=None, loa
         refuse(f"metadata lookup failed: {error!r}")
 
     try:
-        return modrinth_metadata.verify_version_file_metadata(
+        modrinth_metadata.verify_version_file_metadata(
             metadata,
             expected_version_id=version_id,
             expected_project_id=DA_MOD_ID,
@@ -545,6 +550,7 @@ def verify_against_modrinth_metadata(payload, fetcher, *, game_version=None, loa
         )
     except modrinth_metadata.MetadataVerificationError as error:
         refuse(str(error))
+    return metadata
 
 
 # --------------------------------------------------------------------------
@@ -937,10 +943,33 @@ def run_engine(repo_root, payload_raw, *, release_body_override=None,
                 "own section of the DA GitHub release body",
             )
 
-    verify_against_modrinth_metadata(
+    modrinth_version_metadata = verify_against_modrinth_metadata(
         payload, metadata_fetcher or fetch_modrinth_version_metadata,
         game_version=da_game_version, loader=da_loader,
     )
+
+    # Dependency check (MINECRAFT-362 review, eighteenth round): this
+    # dispatch path never called modrinth_compat.find_dependency_conflicts
+    # at all, unlike the generalized poll path -- a DA candidate
+    # declaring an existing pinned project incompatible, or requiring an
+    # unverifiable project, would still pin and publish successfully.
+    # Same check, same narrow scope, as bump_mod.py's own call: reads the
+    # pack's CURRENT on-disk pins (and versions) before this run writes
+    # anything, against the dependencies Modrinth's own metadata (just
+    # verified above) declares for this exact version.
+    eligible_pins, _untracked = mod_eligibility.discover_eligible_pins(repo_root)
+    pinned_versions_by_mod_id = {eligible_pin.mod_id: eligible_pin.pinned_version_id for eligible_pin in eligible_pins}
+    dependency_candidate = types.SimpleNamespace(
+        dependencies=modrinth_version_metadata.get("dependencies") or [],
+        version_number=payload["version"],
+    )
+    conflicts = modrinth_compat.find_dependency_conflicts(dependency_candidate, pinned_versions_by_mod_id)
+    if conflicts:
+        raise EngineError(
+            EXIT_CONFIG_ERROR, "dependency_conflict",
+            f"Dynamic Atmosphere {payload['version']} has dependency conflicts: " + "; ".join(conflicts),
+        )
+
     download_and_verify(payload["download_url"], payload["sha1"], payload["sha512"], downloader)
 
     vouch = run_vouch_check(repo_root, payload["sha512"])
