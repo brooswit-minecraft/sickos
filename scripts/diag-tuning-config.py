@@ -28,6 +28,9 @@ def main():
                 mode = sftp.stat(candidate).st_mode
                 import stat
                 print(f"candidate {candidate}: exists, regular={stat.S_ISREG(mode)}", flush=True)
+                print(f"--- {candidate} content ---", flush=True)
+                print(sync.read_remote(sftp, candidate), flush=True)
+                print(f"--- end {candidate} ---", flush=True)
             except FileNotFoundError:
                 print(f"candidate {candidate}: absent", flush=True)
         try:
