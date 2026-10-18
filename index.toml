@@ -130,6 +130,11 @@ hash = "e50f5ce21c45ac01fb286d719e86222bd818c637fbcb540022369522aadd6d28"
 metafile = true
 
 [[files]]
+file = "mods/dynamic-population.pw.toml"
+hash = "e22a7cd980b8b5fbe01265649c8f065721f17a2c922569406ef27e99ac958884"
+metafile = true
+
+[[files]]
 file = "mods/dynamic-skateboards.pw.toml"
 hash = "ae1875260bc0b7a6089a9f80edf4bc693bc9bc7c58ded273ff5f8ae69cc5f788"
 metafile = true
