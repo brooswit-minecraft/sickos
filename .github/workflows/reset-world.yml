@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       expected_world:
-        description: Exact current world directory to DELETE
+        description: Exact current world directory to reset (renamed aside to "<name>-backup", not deleted)
         required: true
         type: string
       new_world:
