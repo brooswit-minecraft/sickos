@@ -418,7 +418,9 @@ def poll_and_bump(repo_root, *, token=None, fetcher=None, run_command=subprocess
     # EXCLUDED_MOD_NAMES pin's path can be on a static allowlist in
     # advance. Given its own distinct outcome kind instead, so
     # _is_expected_gap can treat it as unconditionally expected (like
-    # downgrade_refused/dependency_conflict) rather than needing a list.
+    # downgrade_refused -- NOT like dependency_conflict any more, which
+    # the nineteenth round moved to its own per-mod-id allowlist) rather
+    # than needing a list.
     for pin in untracked:
         is_deliberate_exclusion = pin.reason == "excluded local-only mod"
         outcomes.append({
@@ -610,8 +612,11 @@ def main(argv=None):
         _notice_clauses.append(
             f"{len(KNOWN_UNMET_REQUIRED_DEPENDENCY_PIN_NAMES)} pins declare a required "
             f"dependency this pack does not have pinned, confirmed a false positive (Modrinth's "
-            f"dependency metadata is not loader-scoped) by reading the real jar -- no action "
-            f"needed ({', '.join(KNOWN_UNMET_REQUIRED_DEPENDENCY_PIN_NAMES)})"
+            f"dependency metadata is not loader-scoped) by reading the real jar -- but the "
+            f"REFUSAL itself is not yet fixed (only its reporting is), so these pins are "
+            f"EXCLUDED FROM AUTO-BUMPS until the required-dependency check is reconciled "
+            f"against real jar metadata; a human bump is the only remedy today "
+            f"({', '.join(KNOWN_UNMET_REQUIRED_DEPENDENCY_PIN_NAMES)})"
         )
     print(
         "::notice::Known, standing coverage gaps (not re-evaluated this run; see "

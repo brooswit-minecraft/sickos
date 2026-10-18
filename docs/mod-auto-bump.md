@@ -669,6 +669,23 @@ NOT on that list -- a genuinely new incompatible declaration, or an
 unmet required dependency on a different pin -- fails the run, rather
 than blending into Cristel Lib's one confirmed, false-positive instance.
 
+**This reconciles the REPORTING, not the REFUSAL (twentieth review
+round).** `modrinth_compat.find_dependency_conflicts` itself is
+unchanged: its only carve-out is `KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS`
+(still empty), which Cristel Lib's real Modrinth id is not on. So
+Cristel Lib's own pin is now EXCLUDED FROM AUTO-BUMPS, permanently,
+until the required-dependency check is reconciled against real jar
+metadata (e.g. by gating on `ci.yml`'s own `dependency-check` job,
+which already reads real jar metadata and already agrees this pack is
+fine) -- confirmed live: all four of Cristel Lib's most recent NeoForge
+1.21.1 releases declare the identical false-positive `required` entry,
+so every one of them, not just the current pinned version, would
+refuse. Classifying the outcome as an expected, known gap means the run
+stays green and the standing `::notice::` keeps naming it every run --
+it does NOT mean a human bump is unnecessary; quite the opposite, a
+human bump is the ONLY way this pin receives a real update until the
+underlying refusal is fixed.
+
 Push-gating and credential-checking are driven by whether the run's
 summary recorded a real bump, not by the script's overall exit code, so
 an unexpected failure elsewhere in the same run never blocks pushing a
