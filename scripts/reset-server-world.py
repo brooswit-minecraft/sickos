@@ -25,18 +25,6 @@ def replace_property(text, key, value):
     return re.sub(pattern, f"{key}={value}", text) if re.search(pattern, text) else text.rstrip() + f"\n{key}={value}\n"
 
 
-def remove_tree(sftp, path):
-    for item in sftp.listdir_attr(path):
-        if item.filename in (".", "..") or "/" in item.filename:
-            raise ValueError("Unsafe directory entry")
-        child = path + "/" + item.filename
-        if stat.S_ISDIR(item.st_mode):
-            remove_tree(sftp, child)
-        else:
-            sftp.remove(child)
-    sftp.rmdir(path)
-
-
 def reset(sftp, env, sync, deploy):
     old, new = env["EXPECTED_WORLD"], env["NEW_WORLD"]
     if old == new or any(not re.fullmatch(r"world-[A-Za-z0-9_-]+", name) for name in (old, new)):
@@ -47,6 +35,9 @@ def reset(sftp, env, sync, deploy):
     if sync.level_name(original) != old:
         raise ValueError("Active world differs from the explicitly confirmed world")
     old_path, new_path = sync.joined(root, old), sync.joined(root, new)
+    backup, backup_path = old + "-backup", sync.joined(root, old + "-backup")
+    if not re.fullmatch(r"world-[A-Za-z0-9_-]+", backup):
+        raise ValueError("Backup directory name is not a safe world-prefixed directory")
     if not stat.S_ISDIR(sftp.lstat(old_path).st_mode):
         raise ValueError("Old world is not a real directory")
     sftp.stat(old_path + "/level.dat")
@@ -56,28 +47,37 @@ def reset(sftp, env, sync, deploy):
         pass
     else:
         raise ValueError("Refusing to replace an existing destination world")
+    try:
+        sftp.lstat(backup_path)
+    except FileNotFoundError:
+        pass
+    else:
+        raise ValueError("Refusing to overwrite an existing backup; remove or rename it first")
     host, port, password, _ = deploy.rcon_config(env)
     response = deploy.rcon_command(host, port, password, "list")
     if not response.startswith("There are 0 of a max of"):
         raise ValueError("World reset requires an empty server")
     deploy.rcon_command(host, port, password, "save-all flush")
-    updated = replace_property(replace_property(original, "level-name", new), "gamemode", "survival")
+    # Preserve the active gamemode -- the user asked for a world reset, not a mode switch.
+    updated = replace_property(original, "level-name", new)
     temporary = properties + ".reset-tmp"
     with sftp.open(temporary, "wb") as output:
         output.write(updated.encode("utf-8"))
     sftp.posix_rename(temporary, properties)
     if sync.read_remote(sftp, properties) != updated:
         raise ValueError("Server properties readback mismatch")
-    print("Fresh survival world selected; restarting Minecraft", flush=True)
+    print("Fresh world selected; restarting Minecraft", flush=True)
     deploy.restart_and_wait(env)
     deploy.rcon_command(host, port, password, "save-all flush")
     if sync.level_name(sync.read_remote(sftp, properties)) != new:
         raise ValueError("Server did not retain the new world selection")
     if not stat.S_ISREG(sftp.lstat(new_path + "/level.dat").st_mode):
         raise ValueError("Fresh world was not created; old world retained")
-    print("Fresh world is running; deleting the explicitly requested old test world", flush=True)
-    remove_tree(sftp, old_path)
-    print("Fresh survival world verified; old world deleted", flush=True)
+    print(f"Fresh world is running; renaming the old test world aside to {backup} as a recoverable backup", flush=True)
+    sftp.posix_rename(old_path, backup_path)
+    if not stat.S_ISREG(sftp.lstat(backup_path + "/level.dat").st_mode):
+        raise ValueError("Backup readback mismatch; old world may not be intact at the backup path")
+    print(f"Fresh world verified; old world preserved at {backup} (not deleted)", flush=True)
 
 
 def main():

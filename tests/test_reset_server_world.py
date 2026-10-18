@@ -9,11 +9,25 @@ reset = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(reset)
 
 
+_DIR_MODE = 0o40755
+_FILE_MODE = 0o100644
+
+
+def _lstat(ready_paths):
+    """ready_paths: dir paths get a directory mode; anything ending in
+    '/level.dat' gets a regular-file mode; anything else raises."""
+    def lstat(path):
+        if path not in ready_paths:
+            raise FileNotFoundError(path)
+        return types.SimpleNamespace(st_mode=_FILE_MODE if path.endswith('/level.dat') else _DIR_MODE)
+    return lstat
+
+
 class ResetWorldTest(unittest.TestCase):
     def test_properties_preserve_other_settings(self):
         original = '# settings\nlevel-name=world-old\nmotd=Sickos\ngamemode=creative\n'
-        updated = reset.replace_property(reset.replace_property(original, 'level-name', 'world-new'), 'gamemode', 'survival')
-        self.assertEqual('# settings\nlevel-name=world-new\nmotd=Sickos\ngamemode=survival\n', updated)
+        updated = reset.replace_property(original, 'level-name', 'world-new')
+        self.assertEqual('# settings\nlevel-name=world-new\nmotd=Sickos\ngamemode=creative\n', updated)
         with self.assertRaises(ValueError):
             reset.replace_property('level-name=a\nlevel-name=b\n', 'level-name', 'world-new')
 
@@ -24,29 +38,80 @@ class ResetWorldTest(unittest.TestCase):
                 reset.reset(sftp, {'EXPECTED_WORLD': 'world-old', 'NEW_WORLD': new}, Mock(), Mock())
             self.assertEqual([], sftp.mock_calls)
 
-    def test_old_world_is_not_deleted_unless_new_world_is_ready(self):
+    def test_reset_preserves_current_gamemode_instead_of_forcing_survival(self):
         env = {'EXPECTED_WORLD': 'world-old', 'NEW_WORLD': 'world-new', 'SERVER_SFTP_PATH': '/'}
         sync = Mock()
         sync.joined.side_effect = lambda root, suffix: '/' + suffix
-        sync.read_remote.return_value = 'level-name=world-old\n'
         sync.level_name.side_effect = ['world-old', 'world-new']
         sftp = Mock()
-        def lstat(path):
-            if path == '/world-old':
-                return types.SimpleNamespace(st_mode=0o40755)
-            raise FileNotFoundError(path)
-        sftp.lstat.side_effect = lstat
+        sftp.lstat.side_effect = _lstat({'/world-old'})
         sftp.open.return_value.__enter__ = Mock(return_value=Mock())
         sftp.open.return_value.__exit__ = Mock(return_value=False)
         deploy = Mock()
         deploy.rcon_config.return_value = ('host', 1, 'secret', 120)
         deploy.rcon_command.return_value = 'There are 0 of a max of 20 players online:'
-        sync.read_remote.side_effect = ['level-name=world-old\n', 'level-name=world-new\ngamemode=survival\n',
-                                        'level-name=world-new\ngamemode=survival\n']
-        with patch.object(reset, 'remove_tree') as remove:
-            with self.assertRaises(FileNotFoundError):
-                reset.reset(sftp, env, sync, deploy)
-            remove.assert_not_called()
+        sync.read_remote.side_effect = ['level-name=world-old\ngamemode=creative\n',
+                                         'level-name=world-new\ngamemode=creative\n',
+                                         'level-name=world-new\ngamemode=creative\n']
+        with self.assertRaises(FileNotFoundError):
+            # New world's level.dat is never made ready by this fixture, so the
+            # function stops right after the properties swap it's verifying here.
+            reset.reset(sftp, env, sync, deploy)
+        written = sftp.open.return_value.__enter__.return_value.write.call_args[0][0]
+        self.assertEqual(b'level-name=world-new\ngamemode=creative\n', written)
+
+    def test_old_world_is_not_deleted_unless_new_world_is_ready(self):
+        env = {'EXPECTED_WORLD': 'world-old', 'NEW_WORLD': 'world-new', 'SERVER_SFTP_PATH': '/'}
+        sync = Mock()
+        sync.joined.side_effect = lambda root, suffix: '/' + suffix
+        sync.level_name.side_effect = ['world-old', 'world-new']
+        sftp = Mock()
+        sftp.lstat.side_effect = _lstat({'/world-old'})
+        sftp.open.return_value.__enter__ = Mock(return_value=Mock())
+        sftp.open.return_value.__exit__ = Mock(return_value=False)
+        deploy = Mock()
+        deploy.rcon_config.return_value = ('host', 1, 'secret', 120)
+        deploy.rcon_command.return_value = 'There are 0 of a max of 20 players online:'
+        sync.read_remote.side_effect = ['level-name=world-old\n', 'level-name=world-new\n',
+                                         'level-name=world-new\n']
+        with self.assertRaises(FileNotFoundError):
+            reset.reset(sftp, env, sync, deploy)
+        renames = [call.args for call in sftp.posix_rename.call_args_list]
+        self.assertNotIn(('/world-old', '/world-old-backup'), renames)
+
+    def test_reset_refuses_when_a_backup_already_exists(self):
+        env = {'EXPECTED_WORLD': 'world-old', 'NEW_WORLD': 'world-new', 'SERVER_SFTP_PATH': '/'}
+        sync = Mock()
+        sync.joined.side_effect = lambda root, suffix: '/' + suffix
+        sync.level_name.return_value = 'world-old'
+        sync.read_remote.return_value = 'level-name=world-old\n'
+        sftp = Mock()
+        sftp.lstat.side_effect = _lstat({'/world-old', '/world-old-backup'})
+        deploy = Mock()
+        with self.assertRaises(ValueError):
+            reset.reset(sftp, env, sync, deploy)
+        deploy.rcon_command.assert_not_called()
+        deploy.restart_and_wait.assert_not_called()
+
+    def test_successful_reset_renames_old_world_aside_instead_of_deleting_it(self):
+        env = {'EXPECTED_WORLD': 'world-old', 'NEW_WORLD': 'world-new', 'SERVER_SFTP_PATH': '/'}
+        sync = Mock()
+        sync.joined.side_effect = lambda root, suffix: '/' + suffix
+        sync.level_name.side_effect = ['world-old', 'world-new']
+        sftp = Mock()
+        sftp.lstat.side_effect = _lstat({'/world-old', '/world-new/level.dat', '/world-old-backup/level.dat'})
+        sftp.open.return_value.__enter__ = Mock(return_value=Mock())
+        sftp.open.return_value.__exit__ = Mock(return_value=False)
+        deploy = Mock()
+        deploy.rcon_config.return_value = ('host', 1, 'secret', 120)
+        deploy.rcon_command.return_value = 'There are 0 of a max of 20 players online:'
+        sync.read_remote.side_effect = ['level-name=world-old\n', 'level-name=world-new\n',
+                                         'level-name=world-new\n']
+        reset.reset(sftp, env, sync, deploy)
+        renames = [call.args for call in sftp.posix_rename.call_args_list]
+        self.assertIn(('/world-old', '/world-old-backup'), renames)
+        sftp.rmdir.assert_not_called()
+        sftp.remove.assert_not_called()
 
 
 if __name__ == '__main__':
