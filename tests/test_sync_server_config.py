@@ -151,33 +151,33 @@ class ServerConfigSyncTest(unittest.TestCase):
             sync.safe_root("/srv/../root")
 
     def test_regenerated_fields_detects_value_sitting_at_da_default(self):
-        original = "[enderGas]\nportalBlockEmission = 100\n"
+        original = "[obsidianPowder]\nportalBlockEmission = 100\n"
         found = sync.regenerated_fields(
-            original, {("enderGas", "portalBlockEmission"): 250})
-        self.assertEqual([("enderGas", "portalBlockEmission", 100, 250)], found)
+            original, {("obsidianPowder", "portalBlockEmission"): 250})
+        self.assertEqual([("obsidianPowder", "portalBlockEmission", 100, 250)], found)
 
     def test_regenerated_fields_ignores_a_field_already_at_the_tuned_value(self):
-        original = "[enderGas]\nportalBlockEmission = 250\n"
+        original = "[obsidianPowder]\nportalBlockEmission = 250\n"
         found = sync.regenerated_fields(
-            original, {("enderGas", "portalBlockEmission"): 250})
+            original, {("obsidianPowder", "portalBlockEmission"): 250})
         self.assertEqual([], found)
 
     def test_regenerated_fields_treats_a_missing_section_as_default(self):
         found = sync.regenerated_fields(
-            "", {("enderGas", "portalBlockEmission"): 250})
-        self.assertEqual([("enderGas", "portalBlockEmission", 100, 250)], found)
+            "", {("obsidianPowder", "portalBlockEmission"): 250})
+        self.assertEqual([("obsidianPowder", "portalBlockEmission", 100, 250)], found)
 
     def test_sync_reports_regeneration_in_job_summary_and_still_patches(self):
         target = "/srv/minecraft/config/dynamicatmosphere-server.toml"
         sftp = MemorySftp({
             "/srv/minecraft/server.properties": b"level-name=world\n",
-            target: b"[enderGas]\nportalBlockEmission = 100\n",
+            target: b"[obsidianPowder]\nportalBlockEmission = 100\n",
         })
         with tempfile.TemporaryDirectory() as directory:
             summary_path = Path(directory) / "summary.md"
             summary_path.write_text("")
             regenerated = sync.synchronize(sftp, "/srv/minecraft", {
-                ("enderGas", "portalBlockEmission"): 250,
+                ("obsidianPowder", "portalBlockEmission"): 250,
             })
             sync.report_regeneration(regenerated, {"GITHUB_STEP_SUMMARY": str(summary_path)})
             self.assertIn(b"portalBlockEmission = 250", sftp.files[target])

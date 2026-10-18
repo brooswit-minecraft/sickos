@@ -148,12 +148,43 @@ jobs:
           gh api "repos/${{ github.repository }}/actions/runs/${RUN_ID}/jobs" \
             | python3 scripts/server_tuning_deploy_evidence.py >> "$GITHUB_OUTPUT"
 
+  # MINECRAFT-378: a single commit can touch a tuning-only path (firing the
+  # push trigger above immediately) AND a release-triggering path like
+  # mods/dynamic-atmosphere.pw.toml in the same push -- e.g. a DA version bump
+  # landing together with the tuning-key rename that version needs. Syncing
+  # immediately in that case would race the Release -> Server update deploy
+  # chain and write into a config file for a DA version that isn't live yet.
+  # scripts/tuning_push_sync_policy.py (unit-tested in
+  # tests/test_tuning_push_sync_policy.py) decides from this push's own
+  # changed-file list; the workflow_run("Server update") trigger above already
+  # re-syncs correctly once that deploy actually completes, so deferring here
+  # loses nothing.
+  push-ordering-guard:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      sync: ${{ steps.policy.outputs.sync }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Decide whether this push's own commit also ships a pack release
+        id: policy
+        run: |
+          git diff --name-only HEAD~1 HEAD | python3 scripts/tuning_push_sync_policy.py >> "$GITHUB_OUTPUT"
+
   sync:
-    needs: [release-only-guard]
+    needs: [release-only-guard, push-ordering-guard]
     if: >-
       !cancelled() &&
-      (github.event_name != 'workflow_run' ||
-       (github.event.workflow_run.conclusion == 'success' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'push' && needs.push-ordering-guard.outputs.sync == 'true') ||
+       (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
         needs.release-only-guard.outputs.deploy == 'true'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
