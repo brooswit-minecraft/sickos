@@ -151,7 +151,7 @@ metafile = true
 
 [[files]]
 file = "mods/dynamic-vehicles.pw.toml"
-hash = "7136503691db8f949ccc29441c35b08e2959c7f7fbf26e8cfd374d3cd563a2e2"
+hash = "4278e364f1a201b0424891d914ace392a067ba2777cf05217312d608a1926a8a"
 metafile = true
 
 [[files]]
@@ -206,7 +206,7 @@ metafile = true
 
 [[files]]
 file = "mods/isometric-camera.pw.toml"
-hash = "1c983748db5fb72d92a2b9e73de3594bc95a290b1c04873a4337dd40a94fd5ce"
+hash = "cae68603a0d632b183d4f2781eba5c9e7319786da299e9a8f5209babc0a9d2ff"
 metafile = true
 
 [[files]]
