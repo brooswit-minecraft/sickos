@@ -132,25 +132,34 @@ class ServerConfigSyncTest(unittest.TestCase):
         })
         self.assertIn(b"createFanTransportPerRpm = 1.0", sftp.files[target])
 
-    def test_sync_refuses_ambiguous_modern_and_legacy_layouts(self):
+    def test_sync_prefers_the_per_world_override_whenever_it_exists(self):
+        # NeoForge's own SERVER-type ModConfig loading (DynamicAtmosphereMod's
+        # own documented behavior, confirmed there by decompiling NeoForge
+        # 21.1's ServerLifecycleHooks.class) actively loads the per-world
+        # serverconfig/ file once it exists, not the global config/ copy --
+        # this is not an ambiguity to refuse, it's the ordinary, expected
+        # state for any world that has ever had DA's config version checked.
+        global_path = "/srv/minecraft/config/dynamicatmosphere-server.toml"
+        world_path = "/srv/minecraft/world/serverconfig/dynamicatmosphere-server.toml"
         sftp = MemorySftp({
             "/srv/minecraft/server.properties": b"level-name=world\n",
-            "/srv/minecraft/config/dynamicatmosphere-server.toml": b"[integrations]\n",
-            "/srv/minecraft/world/serverconfig/dynamicatmosphere-server.toml": b"[integrations]\n",
+            global_path: b"[integrations]\ncreateFanTransportPerRpm = 0.2\n",
+            world_path: b"[integrations]\ncreateFanTransportPerRpm = 0.1\n",
         })
-        with self.assertRaises(ValueError):
-            sync.synchronize(sftp, "/srv/minecraft", {
-                ("integrations", "createFanTransportPerRpm"): 1.0,
-            })
-        self.assertEqual(0, sftp.renames)
+        sync.synchronize(sftp, "/srv/minecraft", {
+            ("integrations", "createFanTransportPerRpm"): 1.0,
+        })
+        self.assertIn(b"createFanTransportPerRpm = 1.0", sftp.files[world_path])
+        self.assertIn(b"createFanTransportPerRpm = 0.2", sftp.files[global_path])  # left untouched
 
-    def test_sync_prefers_populated_config_over_a_fresh_worlds_bare_version_stub(self):
-        # Observed live on MINECRAFT-378 immediately after a world reset: DA
-        # had already written a per-world serverconfig/ override containing
-        # only its own configVersion marker (nothing else) for the brand-new
-        # world, while the long-lived, fully-populated config remained at
-        # the global config/ path. The two must not be treated as an
-        # unresolvable ambiguity -- the populated one is still correct.
+    def test_sync_patches_a_fresh_worlds_bare_version_stub_override(self):
+        # Observed live on MINECRAFT-378 immediately after a world reset: the
+        # brand-new world's per-world override existed as only
+        # `configVersion = 1` (DA writes exactly that, and nothing else, the
+        # first time a world is loaded, before the file is ever populated).
+        # That stub is still the active override NeoForge will read for this
+        # world -- patch_toml() filling in the managed sections/keys it's
+        # missing is the correct outcome, not a special case.
         global_path = "/srv/minecraft/config/dynamicatmosphere-server.toml"
         stub_path = "/srv/minecraft/world-new/serverconfig/dynamicatmosphere-server.toml"
         sftp = MemorySftp({
@@ -161,19 +170,9 @@ class ServerConfigSyncTest(unittest.TestCase):
         sync.synchronize(sftp, "/srv/minecraft", {
             ("integrations", "createFanTransportPerRpm"): 1.0,
         })
-        self.assertIn(b"createFanTransportPerRpm = 1.0", sftp.files[global_path])
-        self.assertEqual(b"configVersion = 1\n", sftp.files[stub_path])
-
-    def test_sync_still_refuses_when_both_candidates_are_bare_stubs(self):
-        sftp = MemorySftp({
-            "/srv/minecraft/server.properties": b"level-name=world\n",
-            "/srv/minecraft/config/dynamicatmosphere-server.toml": b"configVersion = 1\n",
-            "/srv/minecraft/world/serverconfig/dynamicatmosphere-server.toml": b"configVersion = 1\n",
-        })
-        with self.assertRaises(ValueError):
-            sync.synchronize(sftp, "/srv/minecraft", {
-                ("integrations", "createFanTransportPerRpm"): 1.0,
-            })
+        self.assertIn(b"createFanTransportPerRpm = 1.0", sftp.files[stub_path])
+        self.assertIn(b"configVersion = 1", sftp.files[stub_path])
+        self.assertEqual(b"[integrations]\ncreateFanTransportPerRpm = 0.1\n", sftp.files[global_path])
 
     def test_rejects_unsafe_world_and_server_root(self):
         with self.assertRaises(ValueError):
