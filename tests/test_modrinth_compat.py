@@ -419,43 +419,24 @@ class TestFindDependencyConflicts(unittest.TestCase):
         self.assertIn("OTHER1", conflicts[0])
         self.assertIn("incompatible", conflicts[0])
 
-    def test_required_dependency_not_pinned_at_all_is_now_a_conflict(self):
-        # MINECRAFT-362 review, eighteenth round, required item: a prior
-        # round's stance ("Modrinth cannot tell us whether a missing
-        # required dep is local-only/out-of-pack or genuinely missing,
-        # so don't guess") produced an unsafe default -- unverifiable
-        # was treated as fine, so a candidate requiring a project this
-        # pack has never heard of would still bump. The correct default
-        # is the opposite: refuse, with the only exception being a
-        # project id on the confirmed KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS
-        # allowlist (currently empty -- see the next test).
+    def test_required_dependency_not_pinned_at_all_is_never_reported(self):
+        # MINECRAFT-362 review, twenty-first round: reverted the
+        # seventeenth/eighteenth rounds' `required`-dependency checks
+        # entirely. Modrinth's version-level `dependencies` array is a
+        # project-WIDE author declaration, not loader-scoped, so
+        # comparing it directly produced a confirmed false positive
+        # (Cristel Lib declaring a Fabric-only dependency the real
+        # NeoForge jar does not have). Required-dependency satisfaction
+        # is now checked exclusively by the real-jar
+        # dependency_closure_check.py gate, not here -- a `required`
+        # entry is never reported by this function any more, regardless
+        # of pinning state or exact version_id.
         candidate = make_candidate_with_deps(
             [{"project_id": "NOTPINNED", "dependency_type": "required"}]
         )
-        conflicts = find_dependency_conflicts(candidate, {"OTHER1": "V1"})
-        self.assertEqual(len(conflicts), 1)
-        self.assertIn("NOTPINNED", conflicts[0])
-
-    def test_required_dependency_on_a_known_local_only_project_is_not_reported(self):
-        # The one carved-out exception: a project id explicitly confirmed
-        # as one of mod_eligibility.EXCLUDED_MOD_NAMES' local-only addons.
-        # Patches the module-level allowlist directly since it is empty
-        # by default (no real Modrinth id has been confirmed for either
-        # excluded mod in this codebase).
-        candidate = make_candidate_with_deps(
-            [{"project_id": "LOCAL_ONLY_PROJECT", "dependency_type": "required"}]
-        )
-        with mock.patch.object(modrinth_compat, "KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS", frozenset({"LOCAL_ONLY_PROJECT"})):
-            self.assertEqual(find_dependency_conflicts(candidate, {"OTHER1": "V1"}), [])
+        self.assertEqual(find_dependency_conflicts(candidate, {"OTHER1": "V1"}), [])
 
     def test_required_dependency_with_no_exact_version_and_pinned_is_not_reported(self):
-        # A `required` entry naming only a project (no version_id) is a
-        # semver-RANGE requirement this pass cannot evaluate without a
-        # full solve -- still out of scope when the project IS pinned
-        # (MINECRAFT-362 review, seventeenth round: only an EXACT
-        # version_id mismatch against an already-pinned project is
-        # unambiguous enough to report). Being PINNED at all is what
-        # makes this fine, unlike the not-pinned-at-all case above.
         candidate = make_candidate_with_deps(
             [{"project_id": "OTHER1", "dependency_type": "required"}]
         )
@@ -467,34 +448,24 @@ class TestFindDependencyConflicts(unittest.TestCase):
         )
         self.assertEqual(find_dependency_conflicts(candidate, {"OTHER1": "V1"}), [])
 
-    def test_required_dependency_at_exact_version_not_matching_pin_is_a_conflict(self):
-        # MINECRAFT-362 review, seventeenth round, required item: this is
-        # the one case `find_dependency_conflicts` previously missed
-        # entirely -- Modrinth already told this pack exactly which
-        # version it needs, and this pack already has that project
-        # pinned to a known, DIFFERENT one. No transitive solve needed,
-        # unlike a semver-range `required` entry.
+    def test_required_dependency_at_exact_version_not_matching_pin_is_never_reported(self):
+        # Previously a conflict (seventeenth review round); reverted in
+        # the twenty-first round along with the rest of the `required`
+        # checks -- see test_required_dependency_not_pinned_at_all_is_never_reported
+        # above for why. The real-jar dependency_closure_check.py gate
+        # catches this case (and catches it correctly, from the jar's
+        # own actual required version, not Modrinth's loader-agnostic
+        # metadata) instead.
         candidate = make_candidate_with_deps(
             [{"project_id": "OTHER1", "dependency_type": "required", "version_id": "V2"}]
         )
-        conflicts = find_dependency_conflicts(candidate, {"OTHER1": "V1"})
-        self.assertEqual(len(conflicts), 1)
-        self.assertIn("OTHER1", conflicts[0])
-        self.assertIn("V1", conflicts[0])
-        self.assertIn("V2", conflicts[0])
+        self.assertEqual(find_dependency_conflicts(candidate, {"OTHER1": "V1"}), [])
 
-    def test_required_dependency_at_exact_version_not_pinned_at_all_is_a_conflict(self):
-        # MINECRAFT-362 review, eighteenth round: same reversal as the
-        # no-version-id case above -- not being pinned at all is itself
-        # now a conflict, regardless of whether an exact version_id was
-        # also given.
+    def test_required_dependency_at_exact_version_not_pinned_at_all_is_never_reported(self):
         candidate = make_candidate_with_deps(
             [{"project_id": "NOTPINNED", "dependency_type": "required", "version_id": "V2"}]
         )
-        conflicts = find_dependency_conflicts(candidate, {"OTHER1": "V1"})
-        self.assertEqual(len(conflicts), 1)
-        self.assertIn("NOTPINNED", conflicts[0])
-        self.assertIn("V2", conflicts[0])
+        self.assertEqual(find_dependency_conflicts(candidate, {"OTHER1": "V1"}), [])
 
     def test_optional_dependency_never_a_conflict(self):
         candidate = make_candidate_with_deps(

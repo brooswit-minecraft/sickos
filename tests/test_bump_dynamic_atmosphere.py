@@ -22,12 +22,12 @@ CONTROL_HASH = "c" * 128
 OLD_VERSION_ID = "OLDID1234"
 CONTROL_MOD_ID = "LNytGWDc"
 
-STUB_GATES = {"refresh": ["true"], "check": ["true"], "build": ["true"]}
-FAILING_CHECK_GATES = {"refresh": ["true"], "check": ["false"], "build": ["true"]}
-FAILING_BUILD_GATES = {"refresh": ["true"], "check": ["true"], "build": ["false"]}
+STUB_GATES = {"refresh": ["true"], "check": ["true"], "build": ["true"], "dependency_closure": ["true"]}
+FAILING_CHECK_GATES = {"refresh": ["true"], "check": ["false"], "build": ["true"], "dependency_closure": ["true"]}
+FAILING_BUILD_GATES = {"refresh": ["true"], "check": ["true"], "build": ["false"], "dependency_closure": ["true"]}
 MISSING_BINARY_GATES = {
     "refresh": ["/no/such/binary-da-bump-test-missing"],
-    "check": ["true"], "build": ["true"],
+    "check": ["true"], "build": ["true"], "dependency_closure": ["true"],
 }
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -1034,18 +1034,22 @@ class TestDependencyConflict(EngineTestCase):
         self.assertIn(CONTROL_MOD_ID, ctx.exception.message)
         self.assertEqual(self.porcelain(), before)
 
-    def test_required_dependency_not_pinned_at_all_fails_closed(self):
+    def test_required_dependency_not_pinned_at_all_still_bumps(self):
+        # MINECRAFT-362 review, twenty-first round: previously a
+        # conflict (eighteenth round); reverted along with the rest of
+        # modrinth_compat.find_dependency_conflicts' `required`-
+        # dependency checks -- see tests/test_bump_mod.py's
+        # TestDependencyConflict for why (a confirmed false positive on
+        # Cristel Lib). The real-jar dependency_closure gate (see
+        # TestDependencyClosureGateWiring below) is what now catches a
+        # genuinely missing required dependency on this path.
         payload = make_payload(category="patch", content=self.CONTENT)
         MODRINTH_METADATA[payload["modrinth_version_id"]]["dependencies"] = [
             {"project_id": "SOME_UNRELATED_MOD", "dependency_type": "required"},
         ]
-        before = self.porcelain()
-        with self.assertRaises(bump.EngineError) as ctx:
-            self.run_engine(payload, content=self.CONTENT)
-        self.assertEqual(ctx.exception.exit_code, bump.EXIT_CONFIG_ERROR)
-        self.assertEqual(ctx.exception.outcome, "dependency_conflict")
-        self.assertIn("SOME_UNRELATED_MOD", ctx.exception.message)
-        self.assertEqual(self.porcelain(), before)
+        summary, exit_code, _ = self.run_engine(payload, content=self.CONTENT)
+        self.assertEqual(exit_code, bump.EXIT_OK)
+        self.assertTrue(summary["changed"])
 
     def test_no_dependencies_field_at_all_still_bumps(self):
         # The honest-metadata default (modrinth_metadata_for above) has
@@ -1063,6 +1067,67 @@ class TestDependencyConflict(EngineTestCase):
         summary, exit_code, _ = self.run_engine(payload, content=self.CONTENT)
         self.assertEqual(exit_code, bump.EXIT_OK)
         self.assertTrue(summary["changed"])
+
+
+class TestDependencyClosureGateWiring(EngineTestCase):
+    """MINECRAFT-362 review, twenty-first round, required item: wires
+    the real dependency_closure_check.py gate into THIS engine too (see
+    tests/test_bump_mod.py's TestRealDependencyClosureGate for the full
+    real-jar, real-checker reproduction on the generalized path, which
+    has no restriction on where a candidate's download_url can point).
+
+    DA's own `validate_payload` requires `download_url` to be a real
+    `https://cdn.modrinth.com/...` URL (anti-tampering against an
+    untrusted webhook payload) -- deliberately NOT relaxed for this
+    test, so DA's candidate pin cannot point at a local `file://` jar
+    the real checker could fetch offline/deterministically the way
+    `create.pw.toml` (not payload-constrained) can. These tests instead
+    verify the WIRING -- gate position (after build, before anything is
+    committed), exit code/outcome, and clean rollback on failure --
+    with a stub `dependency_closure` command standing in for the real
+    checker, the same way `refresh`/`check`/`build` are already stubbed
+    in every other test in this file."""
+
+    CONTENT = b"dependency closure gate wiring jar"
+
+    def test_failing_dependency_closure_gate_fails_closed_with_clean_rollback(self):
+        gates = dict(STUB_GATES, dependency_closure=["false"])
+        payload = make_payload(category="patch", content=self.CONTENT)
+        before = self.porcelain()
+        with self.assertRaises(bump.EngineError) as ctx:
+            self.run_engine(payload, content=self.CONTENT, gates=gates)
+        self.assertEqual(ctx.exception.exit_code, bump.EXIT_GATE_FAILURE)
+        self.assertEqual(ctx.exception.outcome, "gate_failed")
+        self.assertEqual(self.porcelain(), before)
+        self.assertFalse((self.repo / "docs" / "releases").exists() and
+                          any((self.repo / "docs" / "releases").iterdir()))
+
+    def test_passing_dependency_closure_gate_still_bumps(self):
+        gates = dict(STUB_GATES, dependency_closure=["true"])
+        payload = make_payload(category="patch", content=self.CONTENT)
+        summary, exit_code, _ = self.run_engine(payload, content=self.CONTENT, gates=gates)
+        self.assertEqual(exit_code, bump.EXIT_OK)
+        self.assertTrue(summary["changed"])
+
+    def test_dependency_closure_gate_runs_after_build(self):
+        # Ordering matters the same way refresh->stage->check->build
+        # does (fourteenth round): if dependency_closure ran before
+        # build, a build failure downstream could still leave a bad
+        # pin staged. Confirmed by making "build" itself fail and
+        # asserting dependency_closure (stubbed to print a marker) is
+        # never reached.
+        calls = []
+
+        def recording_run_command(args, **kwargs):
+            calls.append(args)
+            return subprocess.run(args, **kwargs)
+
+        marker = ["echo", "dependency_closure_marker_should_not_run"]
+        gates = dict(STUB_GATES, build=["false"], dependency_closure=marker)
+        payload = make_payload(category="patch", content=self.CONTENT)
+        with self.assertRaises(bump.EngineError):
+            self.run_engine(payload, content=self.CONTENT, gates=gates, run_command=recording_run_command)
+        self.assertNotIn(marker, calls)
 
 
 class TestMetadataFetcherAuth(unittest.TestCase):

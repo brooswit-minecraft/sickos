@@ -18,23 +18,32 @@ identity/hash gate (modrinth_metadata.py) and no-downgrade comparator
 (semver_compare.py) are exactly what a resolved candidate would be
 verified against -- not a second, divergent implementation of either.
 
-Dependency validation here is intentionally narrow but fails CLOSED, not
-open: `find_dependency_conflicts` catches a candidate that declares
-another project `incompatible` while that project is currently pinned;
-one that declares another project `required` at an EXACT version while
-that project is pinned to a DIFFERENT one (seventeenth review round);
-and (eighteenth review round) one that `required`s ANY project not
-currently pinned at all, unless that project's id is explicitly
-confirmed local-only/out-of-pack (`KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS`,
-currently empty). A prior version of this module treated an unpinned
-`required` dependency as unverifiable-therefore-ignored, since Modrinth's
-own dependency entries do not carry enough information for this pass to
-tell a genuinely-missing requirement from a local-only one by design --
-that produced an unsafe default ("cannot verify" treated as "assume
-fine"). It does NOT resolve a `required`/`optional` dependency's semver
-*range* against what else is pinned (a full dependency-graph solve,
-including transitive requirements) -- that fuller solve remains a
-documented gap, not silently assumed covered.
+Dependency validation here is intentionally narrow: `find_dependency_conflicts`
+catches only a candidate that declares another project `incompatible`
+while that project is currently pinned -- the one thing Modrinth's own
+version-level metadata can answer with no guessing, since NeoForge's own
+per-jar manifest format has no `incompatible` declaration at all. It
+used to also compare a `required` dependency's exact version_id
+(seventeenth review round) and, briefly, refuse ANY unpinned `required`
+dependency as unverifiable (eighteenth review round) -- both reverted in
+the twenty-first round after the second produced a confirmed false
+positive: Modrinth's `dependencies` array is a project-WIDE author
+declaration, not loader-scoped, so a NeoForge build inherits whatever a
+Fabric build of the same version happens to declare (Cristel Lib
+declaring Cloth Config API `required` for a dependency the actual
+NeoForge jar does not have). Required-dependency satisfaction is now
+checked exclusively by `scripts/dependency_closure_check.py` (vendored
+from brooswit-minecraft/schematic, the same checker `ci.yml`'s own
+`dependency-check` job already trusts), run as a GATE against the
+GENERATED tree's real jars after `build`, on both write paths -- see
+`scripts/bump-dynamic-atmosphere.py`'s and `scripts/bump_mod.py`'s own
+`default_gate_commands`/`run_engine`. Reading real
+`META-INF/neoforge.mods.toml` manifests has no loader-mismatch
+false-positive class and catches both a missing requirement and a
+version-range mismatch, strictly superseding what the Modrinth-metadata
+comparison attempted. A full dependency-GRAPH solve (transitive
+requirements beyond one level) remains out of scope for both checks --
+a documented gap, not silently assumed covered.
 """
 
 from __future__ import annotations
@@ -360,113 +369,55 @@ def decide_update(pin, candidate, *, previous_version_number=None, game_version=
     return "downgrade_refused" if comparison <= 0 else "candidate"
 
 
-# Modrinth project ids (NOT mod names) individually confirmed to be the
-# local-only addons mod_eligibility.EXCLUDED_MOD_NAMES excludes by name
-# (Herobrine API, Baritone -- MINECRAFT-362's own requirement that these
-# never enter the public pack). A `required` dependency naming one of
-# these project ids is deliberately NOT a conflict below, even though
-# neither currently has a pin at all: refusing every unmet `required`
-# entry (eighteenth review round) would otherwise refuse ANY candidate
-# that happens to require one of these exact, already-excluded addons,
-# which would be exactly as wrong as the thing this round's fix exists
-# to stop -- an unverifiable requirement blocking a bump that is
-# genuinely fine. Currently empty because neither excluded mod's real
-# Modrinth project id has been confirmed in this codebase (both have no
-# pin to read one from) -- add an id here only once confirmed, never
-# guessed, same discipline as every other KNOWN_* list in this ticket.
-KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS = frozenset()
-
-
 def find_dependency_conflicts(candidate, pinned_versions_by_mod_id):
     """Check `candidate.dependencies` (Modrinth's own declared list, as
     returned by GET /v2/project/{id}/version) against what is currently
     pinned in the pack. `pinned_versions_by_mod_id` maps mod_id ->
     pinned_version_id for every currently-ELIGIBLE pin (a plain
-    iterable of mod_ids also works for membership-only checks, since
-    `in` behaves the same on a set or a dict's keys -- only the
-    required-dependency version check below needs the version values).
-
-    "Not currently pinned", below and in this function's own error
-    text, means specifically "not in `pinned_versions_by_mod_id`" --
-    i.e. not an ELIGIBLE, Modrinth-tracked pin (MINECRAFT-362 review,
-    nineteenth round, smaller item: both call sites build this dict
-    from `mod_eligibility.discover_eligible_pins`' `eligible` list
-    only). A genuinely-installed pin with no `[update.modrinth]` table
-    (`mod_eligibility.discover_eligible_pins`' `untracked` list -- the 4
-    GitHub-release-only mods, or an `EXCLUDED_MOD_NAMES` pin) has no
-    mod_id recorded in this pack's own data at all, so there is no way
-    for this function to recognize one by its real Modrinth project id
-    even though it IS actually present -- the same category of gap
-    `KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS` addresses for excluded mods
-    specifically, currently unaddressed for the 4 untracked ones.
+    iterable of mod_ids also works here, since this function only ever
+    checks membership, never a version value, any more -- see below).
 
     Returns a list of human-readable conflict strings; empty means no
-    conflict found. Deliberately narrow, not a full dependency-graph
-    solve (see this module's docstring): a Modrinth dependency entry
-    names a project and sometimes an exact version id, never a semver
-    *range* this pack could evaluate without also fetching whatever is
-    pinned for every dependency, transitively -- that solve is out of
-    scope, and an `optional` dependency is never checked. Within that
-    scope, THREE things are checked:
+    conflict found. Checks exactly ONE thing: a candidate that declares
+    another project `incompatible` while that project is currently
+    pinned in this pack is a real, verifiable conflict, regardless of
+    version -- Modrinth's own data answers this with no guessing, and
+    nothing else can check it (NeoForge's own per-jar manifest format
+    has no `incompatible` declaration at all -- see
+    scripts/dependency_closure_check.py's `read_mods()`, which only ever
+    looks at `required` entries).
 
-    - A candidate that declares another project `incompatible` while
-      that project is currently pinned in this pack is a real,
-      verifiable conflict, regardless of version.
-    - A candidate that declares another project `required` AT AN EXACT
-      version_id, while that project IS currently pinned to a
-      DIFFERENT version, is also a real, verifiable conflict
-      (seventeenth review round): Modrinth already told this pack
-      exactly which version it needs, and this pack already has that
-      project pinned to a known, different one -- no transitive lookup
-      needed, unlike a semver-range `required` entry.
-    - A candidate that declares another project `required` -- with or
-      without an exact version_id -- while that project is NOT
-      currently pinned at all, is ALSO now a conflict (eighteenth
-      review round, reversing the seventeenth round's stance): a prior
-      version of this function treated this as unverifiable-therefore-
-      ignored, on the reasoning that Modrinth cannot tell a genuinely
-      missing requirement from a local-only/out-of-pack mod like
-      Herobrine API/Baritone. That reasoning produced an unsafe
-      default: "cannot verify" was treated as "assume fine," so a
-      candidate requiring a project this pack has never heard of would
-      still bump and publish. The correct default is the opposite --
-      refuse an unverifiable requirement, and carve out ONLY the
-      specific, confirmed exception
-      (`KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS` above) rather than every
-      unpinned project by default.
+    A `required` dependency -- at an exact version_id or not, pinned or
+    not -- is deliberately NOT checked here any more (MINECRAFT-362
+    review, twenty-first round, reverting the seventeenth and
+    eighteenth rounds' additions). Both of those additions compared
+    Modrinth's version-level `dependencies` array, which is a
+    project-WIDE author declaration, not loader-scoped -- a NeoForge
+    build inherits whatever a Fabric build (or any other loader's
+    build) of the SAME version happens to declare, with no way for this
+    function to tell the two apart. That produced a confirmed false
+    positive (Cristel Lib declaring Cloth Config API `required`, a
+    Fabric-only need the actual NeoForge jar does not have) that
+    permanently excluded a healthy pin from auto-bumps. Required-
+    dependency satisfaction (both "missing entirely" and "present but
+    wrong version") is now checked exclusively by
+    scripts/dependency_closure_check.py, run as a GATE against the
+    GENERATED tree's real jars (the actual NeoForge
+    `META-INF/neoforge.mods.toml` manifest, not Modrinth's loader-
+    agnostic metadata) -- strictly more accurate, with no loader-
+    mismatch false-positive class, and already the gate this pack's own
+    CI trusts for exactly this question.
     """
     conflicts = []
     for dependency in candidate.dependencies:
         if not isinstance(dependency, dict):
             continue
-        dependency_type = dependency.get("dependency_type")
+        if dependency.get("dependency_type") != "incompatible":
+            continue
         project_id = dependency.get("project_id")
-        if dependency_type == "incompatible":
-            if project_id in pinned_versions_by_mod_id:
-                conflicts.append(
-                    f"{candidate.version_number} declares project {project_id!r} "
-                    "incompatible, and it is currently pinned in this pack"
-                )
-        elif dependency_type == "required":
-            if project_id in KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS:
-                continue
-            required_version_id = dependency.get("version_id")
-            if project_id not in pinned_versions_by_mod_id:
-                conflicts.append(
-                    f"{candidate.version_number} requires project {project_id!r}"
-                    + (f" at exact version {required_version_id!r}" if required_version_id else "")
-                    + ", which is not an eligible, Modrinth-tracked pin in this pack and is not "
-                    "on KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS -- cannot verify this requirement "
-                    "is satisfied (if it is genuinely installed under a pin with no "
-                    "[update.modrinth] table, this check cannot see that yet)"
-                )
-                continue
-            if required_version_id:
-                pinned_version_id = pinned_versions_by_mod_id[project_id]
-                if pinned_version_id != required_version_id:
-                    conflicts.append(
-                        f"{candidate.version_number} requires project {project_id!r} at exact "
-                        f"version {required_version_id!r}, but this pack has it pinned to "
-                        f"version {pinned_version_id!r}"
-                    )
+        if project_id in pinned_versions_by_mod_id:
+            conflicts.append(
+                f"{candidate.version_number} declares project {project_id!r} "
+                "incompatible, and it is currently pinned in this pack"
+            )
     return conflicts

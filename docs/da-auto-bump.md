@@ -323,28 +323,55 @@ refusal happens.
 ## Dependency check -- new as of the eighteenth review round
 
 This dispatch path never called `modrinth_compat.find_dependency_conflicts`
-at all before this round, unlike the generalized poll path -- a DA
-candidate declaring an existing pinned project `incompatible`, or
-requiring a project this pack cannot verify, would still pin and
-publish successfully (confirmed live: with otherwise-valid identity,
-hashes, and `(game_version, loader)` compatibility, a candidate
-declaring a currently-pinned project incompatible, and separately one
-requiring a missing project, both returned `exit=0, outcome=bumped,
-changed=true`). `verify_against_modrinth_metadata` now returns the
-FULL, verified metadata dict (not only the matched file entry) so its
-own `dependencies` field is available; `run_engine` reads the pack's
-current on-disk pins (and their versions) via
-`mod_eligibility.discover_eligible_pins` and passes both into the same
-`find_dependency_conflicts` the generalized path uses, before
-`download_and_verify` runs. Same narrow scope on both paths (see
-`docs/mod-auto-bump.md`'s "Compatibility and no-downgrade resolution"
-section): refuses a currently-pinned `incompatible` declaration, a
-`required` dependency at an exact version mismatching the pin, and
-(the gap this round closed) a `required` dependency on ANY project not
-currently pinned at all, with the narrow, currently-empty exception of
-`modrinth_compat.KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS`. A conflict
-raises `EXIT_CONFIG_ERROR` / `"dependency_conflict"`, same exit
-code/outcome `scripts/bump_mod.py` uses for the identical check.
+at all before the eighteenth round, unlike the generalized poll path --
+a DA candidate declaring an existing pinned project `incompatible`
+would still pin and publish successfully. `verify_against_modrinth_metadata`
+now returns the FULL, verified metadata dict (not only the matched file
+entry) so its own `dependencies` field is available; `run_engine` reads
+the pack's current on-disk pins via `mod_eligibility.discover_eligible_pins`
+and passes both into the same `find_dependency_conflicts` the
+generalized path uses, before `download_and_verify` runs. Same narrow
+scope on both paths today (see `docs/mod-auto-bump.md`'s "Compatibility
+and no-downgrade resolution" section, revised in the twenty-first
+round): refuses only a currently-pinned `incompatible` declaration --
+the one thing Modrinth's own metadata can answer with no guessing. A
+conflict raises `EXIT_CONFIG_ERROR` / `"dependency_conflict"`, same
+exit code/outcome `scripts/bump_mod.py` uses for the identical check.
+
+The eighteenth and nineteenth rounds briefly extended this to also
+compare a `required` dependency's exact version (pinned or not); both
+extensions were reverted in the twenty-first round after they produced
+a confirmed false positive (Cristel Lib's pinned version declares Cloth
+Config API `required`, a Fabric-only need the actual NeoForge jar does
+not have -- Modrinth's `dependencies` array is a project-WIDE author
+declaration, not loader-scoped, so the comparison inherited a
+completely unrelated loader's requirement). See
+`docs/mod-auto-bump.md`'s "Dependency closure -- the real-jar gate"
+section for what replaced required-dependency validation on this path.
+
+## Dependency closure -- the real-jar gate (twenty-first review round)
+
+`default_gate_commands` gained a fourth gate, `"dependency_closure"`,
+run after `build` and before anything is committed -- same
+fail-closed/clean-rollback guarantee as `refresh`/`check`/`build`. It
+runs `scripts/dependency_closure_check.py` (vendored verbatim from
+`brooswit-minecraft/schematic` at the exact commit `ci.yml`'s own
+`dependency-check` job already trusts), which downloads every pinned
+mod's REAL jar, reads its actual `META-INF/neoforge.mods.toml`, and
+confirms every `required` dependency is satisfied in range -- strictly
+more accurate than comparing Modrinth's metadata, with no
+loader-mismatch false-positive class, and the gate this pack's own CI
+already trusts for exactly this question.
+
+This path's own test coverage (`tests/test_bump_dynamic_atmosphere.py`'s
+`TestDependencyClosureGateWiring`) stops at wiring/ordering/rollback
+with a stubbed command, not the real checker: `validate_payload`
+requires `download_url` to be a real `https://cdn.modrinth.com/...` URL
+(anti-tampering against an untrusted webhook payload), which rules out
+pointing a DA candidate's own pin at a local, deterministic `file://`
+jar the way the generalized path's own test (no such restriction) does
+-- see `docs/mod-auto-bump.md`'s "Dependency closure" section for that
+full real-jar, real-checker reproduction.
 
 ## Pin write
 

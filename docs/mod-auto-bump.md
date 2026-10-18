@@ -94,30 +94,77 @@ and splits them into:
 **Explicit scope limit**: compatibility here means the candidate's own
 declared `game_versions`/`loaders`. `modrinth_compat.py` also has
 `find_dependency_conflicts(candidate, pinned_versions_by_mod_id)`, wired
-into BOTH `scripts/bump_mod.py`'s write path AND (eighteenth review
-round) `scripts/bump-dynamic-atmosphere.py`'s dispatch path -- the
-latter had never called it at all before this round, so a DA candidate
-declaring an existing pinned project `incompatible`, or requiring an
-unverifiable one, would still pin and publish successfully. It refuses:
-a candidate that declares another *currently-pinned* project
-`incompatible`; one that `required`s a currently-pinned project at an
-EXACT version this pack has pinned to something else (seventeenth
-round); and (eighteenth round, reversing a prior stance) one that
-`required`s ANY project NOT currently pinned at all, with or without an
-exact version_id. That last case was previously treated as
-unverifiable-therefore-ignored, on the reasoning that Modrinth's data
-cannot tell this pass whether the absence is a genuinely missing
-requirement or a local-only/out-of-pack mod by design (like Herobrine
-API/Baritone) -- that reasoning produced an unsafe default
-("cannot verify" treated as "assume fine"), confirmed live: a candidate
-requiring a project this pack had never heard of bumped and published
-successfully. The default is now the opposite -- refuse an unverifiable
-requirement -- with the narrow exception of a project id explicitly
-confirmed on `KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS` (currently empty;
-see "Status"). It still does **not** attempt a full dependency-graph
-solve: a `required`/`optional` dependency's semver *range* is out of
-scope regardless of whether the project is pinned. That fuller solve is
-a real gap, not an oversight -- see "Status."
+into BOTH `scripts/bump_mod.py`'s write path AND
+`scripts/bump-dynamic-atmosphere.py`'s dispatch path (the latter added
+in the eighteenth review round -- it had never called this at all
+before, so a DA candidate declaring an existing pinned project
+`incompatible` would still pin and publish successfully). It checks
+exactly ONE thing: a candidate that declares another *currently-pinned*
+project `incompatible` -- the one fact Modrinth's own metadata can
+answer with no guessing, since NeoForge's own per-jar manifest has no
+`incompatible` declaration at all. It briefly also compared a
+`required` dependency's exact `version_id` (seventeenth round) and then
+refused ANY unpinned `required` dependency as unverifiable (eighteenth
+round) -- both REVERTED in the twenty-first round: Modrinth's
+`dependencies` array is a project-WIDE author declaration, not
+loader-scoped, so a NeoForge build inherits whatever a Fabric build of
+the same version happens to declare, which produced a confirmed false
+positive (Cristel Lib declaring Cloth Config API `required`, a
+Fabric-only need the real NeoForge jar does not have) that permanently
+excluded a healthy pin from auto-bumps. Required-dependency
+satisfaction -- both "missing entirely" and "present but the wrong
+version" -- is now checked exclusively by
+`scripts/dependency_closure_check.py` (vendored verbatim from
+brooswit-minecraft/schematic, the same checker `ci.yml`'s own
+`dependency-check` job already trusts), run as a GATE against the
+GENERATED tree's real jars, after `build`, on both write paths -- see
+"Dependency closure -- the real-jar gate" below. Reading the actual
+`META-INF/neoforge.mods.toml` manifest has no loader-mismatch
+false-positive class and catches both failure shapes the Modrinth-
+metadata comparison attempted, strictly superseding it. A full
+dependency-GRAPH solve (transitive requirements beyond one level)
+remains out of scope for both checks -- a real gap, not an oversight --
+see "Status."
+
+## Dependency closure -- the real-jar gate (twenty-first review round)
+
+`scripts/dependency_closure_check.py` is vendored VERBATIM from
+`brooswit-minecraft/schematic` at the exact commit
+`.github/workflows/ci.yml`'s `dependency-check` job already trusts (via
+`reusable-dependency-check.yml`'s own internal checkout of that same
+commit) -- reused unmodified, not reimplemented, so there is exactly
+ONE dependency-closure implementation this repo trusts, not two that
+could silently drift apart. It downloads every pinned mod's REAL jar
+(hash-verified against the pin), reads each one's actual
+`META-INF/neoforge.mods.toml`, and confirms every `required` dependency
+is satisfied -- in range -- by another pinned jar or a nested jarjar
+jar. `minecraft`/`neoforge`/`forge`/`java`/`fml` are platform-provided
+and only NOTED, never failed.
+
+Both `scripts/bump_mod.py`'s and `scripts/bump-dynamic-atmosphere.py`'s
+`default_gate_commands` run it as a new `"dependency_closure"` gate,
+positioned AFTER `build` and before anything is committed -- same
+fail-closed/clean-rollback guarantee as `refresh`/`check`/`build`
+(`EXIT_GATE_FAILURE` / `"gate_failed"`, caught by the same
+`restore_repo` path). This closes the gap
+`modrinth_compat.find_dependency_conflicts` could never close even at
+its widest (the eighteenth round's version): Modrinth's own metadata
+can declare a `required` dependency with NO exact `version_id` at all
+(only a project reference, a semver RANGE requirement), which the
+Modrinth-metadata comparison could never evaluate regardless of how it
+was written -- confirmed live: a candidate requiring `othermod [2.0,)`
+against a pinned `othermod 1.0.0` bumped successfully under the
+Modrinth-only check, but the real jar checker correctly refuses it.
+`tests/test_bump_mod.py`'s `TestRealDependencyClosureGate` and
+`tests/test_bump_dynamic_atmosphere.py`'s
+`TestDependencyClosureGateWiring` cover this (the DA path's own test
+class stops at wiring/ordering/rollback with a stubbed command, not the
+real checker, because DA's `validate_payload` requires `download_url`
+to be a real `https://cdn.modrinth.com/...` URL -- anti-tampering
+against an untrusted webhook payload -- so DA's own candidate pin
+cannot point at a local `file://` jar the real checker could fetch
+offline/deterministically the way the generalized path's candidate,
+with no such restriction, can).
 
 ## Identity/hash verification -- shared with DA, not duplicated
 
@@ -347,7 +394,7 @@ notes file the way a verbatim splice did in the prior round, and capped
 at `MAX_CHANGELOG_CHARS` so one mod's long changelog cannot make the
 notes file unbounded.
 
-47 tests in `tests/test_bump_mod.py` cover: a real engine-level
+48 tests in `tests/test_bump_mod.py` cover: a real engine-level
 game-version+loader-prefixed major bump reaching the breaking gate
 (not just `semver_delta_category` in isolation), a previous-pin
 metadata id mismatch failing closed, already-pinned/no-candidate
@@ -647,44 +694,32 @@ is already established per-pin by one deterministic check, not a
 catch-all, and which specific pin hits it next isn't knowable in
 advance the way the other outcomes' pins are).
 
-**`dependency_conflict` is DIFFERENT -- reconciled by mod_id, not
-unconditionally expected (nineteenth review round corrected the sixth
-round's original framing).** It was originally reasoned about the same
-way as `downgrade_refused` above ("a pure function of the re-resolved
+**`dependency_conflict`'s history (sixth, nineteenth, and twenty-first
+review rounds) -- now settled back to unconditionally expected, like
+`downgrade_refused`.** Originally reasoned about the same way as
+`downgrade_refused` above: a pure function of the re-resolved
 candidate's own declared dependencies, so which pin hits it next isn't
-knowable in advance") -- true for the `incompatible`-and-currently-
-pinned case alone, but the eighteenth round added a second check
-(`required` dependency on any project not pinned at all) that found a
-real, confirmed false positive: Cristel Lib's pinned version declares
-Cloth Config API `required`, but Modrinth's version-level `dependencies`
-array is a project-WIDE author declaration, not loader-scoped, and the
-actual NeoForge jar requires only `neoforge`/`minecraft` -- the Fabric
-build is what actually needs Cloth Config. This repo's own authoritative
-dependency-closure gate (`.github/workflows/ci.yml`'s `dependency-check`
-job, which reads real jar metadata) agrees this pack is fine.
-`dependency_conflict` is now reconciled against
-`KNOWN_UNMET_REQUIRED_DEPENDENCY_PIN_IDS` by `mod_id`, the same way the
-four list-based outcomes above are: a `dependency_conflict` for a pin
-NOT on that list -- a genuinely new incompatible declaration, or an
-unmet required dependency on a different pin -- fails the run, rather
-than blending into Cristel Lib's one confirmed, false-positive instance.
-
-**This reconciles the REPORTING, not the REFUSAL (twentieth review
-round).** `modrinth_compat.find_dependency_conflicts` itself is
-unchanged: its only carve-out is `KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS`
-(still empty), which Cristel Lib's real Modrinth id is not on. So
-Cristel Lib's own pin is now EXCLUDED FROM AUTO-BUMPS, permanently,
-until the required-dependency check is reconciled against real jar
-metadata (e.g. by gating on `ci.yml`'s own `dependency-check` job,
-which already reads real jar metadata and already agrees this pack is
-fine) -- confirmed live: all four of Cristel Lib's most recent NeoForge
-1.21.1 releases declare the identical false-positive `required` entry,
-so every one of them, not just the current pinned version, would
-refuse. Classifying the outcome as an expected, known gap means the run
-stays green and the standing `::notice::` keeps naming it every run --
-it does NOT mean a human bump is unnecessary; quite the opposite, a
-human bump is the ONLY way this pin receives a real update until the
-underlying refusal is fixed.
+knowable in advance -- true for the `incompatible`-and-currently-pinned
+case, the only one `find_dependency_conflicts` checks today. For one
+round (the eighteenth), a second check existed here too (`required`
+dependency on any project not pinned at all), which broke that
+reasoning: it found a real, confirmed false positive (Cristel Lib's
+pinned version declares Cloth Config API `required`, but Modrinth's
+version-level `dependencies` array is a project-WIDE author
+declaration, not loader-scoped, and the actual NeoForge jar requires
+only `neoforge`/`minecraft`), so the nineteenth round reconciled
+`dependency_conflict` against a per-mod-id allowlist rather than
+exempting the whole class. The twentieth round then found that fix
+incomplete -- it reconciled the REPORTING but left the REFUSAL itself
+untouched, so Cristel Lib stayed permanently excluded from auto-bumps
+regardless. The twenty-first round fixed the actual root cause instead
+of patching around it again: `find_dependency_conflicts` no longer
+compares a `required` dependency AT ALL (see "Explicit scope limit"
+above and "Dependency closure -- the real-jar gate" below for what
+replaced it). With that removed, `dependency_conflict` can once again
+only mean the one remaining, genuinely unpredictable-in-advance case,
+so it is unconditionally expected again, with no per-mod-id allowlist
+and no exclusion list to go stale.
 
 Push-gating and credential-checking are driven by whether the run's
 summary recorded a real bump, not by the script's overall exit code, so
@@ -692,7 +727,7 @@ an unexpected failure elsewhere in the same run never blocks pushing a
 bump this run already made -- the job still fails afterward (so the
 failure is visible), but only after that push.
 
-38 tests in `tests/test_poll_mod_updates.py` cover: the same
+36 tests in `tests/test_poll_mod_updates.py` cover: the same
 game-version+loader threading reaching the category gate end-to-end
 through `poll_and_bump` (not only `run_engine` directly), Dynamic Atmosphere's
 pin considered like any other (no-op when nothing is newer for it, bumped
@@ -775,12 +810,13 @@ runs, not a captured sha from whenever the job was first queued.
   comparison; and (tenth round) `NoParseableCandidateError`/
   `OnlyPrereleaseAvailableError`, each raised instead of a silent `None`
   so "nothing newer upstream" cannot be confused with "every candidate
-  was unparseable" or "only prereleases exist"); (seventeenth round)
-  `find_dependency_conflicts` extended to catch a `required` dependency
-  at an exact version mismatching a currently-pinned project's own
-  version; and (eighteenth round) the same function reversed to refuse
-  a `required` dependency on any project not pinned at all, rather than
-  ignoring it as unverifiable (47 tests).
+  was unparseable" or "only prereleases exist"); `find_dependency_conflicts`
+  briefly extended, across the seventeenth and eighteenth rounds, to
+  also compare a `required` dependency's exact version (whether pinned
+  or not), both reverted in the twenty-first round once that comparison
+  was confirmed to produce a false positive against Modrinth's own
+  project-wide (not loader-scoped) dependency metadata -- it checks
+  only `incompatible` again today (46 tests).
 - `scripts/modrinth_metadata.py` -- identity/hash verification, extracted
   from and still used by the DA engine, plus (seventeenth round) an
   optional `(game_version, loader)` compatibility check against the
@@ -803,16 +839,20 @@ runs, not a captured sha from whenever the job was first queued.
   into `verify_against_modrinth_metadata` -- unlike the generalized
   path's defense-in-depth re-check, this was the FIRST and ONLY such
   check anywhere on this dispatch path, since a dispatch payload has no
-  earlier compatibility filter at all; and (eighteenth round)
+  earlier compatibility filter at all; (eighteenth round)
   `modrinth_compat.find_dependency_conflicts` wired in for the first
   time, reading `verify_against_modrinth_metadata`'s now-full metadata
-  return value for its `dependencies` field (83 tests, up from 74 -- 2
-  new in the eighth round, 3 more in the seventeenth proving a wrong
-  loader, wrong game version, and metadata missing both fields all fail
-  closed, 4 more in the eighteenth proving the dependency check works
-  on this path too; several others adjusted to use a genuinely-matching-
-  category version delta rather than relying on the old payload-only
-  default).
+  return value for its `dependencies` field; and (twenty-first round)
+  the new real, vendored `dependency_closure` gate wired in too, after
+  `build` -- tested at the wiring/ordering/rollback level with a
+  stubbed command, not the real checker, since DA's own
+  `validate_payload` requires a real `cdn.modrinth.com` `download_url`
+  (anti-tampering), which rules out a local, deterministic `file://`
+  jar the way the generalized path's own test (no such restriction)
+  uses (86 tests, up from 74 across the eighth, seventeenth, eighteenth
+  and twenty-first rounds; several others adjusted along the way to use
+  a genuinely-matching-category version delta rather than relying on
+  the old payload-only default).
 - The direct-pin-vs-packwiz decision above.
 - `Release-Only: true` on DA's generated commits (see `da-auto-bump.md`).
 - `scripts/bump_mod.py` -- the generalized write path, with the
@@ -843,14 +883,14 @@ runs, not a captured sha from whenever the job was first queued.
   `make check`'s `git diff --quiet` against the INDEX actually passes --
   one test exercises this with the real `git diff --quiet` predicate in
   place of a stub, and a second (skipped where `packwiz` is not
-  installed) runs the real `packwiz refresh` binary too, and (seventeenth
-  round) two tests exercising `find_dependency_conflicts`'s new exact-
-  version `required` check through the real engine, and two more
+  installed) runs the real `packwiz refresh` binary too; two tests
   exercising the new `(game_version, loader)` defense-in-depth re-check
-  against a freshly-refetched candidate's own metadata; and (eighteenth
-  round) one test proving a required dependency on a project not pinned
-  at all now fails closed, plus one proving the known-local-only
-  exception still bumps (47 tests).
+  against a freshly-refetched candidate's own metadata (seventeenth
+  round); and (twenty-first round) two tests exercising the real,
+  vendored `dependency_closure` gate against real zip jar bytes served
+  over `file://` -- a version-range mismatch the Modrinth-metadata
+  check could never evaluate even at its widest, and a satisfying
+  positive control (48 tests).
 - `scripts/poll-mod-updates.py` + `.github/workflows/mod-auto-bump-poll.yml`
   -- the generalized trigger, now covering Dynamic Atmosphere's own pin
   too, reading `pack.toml`'s `[versions]` shape strictly (raises rather
@@ -860,13 +900,15 @@ runs, not a captured sha from whenever the job was first queued.
   asks `release.yml` to run twice before the first run finishes),
   classifying five gap-shaped outcome kinds (`resolution_failed`,
   `unsupported_version_scheme`, `no_parseable_candidate`,
-  `only_prerelease_available`, `untracked` -- see "Enrollment" above,
-  plus `dependency_conflict` as of the nineteenth round, see below) each
-  against its OWN explicit `KNOWN_*_PIN_IDS`/`KNOWN_UNTRACKED_PIN_PATHS`/
-  `KNOWN_UNMET_REQUIRED_DEPENDENCY_PIN_IDS` allowlist (never the whole
-  outcome class), two genuinely unlistable-in-advance outcomes
-  (`breaking_change_requires_human_review`, `downgrade_refused`)
-  staying unconditionally expected, two more
+  `only_prerelease_available`, `untracked` -- see "Enrollment" above)
+  each against its OWN explicit `KNOWN_*_PIN_IDS`/`KNOWN_UNTRACKED_PIN_PATHS`
+  allowlist (never the whole outcome class), three genuinely
+  unlistable-in-advance outcomes (`breaking_change_requires_human_review`,
+  `downgrade_refused`, `dependency_conflict` -- the last briefly had its
+  own allowlist in the nineteenth round, reverted in the twenty-first
+  once its root cause was fixed at the source instead, see
+  "Compatibility and no-downgrade resolution" above) staying
+  unconditionally expected, two more
   (`excluded_local_only`/`excluded_pin_path`) unconditionally expected
   for a different reason (no meaningful mod_id to reconcile by), and an
   aggregate guard stated as a POSITIVE invariant -- at least one
@@ -888,15 +930,14 @@ runs, not a captured sha from whenever the job was first queued.
   `EXCLUDED_PIN_PATHS` gaining the same own-outcome treatment --
   `"excluded_pin_path"`, also unconditionally expected -- so a path
   added there in the future gets reported rather than silently dropped
-  by the bare `continue` this replaced, (sixteenth round)
+  by the bare `continue` this replaced, and (sixteenth round)
   `KNOWN_ANONYMOUS_404_MOD_IDS` emptied with a dedicated test asserting
-  `"resolution_failed"` is never an expected gap on its own any more,
-  and (nineteenth round) `dependency_conflict` moved from unconditionally
-  expected to its own `KNOWN_UNMET_REQUIRED_DEPENDENCY_PIN_IDS` allowlist
-  -- seeded with Cristel Lib, the one confirmed false positive the
-  eighteenth round's new required-dependency check produced -- with a
-  test proving an unlisted dependency_conflict now fails the run)
-  (38 tests).
+  `"resolution_failed"` is never an expected gap on its own any more.
+  `dependency_conflict` passed briefly through its own per-mod-id
+  allowlist (nineteenth round, after a confirmed false positive on
+  Cristel Lib) before settling back to unconditionally expected
+  (twenty-first round, once the root cause was fixed at its source --
+  see "Compatibility and no-downgrade resolution" above) (36 tests).
   `run_engine`'s category determination and no-downgrade
   check both now take/use a `game_version` hint and an identity-checked
   previous-pin metadata, threaded through from this script's own
@@ -920,34 +961,39 @@ runs, not a captured sha from whenever the job was first queued.
   asserting the YAML itself pins it, since no Python-level test
   otherwise exercises the real `actions/checkout` behavior (2 tests).
 - `modrinth_compat.find_dependency_conflicts` -- refuses a candidate that
-  declares a currently-pinned project `incompatible`; one that
-  `required`s a currently-pinned project at an exact version this pack
-  has pinned to something else (seventeenth round); and (eighteenth
-  round) one that `required`s ANY project not currently pinned at all,
-  unless its id is on `KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS` (12 tests,
-  plus 6 integration tests through `bump_mod.run_engine`). Wired into
-  BOTH write paths as of the eighteenth round: `scripts/bump_mod.py`'s
-  (unchanged this round) and `scripts/bump-dynamic-atmosphere.py`'s
-  (new this round -- see below; 4 integration tests through
-  `bump.run_engine`).
+  declares a currently-pinned project `incompatible`, the one thing
+  Modrinth's own metadata can answer with no guessing (11 tests, plus 5
+  integration tests through `bump_mod.run_engine` and 4 through
+  `bump.run_engine`). Briefly also compared a `required` dependency's
+  exact version (seventeenth and eighteenth rounds), both reverted in
+  the twenty-first round -- see "Compatibility and no-downgrade
+  resolution" above for why, and the `dependency_closure` gate entry
+  below for what replaced it. Wired into BOTH write paths since the
+  eighteenth round: `scripts/bump_mod.py`'s and
+  `scripts/bump-dynamic-atmosphere.py`'s.
+- **`scripts/dependency_closure_check.py`** (twenty-first round) --
+  vendored VERBATIM from `brooswit-minecraft/schematic` at the exact
+  commit `ci.yml`'s own `dependency-check` job already trusts. Run as
+  a new `"dependency_closure"` gate, after `build`, on BOTH write
+  paths' `default_gate_commands`/`run_engine` (same fail-closed/clean-
+  rollback guarantee as `refresh`/`check`/`build`). Reads every pinned
+  mod's REAL jar (`META-INF/neoforge.mods.toml`) and confirms every
+  `required` dependency is satisfied, in range, by another pinned jar
+  or a nested jarjar jar -- strictly more accurate than comparing
+  Modrinth's project-wide, not loader-scoped, `dependencies` metadata,
+  with no loader-mismatch false-positive class. Covered by 2 real
+  (not stubbed) tests on the generalized path, using real zip jar
+  bytes served over `file://`, and 3 wiring/ordering/rollback tests on
+  the DA path using a stubbed command (DA's own `validate_payload`
+  requires a real `cdn.modrinth.com` `download_url`, which rules out a
+  local `file://` jar for a true end-to-end test there).
 
 **Not implemented -- real gaps, not oversights:**
-- **Full dependency-graph validation**: `find_dependency_conflicts`
-  catches `incompatible`-and-currently-pinned, `required`-at-an-exact-
-  version-that-mismatches-the-pin, and (eighteenth round) `required`-
-  and-not-pinned-at-all. It does not resolve a `required`/`optional`
-  dependency's semver RANGE against what else is pinned, nor a
-  transitive requirement -- that fuller graph solve remains out of
-  scope regardless of pinning state.
-- **`KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS` is currently EMPTY**
-  (eighteenth review round): it exists to carve out
-  `mod_eligibility.EXCLUDED_MOD_NAMES`' local-only addons (Herobrine
-  API, Baritone) from the new not-pinned-required-dependency refusal
-  above, but neither excluded mod's real Modrinth project id has been
-  confirmed in this codebase -- both have no pin at all to read one
-  from. A candidate requiring either of them by its real Modrinth id
-  would refuse today, until that id is confirmed and added here with
-  real evidence, never guessed.
+- **Full dependency-GRAPH validation**: neither `find_dependency_conflicts`
+  nor the new `dependency_closure` gate resolves a transitive
+  requirement (a dependency of a dependency) or a semver RANGE against
+  anything beyond one level of pinned/nested jars. That fuller graph
+  solve remains out of scope.
 - The 4 GitHub-release-only mods (`dynamic-despawn`, `magicavoxel-loader`,
   `dynamic-battle-axes`, `dynamic-whips`) have no verified-identity
   mechanism at all yet -- a different source (GitHub's release-asset API,

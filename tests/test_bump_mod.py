@@ -1,11 +1,13 @@
 import hashlib
 import importlib.util
+import io
 import json
 import subprocess
 import sys
 import tempfile
 import unittest
 import urllib.error
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -30,8 +32,8 @@ COMPAT_SPEC.loader.exec_module(modrinth_compat)
 EligiblePin = mod_eligibility.EligiblePin
 VersionCandidate = modrinth_compat.VersionCandidate
 
-STUB_GATES = {"refresh": ["true"], "check": ["true"], "build": ["true"]}
-FAILING_CHECK_GATES = {"refresh": ["true"], "check": ["false"], "build": ["true"]}
+STUB_GATES = {"refresh": ["true"], "check": ["true"], "build": ["true"], "dependency_closure": ["true"]}
+FAILING_CHECK_GATES = {"refresh": ["true"], "check": ["false"], "build": ["true"], "dependency_closure": ["true"]}
 
 MOD_ID = "EXAMPLE1"
 OTHER_MOD_ID = "OTHER1"
@@ -560,6 +562,7 @@ class TestRealPackwizDryRun(EngineTestCase):
                       f'"{self.PACKWIZ}" refresh >/dev/null && '
                       'git diff --quiet -- pack.toml index.toml mods'],
             "build": ["true"],
+            "dependency_closure": ["true"],
         }
 
     def test_real_gates_produce_a_successful_bump(self):
@@ -608,6 +611,7 @@ class TestGateOrderingAgainstTheRealCheckPredicate(EngineTestCase):
         "refresh": ["true"],
         "check": ["git", "diff", "--quiet", "--", "pack.toml", "index.toml", "mods"],
         "build": ["true"],
+        "dependency_closure": ["true"],
     }
 
     def test_check_gate_passes_because_staging_happens_before_it_runs(self):
@@ -618,6 +622,124 @@ class TestGateOrderingAgainstTheRealCheckPredicate(EngineTestCase):
         pin = make_pin()
         summary, exit_code, _ = self.run_engine(
             pin, candidate, content=content, gate_commands=self.REALISTIC_CHECK_GATES,
+        )
+        self.assertEqual(exit_code, bump_mod.EXIT_OK)
+        self.assertEqual(summary["outcome"], "bumped")
+
+
+REAL_DEPENDENCY_CLOSURE_SCRIPT = Path(__file__).parents[1] / "scripts" / "dependency_closure_check.py"
+
+
+def _build_neoforge_jar(mod_id, version, requires=()):
+    """A minimal, real, valid NeoForge jar (zip bytes) -- just enough for
+    scripts/dependency_closure_check.py's read_mods() to parse: one
+    [[mods]] entry and, for each (dep_mod_id, version_range) in
+    `requires`, one [[dependencies.<mod_id>]] entry of type "required"."""
+    lines = ['modLoader="javafml"', 'loaderVersion="[1,)"', 'license="Test"', "",
+             "[[mods]]", f'modId="{mod_id}"', f'version="{version}"', f'displayName="{mod_id}"']
+    for dep_mod_id, version_range in requires:
+        lines += ["", f"[[dependencies.{mod_id}]]", f'modId="{dep_mod_id}"',
+                  'type="required"', f'versionRange="{version_range}"',
+                  'ordering="NONE"', 'side="BOTH"']
+    toml_text = "\n".join(lines) + "\n"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("META-INF/neoforge.mods.toml", toml_text)
+    return buf.getvalue()
+
+
+class TestRealDependencyClosureGate(EngineTestCase):
+    """MINECRAFT-362 review, twenty-first round, required item:
+    modrinth_compat.find_dependency_conflicts can only compare an EXACT
+    version_id, never a semver RANGE -- a required dependency present
+    with no exact version_id passes unconditionally even when the
+    pinned jar's own actual version is outside the real required range.
+    These tests exercise the real, vendored dependency_closure_check.py
+    gate (not a stub), against REAL zip jar bytes served over `file://`
+    (no network needed), reproducing the reviewer's own methodology:
+    other-mod.pw.toml (OTHER_MOD_ID) stands in for a real "othermod"
+    dependency; example-mod.pw.toml (MOD_ID) is bumped to a candidate
+    whose real jar requires it at a version range the pinned "othermod"
+    jar version does or does not satisfy."""
+
+    def _pin_other_mod_to_a_real_local_jar(self, version):
+        jar_bytes = _build_neoforge_jar("othermod", version)
+        jar_dir = Path(tempfile.mkdtemp(prefix="dep-closure-othermod-"))
+        jar_path = jar_dir / f"othermod-{version}.jar"
+        jar_path.write_bytes(jar_bytes)
+        sha512 = hashlib.sha512(jar_bytes).hexdigest()
+        (self.repo / "mods" / "other-mod.pw.toml").write_text(
+            'name = "Other Mod"\n'
+            f'filename = "othermod-{version}.jar"\n'
+            'side = "both"\n'
+            "\n"
+            "[download]\n"
+            f'url = "file://{jar_path}"\n'
+            'hash-format = "sha512"\n'
+            f'hash = "{sha512}"\n'
+            "\n"
+            "[update]\n"
+            "[update.modrinth]\n"
+            f'mod-id = "{OTHER_MOD_ID}"\n'
+            'version = "OTHEROLD"\n',
+            encoding="utf-8",
+        )
+        _git(self.repo, "add", "-A")
+        _git(self.repo, "commit", "-q", "-m", "pin other-mod to a real local jar")
+
+    def _real_dependency_closure_gates(self):
+        return {
+            "refresh": ["true"], "check": ["true"], "build": ["true"],
+            "dependency_closure": ["python3", str(REAL_DEPENDENCY_CLOSURE_SCRIPT)],
+        }
+
+    def test_required_dependency_version_outside_real_range_fails_closed(self):
+        # othermod is really pinned at 1.0.0; the candidate's real jar
+        # requires othermod [2.0,) -- a version RANGE
+        # modrinth_compat.find_dependency_conflicts cannot evaluate (it
+        # only checks an exact version_id, which this Modrinth metadata
+        # does not declare), but the real jar checker can and must.
+        self._pin_other_mod_to_a_real_local_jar("1.0.0")
+        jar_bytes = _build_neoforge_jar("genericmod", "1.1.0", requires=[("othermod", "[2.0,)")])
+        jar_dir = Path(tempfile.mkdtemp(prefix="dep-closure-generic-"))
+        jar_path = jar_dir / "genericmod-1.1.0.jar"
+        jar_path.write_bytes(jar_bytes)
+        candidate = make_candidate(
+            version_number="1.1.0", file_name="genericmod-1.1.0.jar",
+            download_url=f"file://{jar_path}",
+            sha1=hashlib.sha1(jar_bytes).hexdigest(), sha512=hashlib.sha512(jar_bytes).hexdigest(),
+        )
+        self.register(candidate.version_id, metadata_for(candidate))
+        self.register(OLD_VERSION_ID, {"id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0"})
+        pin = make_pin()
+
+        before = self.porcelain()
+        with self.assertRaises(bump_mod.EngineError) as ctx:
+            self.run_engine(pin, candidate, content=jar_bytes, gate_commands=self._real_dependency_closure_gates())
+        self.assertEqual(ctx.exception.exit_code, bump_mod.EXIT_GATE_FAILURE)
+        self.assertEqual(self.porcelain(), before)
+        self.assertFalse((self.repo / "docs" / "releases").exists() and
+                          any((self.repo / "docs" / "releases").iterdir()))
+
+    def test_required_dependency_version_inside_real_range_still_bumps(self):
+        # Positive control: othermod really pinned at 2.0.0 satisfies
+        # the candidate's real [2.0,) requirement.
+        self._pin_other_mod_to_a_real_local_jar("2.0.0")
+        jar_bytes = _build_neoforge_jar("genericmod", "1.1.0", requires=[("othermod", "[2.0,)")])
+        jar_dir = Path(tempfile.mkdtemp(prefix="dep-closure-generic-"))
+        jar_path = jar_dir / "genericmod-1.1.0.jar"
+        jar_path.write_bytes(jar_bytes)
+        candidate = make_candidate(
+            version_number="1.1.0", file_name="genericmod-1.1.0.jar",
+            download_url=f"file://{jar_path}",
+            sha1=hashlib.sha1(jar_bytes).hexdigest(), sha512=hashlib.sha512(jar_bytes).hexdigest(),
+        )
+        self.register(candidate.version_id, metadata_for(candidate))
+        self.register(OLD_VERSION_ID, {"id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0"})
+        pin = make_pin()
+
+        summary, exit_code, _ = self.run_engine(
+            pin, candidate, content=jar_bytes, gate_commands=self._real_dependency_closure_gates(),
         )
         self.assertEqual(exit_code, bump_mod.EXIT_OK)
         self.assertEqual(summary["outcome"], "bumped")
@@ -652,14 +774,16 @@ class TestDependencyConflict(EngineTestCase):
         self.assertIn(OTHER_MOD_ID, ctx.exception.message)
         self.assertEqual(self.porcelain(), before)
 
-    def test_required_at_exact_version_mismatching_the_pin_fails_closed(self):
-        # MINECRAFT-362 review, seventeenth round, required item: a
-        # candidate that requires another currently-pinned project at an
-        # EXACT version this pack has pinned to something else must
-        # refuse, the same as the incompatible case above -- Modrinth
-        # already told this pack exactly which version it needs.
-        # other-mod.pw.toml is pinned at OTHEROLD (build_fixture_repo);
-        # this candidate requires a different, specific version id.
+    def test_required_at_exact_version_mismatching_the_pin_still_bumps(self):
+        # MINECRAFT-362 review, twenty-first round: previously a
+        # conflict (seventeenth round); reverted along with the rest of
+        # the `required`-dependency checks in modrinth_compat.
+        # find_dependency_conflicts -- Modrinth's version-level
+        # `dependencies` array is a project-WIDE author declaration, not
+        # loader-scoped, which produced a confirmed false positive
+        # (Cristel Lib). Required-dependency satisfaction is now
+        # checked exclusively by the real-jar dependency_closure gate
+        # (see TestRealDependencyClosureGate below), not here.
         content = b"requires exact other-mod version jar"
         candidate = make_candidate(
             content=content,
@@ -670,14 +794,9 @@ class TestDependencyConflict(EngineTestCase):
         self.register(OLD_VERSION_ID, {"id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0"})
         pin = make_pin()
 
-        before = self.porcelain()
-        with self.assertRaises(bump_mod.EngineError) as ctx:
-            self.run_engine(pin, candidate, content=content)
-        self.assertEqual(ctx.exception.exit_code, bump_mod.EXIT_CONFIG_ERROR)
-        self.assertEqual(ctx.exception.outcome, "dependency_conflict")
-        self.assertIn(OTHER_MOD_ID, ctx.exception.message)
-        self.assertIn("SOME_OTHER_VERSION_ID", ctx.exception.message)
-        self.assertEqual(self.porcelain(), before)
+        summary, exit_code, _ = self.run_engine(pin, candidate, content=content)
+        self.assertEqual(exit_code, bump_mod.EXIT_OK)
+        self.assertTrue(summary["changed"])
 
     def test_required_at_exact_version_matching_the_pin_still_bumps(self):
         content = b"requires matching other-mod version jar"
@@ -708,13 +827,15 @@ class TestDependencyConflict(EngineTestCase):
         self.assertEqual(exit_code, bump_mod.EXIT_OK)
         self.assertTrue(summary["changed"])
 
-    def test_required_dependency_not_pinned_at_all_now_fails_closed(self):
-        # MINECRAFT-362 review, eighteenth round, required item: this
-        # test previously asserted the unsafe success case the review
-        # flagged by exact name -- a candidate requiring a project this
-        # pack has never heard of bumped successfully anyway. Reversed:
-        # an unverifiable required dependency must now refuse, same
-        # outcome/exit code as the incompatible-and-pinned case.
+    def test_required_dependency_not_pinned_at_all_still_bumps(self):
+        # MINECRAFT-362 review, twenty-first round: previously a
+        # conflict (eighteenth round, which the review flagged by exact
+        # test name for asserting the opposite of what was then
+        # believed correct); reverted along with the rest of the
+        # `required`-dependency checks -- see
+        # test_required_at_exact_version_mismatching_the_pin_still_bumps
+        # above for why. The real-jar dependency_closure gate is what
+        # now catches a genuinely missing required dependency.
         content = b"needs something jar"
         candidate = make_candidate(
             content=content,
@@ -724,40 +845,7 @@ class TestDependencyConflict(EngineTestCase):
         self.register(OLD_VERSION_ID, {"id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0"})
         pin = make_pin()
 
-        before = self.porcelain()
-        with self.assertRaises(bump_mod.EngineError) as ctx:
-            self.run_engine(pin, candidate, content=content)
-        self.assertEqual(ctx.exception.exit_code, bump_mod.EXIT_CONFIG_ERROR)
-        self.assertEqual(ctx.exception.outcome, "dependency_conflict")
-        self.assertIn("SOME_UNRELATED_MOD", ctx.exception.message)
-        self.assertEqual(self.porcelain(), before)
-
-    def test_required_dependency_on_a_known_local_only_project_still_bumps(self):
-        # The one carved-out exception, exercised through the real
-        # engine: a required dependency on a project id explicitly on
-        # KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS must not block the bump.
-        content = b"needs a known local-only mod jar"
-        candidate = make_candidate(
-            content=content,
-            dependencies=({"project_id": "LOCAL_ONLY_PROJECT", "dependency_type": "required"},),
-        )
-        self.register(candidate.version_id, metadata_for(candidate))
-        self.register(OLD_VERSION_ID, {"id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0"})
-        pin = make_pin()
-
-        # Patches find_dependency_conflicts' own __globals__ directly,
-        # not a `modrinth_compat` attribute on bump_mod -- bump_mod
-        # imports the bare name (`from modrinth_compat import
-        # find_dependency_conflicts`), so there is no `bump_mod.
-        # modrinth_compat` to patch; this reaches the actual module
-        # namespace the function reads its globals from regardless of
-        # which of this test suite's several module-loading mechanisms
-        # ultimately won the race to populate sys.modules.
-        with mock.patch.dict(
-            bump_mod.find_dependency_conflicts.__globals__,
-            {"KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS": frozenset({"LOCAL_ONLY_PROJECT"})},
-        ):
-            summary, exit_code, _ = self.run_engine(pin, candidate, content=content)
+        summary, exit_code, _ = self.run_engine(pin, candidate, content=content)
         self.assertEqual(exit_code, bump_mod.EXIT_OK)
         self.assertTrue(summary["changed"])
 

@@ -624,13 +624,29 @@ def default_gate_commands(repo_root):
         "refresh": shlex.split(os.environ.get("DA_BUMP_REFRESH_CMD", "make refresh")),
         "check": shlex.split(os.environ.get("DA_BUMP_CHECK_CMD", "make check")),
         "build": shlex.split(os.environ.get("DA_BUMP_BUILD_CMD", "make build")),
+        # MINECRAFT-362 review, twenty-first round: runs the SAME real-jar
+        # dependency-closure checker ci.yml's `dependency-check` job
+        # already trusts (scripts/dependency_closure_check.py, vendored
+        # verbatim at that job's own pinned schematic commit), against
+        # the GENERATED tree, after `build` and before anything is
+        # committed. Closes the gap modrinth_compat.find_dependency_conflicts
+        # cannot: a required Modrinth dependency present with no exact
+        # version_id passes that check unconditionally, even when the
+        # pinned jar's own actual version is outside the real required
+        # range -- confirmed live (a candidate requiring `othermod
+        # [2.0,)` against a pinned `othermod 1.0.0` bumped successfully
+        # under the Modrinth-metadata-only check, but this real-jar
+        # checker correctly refuses it).
+        "dependency_closure": shlex.split(
+            os.environ.get("DA_BUMP_DEPENDENCY_CLOSURE_CMD", "python3 scripts/dependency_closure_check.py")
+        ),
     }
 
 
 def run_gate(repo_root, run_command, commands, name):
     result = run_command(commands[name], cwd=str(repo_root))
     if result.returncode != 0:
-        raise EngineError(EXIT_GATE_FAILURE, "gate_failed", f"'make {name}' failed (exit {result.returncode})")
+        raise EngineError(EXIT_GATE_FAILURE, "gate_failed", f"gate {name!r} failed (exit {result.returncode})")
 
 
 # --------------------------------------------------------------------------
@@ -1031,6 +1047,11 @@ def run_engine(repo_root, payload_raw, *, release_body_override=None,
         stage_intended_files(repo_root, notes_path, run_command=run_command)
         run_gate(repo_root, run_command, commands, "check")
         run_gate(repo_root, run_command, commands, "build")
+        # Real-jar dependency closure (MINECRAFT-362 review, twenty-first
+        # round) -- after `build` so the export itself is already proven
+        # to succeed, before anything is committed, so a failure here
+        # restores cleanly same as any other gate.
+        run_gate(repo_root, run_command, commands, "dependency_closure")
     except Exception:
         # Fail-closed applies to ANY exception here, not only a designed
         # EngineError: a missing make/packwiz binary, a CalledProcessError

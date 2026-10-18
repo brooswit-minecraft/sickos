@@ -12,7 +12,9 @@ only.
 Deliberately reuses, rather than re-implements, the DA engine's generic
 (not actually DA-specific) pieces: TOML pin rendering, pack.toml
 read/bump/write, jar download+hash verification, gate running
-(`make refresh/check/build`), and git plumbing. These are loaded directly
+(`make refresh/check/build`, plus `dependency_closure` -- the real,
+vendored jar dependency-closure checker, run against the GENERATED tree
+after `build`; twenty-first review round), and git plumbing. These are loaded directly
 from bump-dynamic-atmosphere.py (see `_load_da_engine()` below) so there is
 one implementation of each, not a second copy that could silently drift.
 The identity/hash gate and no-downgrade comparator were already extracted
@@ -29,17 +31,22 @@ docs/mod-auto-bump.md's "Status" section for the full list):
   flagged.
 - The Modrinth "vouch check" (AC8) was a DA-specific sanity check against
   a control mod; it has no generic analogue and is not attempted here.
-- No FULL dependency-graph validation against other pinned mods (semver
-  *ranges* against what else is pinned, transitive requirements). This
-  engine DOES refuse: a candidate that declares another currently-pinned
-  project `incompatible`; one that `required`s a currently-pinned
-  project at an EXACT version this pack has pinned to something else
-  (seventeenth review round); and (eighteenth review round) one that
-  `required`s ANY project not currently pinned at all, unless that
-  project's id is explicitly confirmed local-only/out-of-pack
-  (modrinth_compat.KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS, currently
-  empty) -- see modrinth_compat.find_dependency_conflicts, checked below
-  against the pack's current on-disk pins and versions.
+- No full dependency-GRAPH validation (transitive requirements beyond
+  one level). What IS checked: `modrinth_compat.find_dependency_conflicts`
+  refuses a candidate that declares another currently-pinned project
+  `incompatible` (the one thing Modrinth's own metadata can answer with
+  no guessing); required-dependency satisfaction -- both "missing
+  entirely" and "present but the wrong version" -- is checked by the
+  `dependency_closure` gate below, which runs the real, vendored
+  dependency_closure_check.py (same checker `ci.yml`'s own
+  `dependency-check` job trusts) against the GENERATED tree's real
+  jars, after `build`, before anything is committed (twenty-first
+  review round -- replacing two narrower, Modrinth-metadata-only
+  `required`-dependency checks this engine briefly had, both reverted
+  after the second produced a confirmed false positive: Modrinth's
+  `dependencies` array is a project-WIDE author declaration, not
+  loader-scoped, so it cannot be compared directly the way the real
+  jar's own manifest can).
 """
 
 from __future__ import annotations
@@ -521,13 +528,11 @@ def run_engine(repo_root, pin, candidate, *, category=None,
 
     # Dependency check (narrow, see modrinth_compat.find_dependency_conflicts):
     # refuse a candidate that declares another currently-pinned project
-    # incompatible; OR that requires a currently-pinned project at an
-    # exact version this pack has pinned to something else (seventeenth
-    # review round); OR that requires ANY project not currently pinned
-    # at all, unless explicitly confirmed local-only (eighteenth review
-    # round). Reads the pack's CURRENT on-disk pins, before this run
-    # writes anything -- the version, not only the mod_id, is needed for
-    # the second check.
+    # incompatible -- the one thing Modrinth's metadata can answer
+    # unambiguously. Required-dependency satisfaction is checked later,
+    # by the real-jar dependency_closure gate below (twenty-first review
+    # round), not here any more. Reads the pack's CURRENT on-disk pins,
+    # before this run writes anything.
     eligible_pins, _untracked = mod_eligibility.discover_eligible_pins(repo_root)
     pinned_versions_by_mod_id = {eligible_pin.mod_id: eligible_pin.pinned_version_id for eligible_pin in eligible_pins}
     conflicts = find_dependency_conflicts(candidate, pinned_versions_by_mod_id)
@@ -659,6 +664,16 @@ def run_engine(repo_root, pin, candidate, *, category=None,
         stage_intended_files(repo_root, pin.pin_path, notes_path, run_command=run_command)
         run_gate(repo_root, run_command, gates, "check")
         run_gate(repo_root, run_command, gates, "build")
+        # Real-jar dependency closure (MINECRAFT-362 review, twenty-first
+        # round): modrinth_compat.find_dependency_conflicts' own check
+        # cannot evaluate a semver RANGE (only an exact version_id), so a
+        # required dependency present with no exact version_id passes
+        # unconditionally even when the pinned jar's own actual version
+        # is outside the real required range -- confirmed live. This
+        # runs the SAME real-jar checker ci.yml's `dependency-check` job
+        # already trusts, against the GENERATED tree, after `build`,
+        # before anything is committed.
+        run_gate(repo_root, run_command, gates, "dependency_closure")
 
         # Compares against HEAD, not the index, so staging order above
         # does not affect it -- can run any time after the pin is written.
