@@ -120,6 +120,23 @@ def config_candidates(root, world):
     )
 
 
+def is_bare_version_stub(content):
+    """True if a config's only top-level key is configVersion.
+
+    DA (0.31.0-alpha.1+) writes exactly this -- nothing else -- the first
+    time a brand-new world is loaded, into the per-world serverconfig/
+    override path, before it has ever been fully populated. Observed live
+    on MINECRAFT-378 immediately after a world reset: the per-world
+    override existed as `configVersion = 1\\n` and nothing else, while the
+    long-lived, fully-populated config remained at the global config/ path.
+    """
+    try:
+        document = tomlkit.parse(content).unwrap()
+    except Exception:
+        return False
+    return set(document) <= {"configVersion"}
+
+
 def resolve_config_path(sftp, root, world):
     existing = []
     for candidate in config_candidates(root, world):
@@ -130,6 +147,12 @@ def resolve_config_path(sftp, root, world):
         if not stat.S_ISREG(mode):
             raise ValueError("Dynamic Atmosphere config candidate is not a regular file")
         existing.append(candidate)
+    if len(existing) == 2:
+        stub_flags = [is_bare_version_stub(read_remote(sftp, path)) for path in existing]
+        if stub_flags == [True, False]:
+            return existing[1]
+        if stub_flags == [False, True]:
+            return existing[0]
     if len(existing) != 1:
         raise ValueError("Expected exactly one Dynamic Atmosphere server config candidate")
     return existing[0]

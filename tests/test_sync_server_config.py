@@ -144,6 +144,37 @@ class ServerConfigSyncTest(unittest.TestCase):
             })
         self.assertEqual(0, sftp.renames)
 
+    def test_sync_prefers_populated_config_over_a_fresh_worlds_bare_version_stub(self):
+        # Observed live on MINECRAFT-378 immediately after a world reset: DA
+        # had already written a per-world serverconfig/ override containing
+        # only its own configVersion marker (nothing else) for the brand-new
+        # world, while the long-lived, fully-populated config remained at
+        # the global config/ path. The two must not be treated as an
+        # unresolvable ambiguity -- the populated one is still correct.
+        global_path = "/srv/minecraft/config/dynamicatmosphere-server.toml"
+        stub_path = "/srv/minecraft/world-new/serverconfig/dynamicatmosphere-server.toml"
+        sftp = MemorySftp({
+            "/srv/minecraft/server.properties": b"level-name=world-new\n",
+            global_path: b"[integrations]\ncreateFanTransportPerRpm = 0.1\n",
+            stub_path: b"configVersion = 1\n",
+        })
+        sync.synchronize(sftp, "/srv/minecraft", {
+            ("integrations", "createFanTransportPerRpm"): 1.0,
+        })
+        self.assertIn(b"createFanTransportPerRpm = 1.0", sftp.files[global_path])
+        self.assertEqual(b"configVersion = 1\n", sftp.files[stub_path])
+
+    def test_sync_still_refuses_when_both_candidates_are_bare_stubs(self):
+        sftp = MemorySftp({
+            "/srv/minecraft/server.properties": b"level-name=world\n",
+            "/srv/minecraft/config/dynamicatmosphere-server.toml": b"configVersion = 1\n",
+            "/srv/minecraft/world/serverconfig/dynamicatmosphere-server.toml": b"configVersion = 1\n",
+        })
+        with self.assertRaises(ValueError):
+            sync.synchronize(sftp, "/srv/minecraft", {
+                ("integrations", "createFanTransportPerRpm"): 1.0,
+            })
+
     def test_rejects_unsafe_world_and_server_root(self):
         with self.assertRaises(ValueError):
             sync.level_name("level-name=../world\n")
