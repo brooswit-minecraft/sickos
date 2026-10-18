@@ -607,14 +607,20 @@ Repository-owned settings in `server-config.json` are synchronized by
 `.github/workflows/server-tuning.yml` whenever that file (or the sync script/tests)
 changes, after the "Server update" workflow completes (so a Dynamic Atmosphere
 version bump re-applies automatically — see below), or on manual dispatch. The
-workflow reads `level-name` from the hosted `server.properties`, then requires
-exactly one existing Dynamic Atmosphere config: the modern
-`config/dynamicatmosphere-server.toml` path or the legacy
-`<level-name>/serverconfig/dynamicatmosphere-server.toml` path. It updates only the
-listed fields through strict-host-key SFTP and verifies the atomic upload. It uses the
-same `SERVER_SFTP_*` repository variables and secrets as the SFTP deployment route
-(`reset-world.yml`) and shares that route's concurrency lock. NeoForge reloads this
-server config; the tuning workflow does not restart Minecraft.
+workflow reads `level-name` from the hosted `server.properties`, then resolves
+which Dynamic Atmosphere config is actually active for that world. DA's server
+config is a NeoForge `ModConfig.Type.SERVER` file, which NeoForge loads from
+`<level-name>/serverconfig/dynamicatmosphere-server.toml` once that per-world
+override exists, in preference to the global `config/dynamicatmosphere-server.toml`
+copy — not the other way around, and not an either-or "modern vs. legacy" choice:
+the per-world file wins whenever it exists, even as a bare, not-yet-populated
+`configVersion`-only stub (DA writes exactly that the first time a world loads), and
+the global file is used only for a world that has never had a per-world override
+created. It updates only the listed fields through strict-host-key SFTP and verifies
+the atomic upload. It uses the same `SERVER_SFTP_*` repository variables and secrets
+as the SFTP deployment route (`reset-world.yml`) and shares that route's concurrency
+lock. NeoForge reloads this server config; the tuning workflow does not restart
+Minecraft.
 
 `server-config.json` must define every field in the sync script's `ALLOWED` map
 exactly once — a config missing one, or naming a field outside that map, is refused
