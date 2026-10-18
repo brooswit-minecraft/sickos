@@ -116,12 +116,12 @@ metafile = true
 
 [[files]]
 file = "mods/dynamic-atmosphere.pw.toml"
-hash = "95eb3e632c444c69375d548e53d430b2514432d6df7d00d838444c41b1ce38f8"
+hash = "dce94efb8d5330360b8230014b1db2ffaa79af9fd2c8f1bd29155ffe8fe4f4d4"
 metafile = true
 
 [[files]]
 file = "mods/dynamic-backpacks.pw.toml"
-hash = "c019b9a8053617c9975d5b42a76fe8a2d8c8b722bfe2976bd5f4e6a999b068de"
+hash = "a72529bd684326c3cf2f8a667ae1016cd932b52ca472962c2610be704e44c470"
 metafile = true
 
 [[files]]
@@ -151,7 +151,7 @@ metafile = true
 
 [[files]]
 file = "mods/dynamic-vehicles.pw.toml"
-hash = "b72f6274032f4effb474bc00883e6ff25b44105eb9136c4720ad3f4f4d8dd580"
+hash = "7136503691db8f949ccc29441c35b08e2959c7f7fbf26e8cfd374d3cd563a2e2"
 metafile = true
 
 [[files]]
@@ -202,6 +202,11 @@ metafile = true
 [[files]]
 file = "mods/integrated-villages.pw.toml"
 hash = "bf1cc126514a90a91c30d35367bc64c48c475af853352b71643ac839ea4f8c1e"
+metafile = true
+
+[[files]]
+file = "mods/isometric-camera.pw.toml"
+hash = "1c983748db5fb72d92a2b9e73de3594bc95a290b1c04873a4337dd40a94fd5ce"
 metafile = true
 
 [[files]]
