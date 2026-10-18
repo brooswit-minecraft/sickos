@@ -381,10 +381,24 @@ def find_dependency_conflicts(candidate, pinned_versions_by_mod_id):
     """Check `candidate.dependencies` (Modrinth's own declared list, as
     returned by GET /v2/project/{id}/version) against what is currently
     pinned in the pack. `pinned_versions_by_mod_id` maps mod_id ->
-    pinned_version_id for every currently-eligible pin (a plain
+    pinned_version_id for every currently-ELIGIBLE pin (a plain
     iterable of mod_ids also works for membership-only checks, since
     `in` behaves the same on a set or a dict's keys -- only the
     required-dependency version check below needs the version values).
+
+    "Not currently pinned", below and in this function's own error
+    text, means specifically "not in `pinned_versions_by_mod_id`" --
+    i.e. not an ELIGIBLE, Modrinth-tracked pin (MINECRAFT-362 review,
+    nineteenth round, smaller item: both call sites build this dict
+    from `mod_eligibility.discover_eligible_pins`' `eligible` list
+    only). A genuinely-installed pin with no `[update.modrinth]` table
+    (`mod_eligibility.discover_eligible_pins`' `untracked` list -- the 4
+    GitHub-release-only mods, or an `EXCLUDED_MOD_NAMES` pin) has no
+    mod_id recorded in this pack's own data at all, so there is no way
+    for this function to recognize one by its real Modrinth project id
+    even though it IS actually present -- the same category of gap
+    `KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS` addresses for excluded mods
+    specifically, currently unaddressed for the 4 untracked ones.
 
     Returns a list of human-readable conflict strings; empty means no
     conflict found. Deliberately narrow, not a full dependency-graph
@@ -441,9 +455,10 @@ def find_dependency_conflicts(candidate, pinned_versions_by_mod_id):
                 conflicts.append(
                     f"{candidate.version_number} requires project {project_id!r}"
                     + (f" at exact version {required_version_id!r}" if required_version_id else "")
-                    + ", which is not currently pinned in this pack and is not on "
-                    "KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS -- cannot verify this "
-                    "requirement is satisfied"
+                    + ", which is not an eligible, Modrinth-tracked pin in this pack and is not "
+                    "on KNOWN_LOCAL_ONLY_MODRINTH_PROJECT_IDS -- cannot verify this requirement "
+                    "is satisfied (if it is genuinely installed under a pin with no "
+                    "[update.modrinth] table, this check cannot see that yet)"
                 )
                 continue
             if required_version_id:

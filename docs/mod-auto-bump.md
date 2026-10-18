@@ -628,27 +628,46 @@ coverage gap at all -- it is a permanent, intentional non-enrollment,
 so the standing notice (which exists to list GAPS) omits it (thirteenth
 review round).
 
-**`downgrade_refused` and `dependency_conflict` are expected gaps too
-(sixth review round).** Both were still landing in `failed`, the
-red-by-construction defect's third occurrence: each recurs IDENTICALLY
-every run for a given pin until something upstream changes, the same
-shape as the two outcomes above. `downgrade_refused` fires every run for
-a pin whose currently-pinned version is ahead of the latest version
-`resolve_latest_compatible_version`'s `version_type == "release"` filter
-will ever return (e.g. pinned to a prerelease) -- confirmed live:
-`mods/ice-and-fire-community-edition.pw.toml` is pinned ahead of its
-newest actual release today, and lands on `unsupported_version_scheme`
-only incidentally, because its pinned version string happens not to be
-valid semver; a pin in the same situation with a valid-semver pinned
-version would hit `downgrade_refused` every run instead, unclassified.
-`dependency_conflict` is a pure function of the SAME re-resolved "latest
-compatible" candidate's own declared dependencies against the pack's
-current pins, so it recurs for the same structural reason. Both are now
-unconditionally expected via `_UNLISTABLE_EXPECTED_GAP_OUTCOMES` (no
-per-mod-id allowlist needed, unlike the four outcomes above -- each is
-already established per-pin by one deterministic check, not a
+**`downgrade_refused` is an expected gap too (sixth review round).** It
+was still landing in `failed`, the red-by-construction defect's third
+occurrence: it recurs IDENTICALLY every run for a given pin until
+something upstream changes, the same shape as the two outcomes above.
+It fires every run for a pin whose currently-pinned version is ahead of
+the latest version `resolve_latest_compatible_version`'s
+`version_type == "release"` filter will ever return (e.g. pinned to a
+prerelease) -- confirmed live: `mods/ice-and-fire-community-edition.pw.toml`
+is pinned ahead of its newest actual release today, and lands on
+`unsupported_version_scheme` only incidentally, because its pinned
+version string happens not to be valid semver; a pin in the same
+situation with a valid-semver pinned version would hit
+`downgrade_refused` every run instead, unclassified. It is unconditionally
+expected via `_UNLISTABLE_EXPECTED_GAP_OUTCOMES` (no per-mod-id
+allowlist needed, unlike the five outcomes elsewhere in this doc -- it
+is already established per-pin by one deterministic check, not a
 catch-all, and which specific pin hits it next isn't knowable in
-advance the way the other four outcomes' pins are).
+advance the way the other outcomes' pins are).
+
+**`dependency_conflict` is DIFFERENT -- reconciled by mod_id, not
+unconditionally expected (nineteenth review round corrected the sixth
+round's original framing).** It was originally reasoned about the same
+way as `downgrade_refused` above ("a pure function of the re-resolved
+candidate's own declared dependencies, so which pin hits it next isn't
+knowable in advance") -- true for the `incompatible`-and-currently-
+pinned case alone, but the eighteenth round added a second check
+(`required` dependency on any project not pinned at all) that found a
+real, confirmed false positive: Cristel Lib's pinned version declares
+Cloth Config API `required`, but Modrinth's version-level `dependencies`
+array is a project-WIDE author declaration, not loader-scoped, and the
+actual NeoForge jar requires only `neoforge`/`minecraft` -- the Fabric
+build is what actually needs Cloth Config. This repo's own authoritative
+dependency-closure gate (`.github/workflows/ci.yml`'s `dependency-check`
+job, which reads real jar metadata) agrees this pack is fine.
+`dependency_conflict` is now reconciled against
+`KNOWN_UNMET_REQUIRED_DEPENDENCY_PIN_IDS` by `mod_id`, the same way the
+four list-based outcomes above are: a `dependency_conflict` for a pin
+NOT on that list -- a genuinely new incompatible declaration, or an
+unmet required dependency on a different pin -- fails the run, rather
+than blending into Cristel Lib's one confirmed, false-positive instance.
 
 Push-gating and credential-checking are driven by whether the run's
 summary recorded a real bump, not by the script's overall exit code, so
@@ -656,7 +675,7 @@ an unexpected failure elsewhere in the same run never blocks pushing a
 bump this run already made -- the job still fails afterward (so the
 failure is visible), but only after that push.
 
-36 tests in `tests/test_poll_mod_updates.py` cover: the same
+38 tests in `tests/test_poll_mod_updates.py` cover: the same
 game-version+loader threading reaching the category gate end-to-end
 through `poll_and_bump` (not only `run_engine` directly), Dynamic Atmosphere's
 pin considered like any other (no-op when nothing is newer for it, bumped
@@ -669,9 +688,10 @@ second is left for the next run), an incompatible candidate correctly
 read as no-candidate, a downgrade reported (not crashed), one mod's
 failure not blocking another mod's success in the same run, a breaking
 candidate refused rather than auto-published, and `main()`'s exit-code
-classification itself: expected gaps alone (via the per-outcome
-allowlists, now including `downgrade_refused`/`dependency_conflict`)
-keep the run green, a gap-shaped outcome for a mod_id NOT on that
+classification itself: expected gaps alone keep the run green --
+`downgrade_refused` unconditionally, `dependency_conflict` via its own
+per-mod-id allowlist (nineteenth round) same as the other four
+list-based outcomes -- a gap-shaped outcome for a mod_id NOT on that
 outcome's own allowlist still fails it (a coverage regression, not a
 known gap), a genuine unexpected failure still fails it, and the
 aggregate guard -- no run may pass with zero `already_pinned`/`bumped`
@@ -821,14 +841,17 @@ runs, not a captured sha from whenever the job was first queued.
   category HINT (not the deciding factor -- see above) to each
   candidate's bump, making AT MOST ONE bump commit per run (so it never
   asks `release.yml` to run twice before the first run finishes),
-  classifying four gap-shaped outcome kinds (`resolution_failed`,
+  classifying five gap-shaped outcome kinds (`resolution_failed`,
   `unsupported_version_scheme`, `no_parseable_candidate`,
-  `only_prerelease_available`, plus `untracked` -- see "Enrollment"
-  above) each against its OWN explicit `KNOWN_*_PIN_IDS`/
-  `KNOWN_UNTRACKED_PIN_PATHS` allowlist (never the whole outcome class),
-  three genuinely unlistable-in-advance outcomes
-  (`breaking_change_requires_human_review`, `downgrade_refused`,
-  `dependency_conflict`) staying unconditionally expected, and an
+  `only_prerelease_available`, `untracked` -- see "Enrollment" above,
+  plus `dependency_conflict` as of the nineteenth round, see below) each
+  against its OWN explicit `KNOWN_*_PIN_IDS`/`KNOWN_UNTRACKED_PIN_PATHS`/
+  `KNOWN_UNMET_REQUIRED_DEPENDENCY_PIN_IDS` allowlist (never the whole
+  outcome class), two genuinely unlistable-in-advance outcomes
+  (`breaking_change_requires_human_review`, `downgrade_refused`)
+  staying unconditionally expected, two more
+  (`excluded_local_only`/`excluded_pin_path`) unconditionally expected
+  for a different reason (no meaningful mod_id to reconcile by), and an
   aggregate guard stated as a POSITIVE invariant -- at least one
   `already_pinned`/`bumped` outcome this run, deliberately not
   satisfied by `no_candidate` -- that fails the run both on zero
@@ -848,10 +871,15 @@ runs, not a captured sha from whenever the job was first queued.
   `EXCLUDED_PIN_PATHS` gaining the same own-outcome treatment --
   `"excluded_pin_path"`, also unconditionally expected -- so a path
   added there in the future gets reported rather than silently dropped
-  by the bare `continue` this replaced, and (sixteenth round)
+  by the bare `continue` this replaced, (sixteenth round)
   `KNOWN_ANONYMOUS_404_MOD_IDS` emptied with a dedicated test asserting
-  `"resolution_failed"` is never an expected gap on its own any more)
-  (36 tests).
+  `"resolution_failed"` is never an expected gap on its own any more,
+  and (nineteenth round) `dependency_conflict` moved from unconditionally
+  expected to its own `KNOWN_UNMET_REQUIRED_DEPENDENCY_PIN_IDS` allowlist
+  -- seeded with Cristel Lib, the one confirmed false positive the
+  eighteenth round's new required-dependency check produced -- with a
+  test proving an unlisted dependency_conflict now fails the run)
+  (38 tests).
   `run_engine`'s category determination and no-downgrade
   check both now take/use a `game_version` hint and an identity-checked
   previous-pin metadata, threaded through from this script's own

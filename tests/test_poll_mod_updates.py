@@ -543,22 +543,34 @@ class TestMainExitCode(unittest.TestCase):
         exit_code, _ = self._run_main_with(outcomes)
         self.assertEqual(exit_code, 1)
 
-    def test_downgrade_refused_and_dependency_conflict_are_expected_gaps(self):
-        # MINECRAFT-362 review, sixth round: both recur identically every
-        # run for a given pin until something upstream changes (a newer
-        # real release, or a changed dependency declaration) -- the same
-        # repeatable-until-external-change shape as the two outcomes
-        # above, so they must not be red-by-construction either. Neither
-        # has a static per-pin list (unpredictable in advance), so any
-        # mod_id is "expected" for these two outcomes.
+    def test_downgrade_refused_is_an_expected_gap_for_any_mod_id(self):
+        # MINECRAFT-362 review, sixth round: recurs identically every run
+        # for a given pin until something upstream changes (a newer real
+        # release) -- a repeatable-until-external-change shape, so it
+        # must not be red-by-construction. Has no static per-pin list
+        # (unpredictable in advance), so any mod_id is "expected".
         outcomes = [
             self._HEALTHY_PIN,
             {"mod_id": "F", "mod_name": "F", "pin_path": "mods/f.pw.toml", "outcome": "downgrade_refused", "error": "x"},
-            {"mod_id": "G", "mod_name": "G", "pin_path": "mods/g.pw.toml", "outcome": "dependency_conflict", "error": "y"},
         ]
         exit_code, output = self._run_main_with(outcomes)
         self.assertEqual(exit_code, 0)
         self.assertIn("::warning::F (mods/f.pw.toml)", output)
+
+    def test_dependency_conflict_is_an_expected_gap_only_for_a_listed_mod_id(self):
+        # MINECRAFT-362 review, nineteenth round: unlike downgrade_refused,
+        # dependency_conflict is NOT unconditionally expected any more --
+        # the eighteenth round's new "required dependency not pinned"
+        # check produced a confirmed false positive for one real pin
+        # (Cristel Lib), reconciled the same way as the other four
+        # list-based outcomes rather than exempting the whole class.
+        known_mod_id = next(iter(poll_mod_updates.KNOWN_UNMET_REQUIRED_DEPENDENCY_PIN_IDS))
+        outcomes = [
+            self._HEALTHY_PIN,
+            {"mod_id": known_mod_id, "mod_name": "G", "pin_path": "mods/g.pw.toml", "outcome": "dependency_conflict", "error": "y"},
+        ]
+        exit_code, output = self._run_main_with(outcomes)
+        self.assertEqual(exit_code, 0)
         self.assertIn("::warning::G (mods/g.pw.toml)", output)
 
     def test_no_parseable_candidate_and_only_prerelease_are_expected_gaps(self):
@@ -593,6 +605,21 @@ class TestMainExitCode(unittest.TestCase):
             self._HEALTHY_PIN,
             {"mod_id": "NOT_LISTED", "mod_name": "J", "pin_path": "mods/j.pw.toml",
              "outcome": "unsupported_version_scheme", "error": "x"},
+        ]
+        exit_code, _ = self._run_main_with(outcomes)
+        self.assertEqual(exit_code, 1)
+
+    def test_unlisted_dependency_conflict_pin_is_a_coverage_regression(self):
+        # MINECRAFT-362 review, nineteenth round: a dependency_conflict
+        # for a mod_id NOT on KNOWN_UNMET_REQUIRED_DEPENDENCY_PIN_IDS is
+        # a NEW conflict (an incompatible-and-pinned declaration, or an
+        # unmet required dependency on a different, unconfirmed pin) --
+        # must fail, not blend into Cristel Lib's one confirmed false
+        # positive.
+        outcomes = [
+            self._HEALTHY_PIN,
+            {"mod_id": "NOT_LISTED", "mod_name": "K", "pin_path": "mods/k.pw.toml",
+             "outcome": "dependency_conflict", "error": "z"},
         ]
         exit_code, _ = self._run_main_with(outcomes)
         self.assertEqual(exit_code, 1)

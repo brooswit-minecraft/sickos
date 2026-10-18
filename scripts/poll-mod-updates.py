@@ -118,14 +118,22 @@ EXCLUDED_PIN_PATHS = frozenset()
 #   every pin that happens to hit it (MINECRAFT-362 review, eleventh
 #   round -- a pin newly landing in one of these classes without being
 #   on its list is a coverage regression, not the documented baseline).
-# - "breaking_change_requires_human_review" / "downgrade_refused" /
-#   "dependency_conflict": each re-established fresh every run from
-#   data that can change at any time (a candidate's own declared
-#   category, the pack's current pins, another pin's own update), so
-#   there is no fixed set of mod_ids to check against -- these stay
-#   unconditionally expected by outcome string alone
+# - "breaking_change_requires_human_review" / "downgrade_refused": each
+#   re-established fresh every run from data that can change at any
+#   time (a candidate's own declared category, the pack's current
+#   pins), so there is no fixed set of mod_ids to check against -- these
+#   stay unconditionally expected by outcome string alone
 #   (`_UNLISTABLE_EXPECTED_GAP_OUTCOMES`, defined just before
 #   `_is_expected_gap`).
+# - "dependency_conflict": used to be grouped with the two above
+#   (unconditionally expected), until the nineteenth review round found
+#   a real, confirmed false positive (Cristel Lib) and moved it to its
+#   own KNOWN_UNMET_REQUIRED_DEPENDENCY_PIN_IDS dict below, checked BY
+#   mod_id like the five list-based outcomes above it -- a genuinely
+#   NEW dependency_conflict (an incompatible-and-pinned declaration, or
+#   an unmet required dependency, on a DIFFERENT, unlisted pin) is a
+#   coverage regression, not the documented baseline, same reasoning as
+#   the eleventh round's fix for the other outcomes.
 
 # Previously 4 projects (Dynamic Atmosphere, Dynamic Skateboards,
 # Dynamic Terrain, Dynamic Vehicles) individually confirmed to return
@@ -229,6 +237,29 @@ KNOWN_UNTRACKED_PIN_PATHS = {
     "mods/magicavoxel-loader.pw.toml": "MagicaVoxel Loader",
 }
 
+# 1 pin: modrinth_compat.find_dependency_conflicts' eighteenth-round
+# "required dependency not pinned at all" check produces a FALSE
+# POSITIVE for this specific pin, confirmed by reading the real jar
+# (MINECRAFT-362 review, nineteenth round). Cristel Lib (cl223EMc)
+# version Sduz0AWP's Modrinth metadata declares project 9s6osm5g (Cloth
+# Config API) as `required` -- but Modrinth's version-level
+# `dependencies` array is a project-WIDE author declaration, not
+# loader-scoped, and the actual NeoForge jar's own
+# META-INF/neoforge.mods.toml requires only `neoforge`/`minecraft`; the
+# Fabric build is what actually needs Cloth Config. Cloth Config has
+# never been pinned in this repo and genuinely isn't needed on NeoForge.
+# This repo's own authoritative gate for this exact question
+# (.github/workflows/ci.yml's `dependency-check` job, reading real jar
+# metadata rather than Modrinth's loader-agnostic declaration) agrees
+# this pack is fine. Unlike the other four list-based outcomes, this one
+# did NOT exist as a reachable outcome before the eighteenth round --
+# dependency_conflict was unconditionally expected until this round
+# narrowed it, so this is the first (and so far only) confirmed
+# instance, not a backlog.
+KNOWN_UNMET_REQUIRED_DEPENDENCY_PIN_IDS = {
+    "cl223EMc": "Cristel Lib",
+}
+
 # Display-only convenience views, built from the dicts above so there is
 # one source of truth for membership AND display text.
 KNOWN_NON_SEMVER_PIN_NAMES = tuple(f"{name} ({mod_id})" for mod_id, name in KNOWN_NON_SEMVER_PIN_IDS.items())
@@ -239,20 +270,31 @@ KNOWN_ONLY_PRERELEASE_PIN_NAMES = tuple(f"{name} ({mod_id})" for mod_id, name in
 KNOWN_UNTRACKED_PIN_NAMES = tuple(
     f"{name} ({pin_path})" for pin_path, name in sorted(KNOWN_UNTRACKED_PIN_PATHS.items())
 )
+KNOWN_UNMET_REQUIRED_DEPENDENCY_PIN_NAMES = tuple(
+    f"{name} ({mod_id})" for mod_id, name in KNOWN_UNMET_REQUIRED_DEPENDENCY_PIN_IDS.items()
+)
 
 # Outcome kinds with no static per-pin list: `modrinth_compat`/`bump_mod`
-# establish the first three fresh, per candidate, every run (a dependency
-# declaration or a competing pin can change at any time), so there is no
-# fixed set to reconcile against the way the list-based outcomes above
-# have. "excluded_local_only" is different -- it IS fully determined in
-# advance (mod_eligibility.EXCLUDED_MOD_NAMES is a fixed, reviewed list
-# of mod NAMES), but not by anything a PIN_PATH allowlist could express,
-# since an excluded mod's pin_path is whatever a human names the file --
-# unlistable by path, not unpredictable in principle (MINECRAFT-362
-# review, thirteenth round). All four stay unconditionally expected by
-# outcome string alone.
+# establish these fresh, per candidate, every run (a candidate's own
+# declared category, or a competing pin's own update, can change at any
+# time), so there is no fixed set to reconcile against the way the
+# list-based outcomes above have. "excluded_local_only"/
+# "excluded_pin_path" are different -- each IS fully determined in
+# advance (a fixed, reviewed list of mod NAMES or pin paths), but not by
+# anything a mod_id allowlist could express the way the list-based
+# outcomes are checked, since neither carries a meaningful mod_id
+# (thirteenth/fifteenth rounds). "dependency_conflict" USED to be here
+# too (unconditionally expected), until the nineteenth review round
+# found a real false positive (Cristel Lib) and moved it to its own
+# KNOWN_UNMET_REQUIRED_DEPENDENCY_PIN_IDS list below, checked by mod_id
+# like the other four -- a genuinely new dependency_conflict (an
+# incompatible-and-pinned declaration, or an unmet required dependency
+# on a DIFFERENT, unlisted pin) now fails the run rather than silently
+# blending into "the documented baseline" forever, the same shape rounds
+# eleven/twelve built the other four reconciled lists for. The remaining
+# three kinds stay unconditionally expected by outcome string alone.
 _UNLISTABLE_EXPECTED_GAP_OUTCOMES = frozenset({
-    "breaking_change_requires_human_review", "downgrade_refused", "dependency_conflict",
+    "breaking_change_requires_human_review", "downgrade_refused",
     "excluded_local_only", "excluded_pin_path",
 })
 
@@ -260,19 +302,20 @@ _UNLISTABLE_EXPECTED_GAP_OUTCOMES = frozenset({
 def _is_expected_gap(outcome):
     """True if `outcome` (one entry from poll_and_bump's return list) is
     a documented, permanent, per-pin gap rather than an unexpected
-    failure (or a coverage regression). Five outcome kinds are checked
+    failure (or a coverage regression). Six outcome kinds are checked
     against their own static KNOWN_*_PIN_IDS/KNOWN_UNTRACKED_PIN_PATHS
     list BY mod_id or pin_path -- a pin hitting one of these outcomes
     while NOT on the matching list is something this poll has never seen
     before for that pin, which must fail the run rather than silently
-    blend into "the documented baseline" (MINECRAFT-362 review, eleventh
-    and twelfth rounds). "excluded_local_only" is deliberately NOT one of
-    these -- it is a fixed, reviewed set of mod NAMES
-    (mod_eligibility.EXCLUDED_MOD_NAMES), not something a pin_path
-    allowlist could express, so it stays unconditionally expected
-    (thirteenth round). The remaining kinds have no fixed set to check
-    against at all (see _UNLISTABLE_EXPECTED_GAP_OUTCOMES) and stay
-    unconditionally expected too."""
+    blend into "the documented baseline" (MINECRAFT-362 review, eleventh,
+    twelfth, and nineteenth rounds). "excluded_local_only"/
+    "excluded_pin_path" are deliberately NOT one of these -- each is a
+    fixed, reviewed set (mod_eligibility.EXCLUDED_MOD_NAMES, or
+    EXCLUDED_PIN_PATHS) that carries no meaningful mod_id to reconcile
+    by, so both stay unconditionally expected (thirteenth/fifteenth
+    rounds). The remaining kinds have no fixed set to check against at
+    all (see _UNLISTABLE_EXPECTED_GAP_OUTCOMES) and stay unconditionally
+    expected too."""
     kind = outcome["outcome"]
     mod_id = outcome.get("mod_id")
     if kind == "resolution_failed":
@@ -283,6 +326,8 @@ def _is_expected_gap(outcome):
         return mod_id in KNOWN_NO_PARSEABLE_CANDIDATE_PIN_IDS
     if kind == "only_prerelease_available":
         return mod_id in KNOWN_ONLY_PRERELEASE_PIN_IDS
+    if kind == "dependency_conflict":
+        return mod_id in KNOWN_UNMET_REQUIRED_DEPENDENCY_PIN_IDS
     if kind == "untracked":
         # No mod_id exists for an untracked pin (that is exactly what
         # "untracked" means) -- reconcile by pin_path instead.
@@ -560,6 +605,13 @@ def main(argv=None):
             f"{len(KNOWN_UNTRACKED_PIN_NAMES)} pins have no [update.modrinth] table at all and "
             f"need a GitHub-release-based identity check this mechanism does not implement, so "
             f"only a human bump covers them today ({', '.join(KNOWN_UNTRACKED_PIN_NAMES)})"
+        )
+    if KNOWN_UNMET_REQUIRED_DEPENDENCY_PIN_NAMES:
+        _notice_clauses.append(
+            f"{len(KNOWN_UNMET_REQUIRED_DEPENDENCY_PIN_NAMES)} pins declare a required "
+            f"dependency this pack does not have pinned, confirmed a false positive (Modrinth's "
+            f"dependency metadata is not loader-scoped) by reading the real jar -- no action "
+            f"needed ({', '.join(KNOWN_UNMET_REQUIRED_DEPENDENCY_PIN_NAMES)})"
         )
     print(
         "::notice::Known, standing coverage gaps (not re-evaluated this run; see "
