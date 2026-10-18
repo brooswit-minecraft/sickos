@@ -116,7 +116,12 @@ metafile = true
 
 [[files]]
 file = "mods/dynamic-atmosphere.pw.toml"
-hash = "8743dfbac90206bbda22c1dde23554aadeb643ccdf8acf44b7b0ed2518460de0"
+hash = "95eb3e632c444c69375d548e53d430b2514432d6df7d00d838444c41b1ce38f8"
+metafile = true
+
+[[files]]
+file = "mods/dynamic-backpacks.pw.toml"
+hash = "c019b9a8053617c9975d5b42a76fe8a2d8c8b722bfe2976bd5f4e6a999b068de"
 metafile = true
 
 [[files]]
@@ -141,12 +146,12 @@ metafile = true
 
 [[files]]
 file = "mods/dynamic-terrain.pw.toml"
-hash = "fb7ff8907caadd9d7c6043828430132709706b9d587aa2b0c45b3c9bfd3993e3"
+hash = "07618b2aea46ddfb9d1bc2db4ac9159c06b352d1f7e1c7a60177c8bf6ca5e9a6"
 metafile = true
 
 [[files]]
 file = "mods/dynamic-vehicles.pw.toml"
-hash = "70a64f46557ca2657f3f441171191af94c86094abbda08df5292b182c9c520eb"
+hash = "b72f6274032f4effb474bc00883e6ff25b44105eb9136c4720ad3f4f4d8dd580"
 metafile = true
 
 [[files]]

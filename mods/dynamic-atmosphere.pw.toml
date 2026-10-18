@@ -1,15 +1,15 @@
 name = "Dynamic Atmosphere"
-filename = "dynamicatmosphere-0.34.0-alpha.1.jar"
+filename = "dynamicatmosphere-0.35.0-alpha.1.jar"
 side = "both"
 
 [download]
-url = "https://github.com/brooswit-minecraft/dynamic-atmosphere/releases/download/v0.34.0-alpha.1/dynamicatmosphere-0.34.0-alpha.1.jar"
+url = "https://github.com/brooswit-minecraft/dynamic-atmosphere/releases/download/v0.35.0-alpha.1/dynamicatmosphere-0.35.0-alpha.1.jar"
 hash-format = "sha256"
-hash = "7c6a11ee059cbfb1a61b55a159ddef6833dd2692d00e811b26843271460388c7"
+hash = "2bf637197ae4d89f66b97f9acef632639d9f3d23d03b8acc1fb86c7536f9d1fc"
 
 [update]
 [update.github]
-branch = "3cd628dfd1fb594acc26fa94291b9ce0328fa23b"
+branch = "908bccab5499c00ddcaaf8a21ba719059fcad3cb"
 regex = "^.+(?<!-api|-dev|-dev-preshadow|-sources)\\.jar$"
 slug = "brooswit-minecraft/dynamic-atmosphere"
-tag = "v0.34.0-alpha.1"
+tag = "v0.35.0-alpha.1"
