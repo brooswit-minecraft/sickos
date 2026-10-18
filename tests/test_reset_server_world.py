@@ -32,7 +32,7 @@ class ResetWorldTest(unittest.TestCase):
             reset.replace_property('level-name=a\nlevel-name=b\n', 'level-name', 'world-new')
 
     def test_reset_rejects_same_or_unsafe_world_before_io(self):
-        for new in ('world-old', '../world-new', 'world-new/nested'):
+        for new in ('world-old', '../world-new', 'world-new/nested', 'world-old-backup'):
             sftp = Mock()
             with self.assertRaises(ValueError):
                 reset.reset(sftp, {'EXPECTED_WORLD': 'world-old', 'NEW_WORLD': new}, Mock(), Mock())
@@ -92,6 +92,44 @@ class ResetWorldTest(unittest.TestCase):
             reset.reset(sftp, env, sync, deploy)
         deploy.rcon_command.assert_not_called()
         deploy.restart_and_wait.assert_not_called()
+
+    def test_old_world_is_untouched_when_restart_fails(self):
+        env = {'EXPECTED_WORLD': 'world-old', 'NEW_WORLD': 'world-new', 'SERVER_SFTP_PATH': '/'}
+        sync = Mock()
+        sync.joined.side_effect = lambda root, suffix: '/' + suffix
+        sync.level_name.return_value = 'world-old'
+        sftp = Mock()
+        sftp.lstat.side_effect = _lstat({'/world-old'})
+        sftp.open.return_value.__enter__ = Mock(return_value=Mock())
+        sftp.open.return_value.__exit__ = Mock(return_value=False)
+        deploy = Mock()
+        deploy.rcon_config.return_value = ('host', 1, 'secret', 120)
+        deploy.rcon_command.return_value = 'There are 0 of a max of 20 players online:'
+        deploy.restart_and_wait.side_effect = TimeoutError('server did not come back up')
+        sync.read_remote.side_effect = ['level-name=world-old\n', 'level-name=world-new\n']
+        with self.assertRaises(TimeoutError):
+            reset.reset(sftp, env, sync, deploy)
+        sftp.posix_rename.assert_called_once()  # only the server.properties swap, never a world rename
+        self.assertEqual([], sftp.rmdir.mock_calls)
+        self.assertEqual([], sftp.remove.mock_calls)
+
+    def test_retry_after_a_prior_successful_backup_fails_safely(self):
+        # Simulates re-running the script after a previous run already renamed
+        # world-old aside; old_path no longer exists, so this must stop before
+        # any rcon/restart action rather than silently touching the backup again.
+        env = {'EXPECTED_WORLD': 'world-old', 'NEW_WORLD': 'world-new2', 'SERVER_SFTP_PATH': '/'}
+        sync = Mock()
+        sync.joined.side_effect = lambda root, suffix: '/' + suffix
+        sync.level_name.return_value = 'world-old'
+        sync.read_remote.return_value = 'level-name=world-old\n'
+        sftp = Mock()
+        sftp.lstat.side_effect = _lstat({'/world-old-backup/level.dat'})  # old_path itself absent
+        deploy = Mock()
+        with self.assertRaises(FileNotFoundError):
+            reset.reset(sftp, env, sync, deploy)
+        deploy.rcon_command.assert_not_called()
+        deploy.restart_and_wait.assert_not_called()
+        self.assertEqual([], sftp.posix_rename.mock_calls)
 
     def test_successful_reset_renames_old_world_aside_instead_of_deleting_it(self):
         env = {'EXPECTED_WORLD': 'world-old', 'NEW_WORLD': 'world-new', 'SERVER_SFTP_PATH': '/'}

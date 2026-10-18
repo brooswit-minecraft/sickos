@@ -27,17 +27,17 @@ def replace_property(text, key, value):
 
 def reset(sftp, env, sync, deploy):
     old, new = env["EXPECTED_WORLD"], env["NEW_WORLD"]
-    if old == new or any(not re.fullmatch(r"world-[A-Za-z0-9_-]+", name) for name in (old, new)):
-        raise ValueError("World names must be distinct safe world-prefixed directories")
+    backup = old + "-backup"
+    if old == new or new == backup or any(not re.fullmatch(r"world-[A-Za-z0-9_-]+", name) for name in (old, new)):
+        raise ValueError("World names must be distinct safe world-prefixed directories, and the new world must not collide with the old world's backup path")
+    if not re.fullmatch(r"world-[A-Za-z0-9_-]+", backup):
+        raise ValueError("Backup directory name is not a safe world-prefixed directory")
     root = env["SERVER_SFTP_PATH"]
     properties = sync.joined(root, "server.properties")
     original = sync.read_remote(sftp, properties)
     if sync.level_name(original) != old:
         raise ValueError("Active world differs from the explicitly confirmed world")
-    old_path, new_path = sync.joined(root, old), sync.joined(root, new)
-    backup, backup_path = old + "-backup", sync.joined(root, old + "-backup")
-    if not re.fullmatch(r"world-[A-Za-z0-9_-]+", backup):
-        raise ValueError("Backup directory name is not a safe world-prefixed directory")
+    old_path, new_path, backup_path = sync.joined(root, old), sync.joined(root, new), sync.joined(root, backup)
     if not stat.S_ISDIR(sftp.lstat(old_path).st_mode):
         raise ValueError("Old world is not a real directory")
     sftp.stat(old_path + "/level.dat")
