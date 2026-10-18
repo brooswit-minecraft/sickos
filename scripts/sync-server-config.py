@@ -23,6 +23,9 @@ MAX_REMOTE_CONFIG_BYTES = 1024 * 1024
 # DA's own ModConfigSpec (DynamicAtmosphereServerConfig.java) at the version pinned
 # in mods/dynamic-atmosphere.pw.toml — re-verify against that source on every DA
 # bump that changes these fields' bounds, rather than trusting this comment.
+# DA 0.23.0-alpha.1 renamed every enderGas.* key to obsidianPowder.* (material
+# id ender_gas -> obsidian_powder); bounds/defaults for the pre-existing six
+# fields were unchanged by that rename.
 # Client-side-only fields (e.g. smokeOpticalDensity, reach) live in
 # config/dynamicatmosphere-client.toml on the player's machine: a server sync
 # structurally cannot reach them, so they are deliberately absent here.
@@ -32,12 +35,12 @@ ALLOWED = {
     ("runtime", "producerIntervalTicks"): (1, 72000, int, 300),
     ("vapor", "rainCloudHeight"): (-2048, 2048, int, 192),
     ("heavyGas", "dissipationFactor"): (0.001, 1000.0, float, 3.0),
-    ("enderGas", "portalBlockEmission"): (0, 1_000_000, int, 100),
-    ("enderGas", "mobEmission"): (0, 1_000_000, int, 1),
-    ("enderGas", "portalOccupantEmission"): (0, 1_000_000, int, 2),
-    ("enderGas", "passiveBlockEmission"): (0, 1_000_000, int, 1),
-    ("enderGas", "pearlUseEmission"): (0, 1_000_000, int, 24),
-    ("enderGas", "pearlImpactEmission"): (0, 1_000_000, int, 48),
+    ("obsidianPowder", "portalBlockEmission"): (0, 1_000_000, int, 100),
+    ("obsidianPowder", "mobEmission"): (0, 1_000_000, int, 1),
+    ("obsidianPowder", "portalOccupantEmission"): (0, 1_000_000, int, 2),
+    ("obsidianPowder", "passiveBlockEmission"): (0, 1_000_000, int, 1),
+    ("obsidianPowder", "pearlUseEmission"): (0, 1_000_000, int, 24),
+    ("obsidianPowder", "pearlImpactEmission"): (0, 1_000_000, int, 48),
     ("voidGas", "hostileDeathEmission"): (0, 1_000_000, int, 40),
     ("voidGas", "netherrackEmission"): (0, 1_000_000, int, 2),
     ("voidGas", "bottomEmission"): (0, 1_000_000, int, 8),

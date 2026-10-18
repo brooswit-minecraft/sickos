@@ -10,7 +10,7 @@
   "heavyGas": {
     "dissipationFactor": 3.0
   },
-  "enderGas": {
+  "obsidianPowder": {
     "portalBlockEmission": 100,
     "mobEmission": 1,
     "portalOccupantEmission": 2,
