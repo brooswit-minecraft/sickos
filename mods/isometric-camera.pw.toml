@@ -1,15 +1,15 @@
 name = "Isometric Camera"
-filename = "isometriccamera-0.2.0.jar"
+filename = "isometriccamera-0.3.0.jar"
 side = "client"
 
 [download]
-url = "https://github.com/brooswit-minecraft/isometric-camera/releases/download/v0.2.0/isometriccamera-0.2.0.jar"
+url = "https://github.com/brooswit-minecraft/isometric-camera/releases/download/v0.3.0/isometriccamera-0.3.0.jar"
 hash-format = "sha256"
-hash = "ccb70bcb83f887e6e62acacefa0dfdcba925d7f13114c60514a6c2a5a27127e9"
+hash = "05e568ac0fc6a0da2c712dd38ec75d066476c9d8285e7fbd9af807a8b93e0d32"
 
 [update]
 [update.github]
-branch = "475e8bf070507b954a5ecebd95859352c14e9b63"
+branch = "eb992927c77b0b65d5524ff1fe0e4216dfc4a429"
 regex = "^.+(?<!-api|-dev|-dev-preshadow|-sources)\\.jar$"
 slug = "brooswit-minecraft/isometric-camera"
-tag = "v0.2.0"
+tag = "v0.3.0"
