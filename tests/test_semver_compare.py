@@ -46,8 +46,65 @@ class TestCompareSemver(unittest.TestCase):
             compare_semver("1.0.0", "also-not")
 
     def test_parse_semver_returns_none_for_garbage(self):
-        self.assertIsNone(parse_semver("v1.0.0"))
+        self.assertIsNone(parse_semver("not-a-version"))
         self.assertIsNone(parse_semver(""))
+        # A bare trailing letter suffix with no separator (Create: Easy
+        # Structures' real pinned "0.2a") is deliberately left
+        # unparseable -- MINECRAFT-421 review, point 2: no single,
+        # source-backed meaning this module can assign to the suffix
+        # without guessing. See semver_compare.
+        # normalize_native_version_scheme's own docstring.
+        self.assertIsNone(parse_semver("0.2a"))
+
+
+class TestNormalizeNativeVersionScheme(unittest.TestCase):
+    """MINECRAFT-421 review, point 2: parse_semver now falls back to
+    `normalize_native_version_scheme` for a handful of confirmed-live
+    non-strict-SemVer shapes real enrolled mods publish, rather than
+    treating every one of them as a permanent, unparseable gap. Each
+    case below cites the real mod/version this shape was confirmed
+    against."""
+
+    def test_leading_v_before_digit_is_stripped(self):
+        # Dungeons and Taverns' real candidate "v4.4.4+mod".
+        self.assertEqual(parse_semver("v4.4.4+mod"), parse_semver("4.4.4+mod"))
+        self.assertIsNotNone(parse_semver("v4.4.4+mod"))
+
+    def test_two_component_version_gets_a_zero_patch(self):
+        # Create: Dynamic Village "0.5", Create: Pillager Arise "132.36",
+        # Geophilic "3.7".
+        self.assertEqual(parse_semver("0.5"), parse_semver("0.5.0"))
+        self.assertEqual(parse_semver("132.36"), parse_semver("132.36.0"))
+        self.assertEqual(parse_semver("3.7"), parse_semver("3.7.0"))
+
+    def test_two_component_version_with_prerelease_gets_a_zero_patch(self):
+        # IceAndFire Community Edition's real pinned "2.1-beta.1".
+        self.assertEqual(parse_semver("2.1-beta.1"), parse_semver("2.1.0-beta.1"))
+
+    def test_four_component_version_folds_the_fourth_into_prerelease(self):
+        # Biomes O' Plenty "21.1.0.14", GlitchCore "2.1.0.2" -- both
+        # always publish all four components, so every real comparison
+        # for either pin has this mapped prerelease on BOTH sides.
+        self.assertEqual(parse_semver("21.1.0.14"), parse_semver("21.1.0-14"))
+        self.assertGreater(compare_semver("21.1.0.14", "21.1.0.2"), 0)
+        self.assertLess(compare_semver("2.0.0.9", "2.0.0.10"), 0)
+
+    def test_four_component_with_its_own_prerelease_is_refused_not_guessed(self):
+        # No confirmed-live pin has both a 4th numeric component and its
+        # own "-prerelease" -- refuse to guess which one wins rather than
+        # silently picking one.
+        self.assertIsNone(parse_semver("1.2.3.4-rc.1"))
+
+    def test_already_valid_semver_is_untouched(self):
+        self.assertEqual(
+            semver_compare.normalize_native_version_scheme("1.2.3-beta.1+build"),
+            "1.2.3-beta.1+build",
+        )
+
+    def test_bare_trailing_letter_suffix_is_not_recognised(self):
+        # Create: Easy Structures' real pinned "0.2a" -- deliberately
+        # left as a documented, remaining ambiguity, not guessed.
+        self.assertEqual(semver_compare.normalize_native_version_scheme("0.2a"), "0.2a")
 
 
 class TestSemverDeltaCategory(unittest.TestCase):

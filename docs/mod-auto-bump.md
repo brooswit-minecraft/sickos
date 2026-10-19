@@ -115,6 +115,48 @@ and splits them into:
   normalized through the same `strip_known_version_prefixes` before
   `compare_semver` (ninth round, same reasoning as the resolver above).
 
+**MINECRAFT-421: channel preservation and native version-scheme
+normalization.** Two additions driven by the first real scheduled poll
+run's own nine observed coverage-gap outcomes:
+
+- `resolve_latest_compatible_version` gained an `include_prerelease`
+  parameter (default `False`, same contract as
+  `github_release_identity.resolve_latest_matching_release`'s identical
+  per-pin flag for GitHub-tracked pins): when `True`, a `version_type !=
+  "release"` entry competes for `best` on equal footing with a release
+  entry, rather than being excluded outright. `scripts/poll-mod-updates.py`'s
+  `_resolve_candidate_preserving_channel` decides this PER PIN, never as
+  a global default: on `OnlyPrereleaseAvailableError`, it fetches the
+  pin's own currently-pinned version metadata and retries with
+  `include_prerelease=True` only if that pin's own channel is itself
+  non-release -- this pack's real Biomes O' Plenty and GlitchCore pins
+  are confirmed-live on exactly this channel already. `scripts/bump_mod.py`'s
+  own hard version_type gate (previously an unconditional "refuse any
+  non-release candidate") was reordered to fetch the previous-pin
+  metadata first and now allows the same channel-preserving exception,
+  so a candidate this resolver now returns does not hit a second,
+  contradicting gate deeper in the write path. A pin pinned to a real
+  release is entirely unaffected -- this never lets a stable-channel mod
+  newly opt into prereleases, only lets a pin already there keep
+  accepting them.
+- `semver_compare.normalize_native_version_scheme` (consulted by
+  `parse_semver` as a fallback only after the strict SemVer regex
+  already failed, so an already-valid version string is never touched)
+  rewrites four confirmed-live non-strict-SemVer shapes into an
+  equivalent SemVer string: a leading `v`/`V` stripped (Dungeons and
+  Taverns' real "v4.4.4+mod"), a missing patch component padded to `0`
+  (Create: Dynamic Village "0.5", Create: Pillager Arise "132.36",
+  Geophilic "3.7", IceAndFire Community Edition "2.1-beta.1"), and a 4th
+  numeric component folded into the prerelease slot (Biomes O' Plenty
+  "21.1.0.14", GlitchCore "2.1.0.2"). Create: Easy Structures' real
+  pinned "0.2a" is DELIBERATELY left unparseable -- a bare trailing
+  letter with no separator has no single, source-backed meaning this
+  module can assign without guessing; see that function's own docstring.
+  Applying this inside `parse_semver` itself means every existing caller
+  (the resolver above, `decide_update`, `semver_delta_category`,
+  `scripts/bump_mod.py`'s own category-message fallback) benefits with
+  no call-site changes.
+
 **Explicit scope limit**: compatibility here means the candidate's own
 declared `game_versions`/`loaders`. `modrinth_compat.py` also has
 `find_dependency_conflicts(candidate, pinned_versions_by_mod_id)`, wired

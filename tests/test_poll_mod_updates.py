@@ -13,6 +13,8 @@ poll_mod_updates = importlib.util.module_from_spec(SPEC)
 sys.modules["poll_mod_updates"] = poll_mod_updates
 SPEC.loader.exec_module(poll_mod_updates)
 
+modrinth_compat = poll_mod_updates.modrinth_compat
+
 STUB_GATES = {"refresh": ["true"], "check": ["true"], "build": ["true"], "dependency_closure": ["true"]}
 
 
@@ -483,6 +485,89 @@ class TestPollAndBump(unittest.TestCase):
         self.assertEqual(excluded[0]["pin_path"], "mods/alpha-mod.pw.toml")
         self.assertEqual(excluded[0]["mod_id"], "ALPHA1")
         self.assertTrue(poll_mod_updates._is_expected_gap(excluded[0]))
+
+
+class TestResolveCandidatePreservingChannel(unittest.TestCase):
+    """MINECRAFT-421 review, point 1: `_resolve_candidate_preserving_channel`
+    retries with include_prerelease=True only when the PIN's own
+    currently-pinned version is itself non-release -- never from the
+    candidate's shape alone. This pack's real Biomes O' Plenty/
+    GlitchCore/IceAndFire Community Edition pins are the confirmed-live
+    positive case; any pin pinned to a real release is the negative case
+    (must behave exactly as before this round)."""
+
+    def _pin(self, mod_id="EXAMPLE", pinned_version_id="OLDID"):
+        return poll_mod_updates.mod_eligibility.EligiblePin(
+            pin_path="mods/example.pw.toml", name="Example", side="both",
+            mod_id=mod_id, pinned_version_id=pinned_version_id,
+        )
+
+    def test_release_pinned_channel_does_not_retry_negative(self):
+        pin = self._pin()
+        with mock.patch.object(
+            poll_mod_updates.modrinth_compat, "resolve_latest_compatible_version",
+            side_effect=modrinth_compat.OnlyPrereleaseAvailableError("only prerelease"),
+        ) as resolve_mock, mock.patch.object(
+            poll_mod_updates.bump_mod, "fetch_version_metadata",
+            return_value={"id": "OLDID", "version_type": "release"},
+        ):
+            with self.assertRaises(modrinth_compat.OnlyPrereleaseAvailableError):
+                poll_mod_updates._resolve_candidate_preserving_channel(
+                    pin, game_version="1.21.1", loader="neoforge", fetcher=mock.Mock(), token=None,
+                )
+        # Only the one, default (include_prerelease=False) call -- no retry.
+        self.assertEqual(resolve_mock.call_count, 1)
+        self.assertNotIn("include_prerelease", resolve_mock.call_args.kwargs)
+
+    def test_prerelease_pinned_channel_retries_and_resolves_positive(self):
+        pin = self._pin()
+        candidate = mock.Mock(name="candidate")
+        calls = []
+
+        def fake_resolve(mod_id, *, game_version, loader, fetcher, include_prerelease=False):
+            calls.append(include_prerelease)
+            if not include_prerelease:
+                raise modrinth_compat.OnlyPrereleaseAvailableError("only prerelease")
+            return candidate
+
+        with mock.patch.object(
+            poll_mod_updates.modrinth_compat, "resolve_latest_compatible_version", side_effect=fake_resolve,
+        ), mock.patch.object(
+            poll_mod_updates.bump_mod, "fetch_version_metadata",
+            return_value={"id": "OLDID", "version_type": "beta"},
+        ):
+            result = poll_mod_updates._resolve_candidate_preserving_channel(
+                pin, game_version="1.21.1", loader="neoforge", fetcher=mock.Mock(), token=None,
+            )
+        self.assertIs(result, candidate)
+        self.assertEqual(calls, [False, True])
+
+    def test_pinned_metadata_lookup_failure_fails_closed_to_original_error(self):
+        pin = self._pin()
+        with mock.patch.object(
+            poll_mod_updates.modrinth_compat, "resolve_latest_compatible_version",
+            side_effect=modrinth_compat.OnlyPrereleaseAvailableError("only prerelease"),
+        ), mock.patch.object(
+            poll_mod_updates.bump_mod, "fetch_version_metadata", side_effect=RuntimeError("network down"),
+        ):
+            with self.assertRaises(modrinth_compat.OnlyPrereleaseAvailableError):
+                poll_mod_updates._resolve_candidate_preserving_channel(
+                    pin, game_version="1.21.1", loader="neoforge", fetcher=mock.Mock(), token=None,
+                )
+
+    def test_other_errors_propagate_untouched(self):
+        # NoParseableCandidateError/CompatResolutionError are not this
+        # helper's concern at all -- only OnlyPrereleaseAvailableError is
+        # ever retried.
+        pin = self._pin()
+        with mock.patch.object(
+            poll_mod_updates.modrinth_compat, "resolve_latest_compatible_version",
+            side_effect=modrinth_compat.NoParseableCandidateError("nope"),
+        ):
+            with self.assertRaises(modrinth_compat.NoParseableCandidateError):
+                poll_mod_updates._resolve_candidate_preserving_channel(
+                    pin, game_version="1.21.1", loader="neoforge", fetcher=mock.Mock(), token=None,
+                )
 
 
 GITHUB_PIN_SLUG = "brooswit-minecraft/dynamic-despawn"

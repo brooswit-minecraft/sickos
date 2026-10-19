@@ -207,6 +207,49 @@ class TestResolveLatestCompatibleVersion(unittest.TestCase):
         self.assertIsNone(candidate)
 
 
+class TestIncludePrereleaseChannelPreservation(unittest.TestCase):
+    """MINECRAFT-421 review, point 1: `include_prerelease` lifts the
+    release-only filter for a SINGLE call, mirroring
+    github_release_identity.resolve_latest_matching_release's identical
+    per-pin contract for GitHub-tracked pins. This pack's real Biomes O'
+    Plenty/GlitchCore/IceAndFire Community Edition pins are the
+    confirmed-live motivation -- see poll-mod-updates.py's
+    `_resolve_candidate_preserving_channel`, which decides per pin
+    whether to pass this True, never a global default."""
+
+    def test_default_still_excludes_prerelease_negative(self):
+        fetcher = mock.Mock(return_value=[version_entry("V1", "1.0.0-alpha.1", version_type="alpha")])
+        with self.assertRaises(modrinth_compat.OnlyPrereleaseAvailableError):
+            resolve_latest_compatible_version("EXAMPLE", game_version="1.21.1", loader="neoforge", fetcher=fetcher)
+
+    def test_include_prerelease_true_resolves_a_prerelease_only_project_positive(self):
+        fetcher = mock.Mock(return_value=[version_entry("V1", "1.0.0-alpha.1", version_type="alpha")])
+        candidate = resolve_latest_compatible_version(
+            "EXAMPLE", game_version="1.21.1", loader="neoforge", fetcher=fetcher, include_prerelease=True,
+        )
+        self.assertEqual(candidate.version_id, "V1")
+
+    def test_include_prerelease_true_still_prefers_a_real_release_when_newer(self):
+        fetcher = mock.Mock(return_value=[
+            version_entry("V1", "1.0.0-alpha.1", version_type="alpha"),
+            version_entry("V2", "1.1.0", version_type="release"),
+        ])
+        candidate = resolve_latest_compatible_version(
+            "EXAMPLE", game_version="1.21.1", loader="neoforge", fetcher=fetcher, include_prerelease=True,
+        )
+        self.assertEqual(candidate.version_id, "V2")
+
+    def test_include_prerelease_true_picks_newest_prerelease_over_older_prerelease(self):
+        fetcher = mock.Mock(return_value=[
+            version_entry("V1", "1.0.0-alpha.1", version_type="alpha"),
+            version_entry("V2", "1.1.0-alpha.1", version_type="alpha"),
+        ])
+        candidate = resolve_latest_compatible_version(
+            "EXAMPLE", game_version="1.21.1", loader="neoforge", fetcher=fetcher, include_prerelease=True,
+        )
+        self.assertEqual(candidate.version_id, "V2")
+
+
 class TestMakeFetcher(unittest.TestCase):
     def test_no_token_sends_no_authorization_header(self):
         captured = {}

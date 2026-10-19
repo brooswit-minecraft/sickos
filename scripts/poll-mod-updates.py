@@ -187,11 +187,21 @@ KNOWN_ANONYMOUS_404_MOD_IDS = frozenset()
 # aggregate guard below unable to tell a genuine, newly-affected pin
 # apart from the always-expected ones.
 
-# 3 pins: a real candidate DOES resolve, but the no-downgrade check
-# (bump_mod.run_engine, via decide_update) cannot compare it against
-# this pin's own unparsable pinned version -- outcome
-# "unsupported_version_scheme". Needs a human bump to a parseable
-# version.
+# MINECRAFT-421 review, point 2: 2 of these 3 pins' native version
+# shapes (Create: Easy Structures' "0.2a"; see
+# semver_compare.normalize_native_version_scheme's own docstring for
+# exactly why that one stays genuinely ambiguous, not guessed) still hit
+# "unsupported_version_scheme" for real. IceAndFire Community Edition's
+# own pinned "2.1-beta.1" no longer does -- normalize_native_version_scheme
+# now parses that shape, and its prerelease channel is preserved by
+# _resolve_candidate_preserving_channel below, so a real update now
+# resolves normally instead of landing here. Left on this list as a
+# defense-in-depth safety net (membership here never widens on its own
+# -- a pin landing in this outcome while NOT listed still fails the run,
+# per _is_expected_gap below), not because it is expected to recur: if
+# this project ever regresses to a genuinely unparseable scheme for some
+# OTHER reason, this stays the one documented remedy -- a human bump to
+# a parseable version (Geophilic's, if that mod ever ships one).
 KNOWN_NON_SEMVER_PIN_IDS = {
     "z69Pxatv": "Create: Easy Structures", "hl5OLM95": "Geophilic",
     "VpmCsizY": "IceAndFire Community Edition",
@@ -205,6 +215,12 @@ KNOWN_NON_SEMVER_PIN_IDS = {
 # of them (there is nothing parseable to bump to); only a different
 # comparator this document does not attempt would (MINECRAFT-362 review,
 # eleventh round, smaller item -- a prior round's remedy text was wrong).
+# MINECRAFT-421 review, point 2 widened normalize_native_version_scheme
+# to cover 4 of this ticket's own confirmed shapes (two-/four-component
+# numeric, a leading "v") -- if Create: Dynamic Village/Create: Pillager
+# Arise/Dungeons and Taverns's real upstream strings match one of those,
+# they resolve normally now and no longer land here; left listed as the
+# same defense-in-depth safety net as KNOWN_NON_SEMVER_PIN_IDS above.
 KNOWN_NO_PARSEABLE_CANDIDATE_PIN_IDS = {
     "qnQsVE2z": "Quark", "MVARlG2f": "Zeta", "YCPmkFAm": "Create: Dynamic Village",
     "VT2rW2wr": "Create: Pillager Arise", "tpehi7ww": "Dungeons and Taverns",
@@ -213,7 +229,17 @@ KNOWN_NO_PARSEABLE_CANDIDATE_PIN_IDS = {
 # 4 pins: resolve_latest_compatible_version raises OnlyPrereleaseAvailableError
 # -- compatible entries exist, but every one is a beta/alpha, never a
 # release, for this (game_version, loader). A human bump cannot fix
-# this; only the mod author publishing a release build does.
+# this; only the mod author publishing a release build does. MINECRAFT-421
+# review, point 1: Biomes O' Plenty and GlitchCore are both confirmed-
+# live PINNED to this same prerelease channel already, so
+# _resolve_candidate_preserving_channel below now retries with
+# include_prerelease=True for both and resolves a real update normally
+# instead of landing here -- left listed as the same defense-in-depth
+# safety net (if the pinned-metadata lookup that decides the retry ever
+# fails, or this project genuinely has nothing newer in ANY channel,
+# this is still the correct, expected-gap outcome). Serene Seasons and
+# TerraBlender are NOT confirmed to be on a prerelease channel
+# themselves -- unchanged by this round, still a real standing gap.
 KNOWN_ONLY_PRERELEASE_PIN_IDS = {
     "HXF82T3G": "Biomes O' Plenty", "s3dmwKy5": "GlitchCore",
     "e0bNACJD": "Serene Seasons", "kkmrDlKT": "TerraBlender",
@@ -338,6 +364,44 @@ build_generic_commit_message = _load_build_generic_commit_message()
 read_pack_targets = mod_eligibility.read_pack_targets
 
 
+def _resolve_candidate_preserving_channel(pin, *, game_version, loader, fetcher, token):
+    """modrinth_compat.resolve_latest_compatible_version, but on
+    OnlyPrereleaseAvailableError, retries with include_prerelease=True
+    IFF this pin's OWN currently-pinned version is itself non-release
+    (MINECRAFT-421 channel preservation): this pack's real Biomes O'
+    Plenty, GlitchCore, and IceAndFire Community Edition pins are
+    confirmed-live on a prerelease channel, and a poll run that always
+    excludes prereleases permanently reports a real update as an
+    unconditional, un-investigated gap for all three -- this is "resolve
+    the update," not a second global default. Never a global default:
+    the retry only fires after independently verifying the PINNED
+    version's own channel, never from the candidate's shape alone, and
+    the common case (a pin pinned to a real release) takes exactly one
+    fetch, same as before this round -- the second metadata lookup only
+    happens for a pin that already hit the gap.
+
+    Re-raises the ORIGINAL OnlyPrereleaseAvailableError unchanged (not a
+    new kind) when the pin's own channel is release, or the pinned
+    version's own metadata cannot be fetched/trusted -- fails closed to
+    the exact outcome this had before this round, for every pin that is
+    not already on a prerelease channel."""
+    try:
+        return modrinth_compat.resolve_latest_compatible_version(
+            pin.mod_id, game_version=game_version, loader=loader, fetcher=fetcher,
+        )
+    except modrinth_compat.OnlyPrereleaseAvailableError as error:
+        try:
+            pinned_metadata = bump_mod.fetch_version_metadata(pin.pinned_version_id, token=token)
+        except Exception:  # noqa: BLE001 - any lookup failure fails closed to the original gap
+            raise error
+        if not isinstance(pinned_metadata, dict) or pinned_metadata.get("version_type") in (None, "release"):
+            raise error
+        return modrinth_compat.resolve_latest_compatible_version(
+            pin.mod_id, game_version=game_version, loader=loader, fetcher=fetcher,
+            include_prerelease=True,
+        )
+
+
 def commit_bump(repo_root, message, paths, run_command=subprocess.run):
     """Commit ONLY `paths` (pack.toml, index.toml, the pin, the notes
     file) -- never a bare `git commit` with no pathspec. A pathspec'd
@@ -424,8 +488,8 @@ def poll_and_bump(repo_root, *, token=None, fetcher=None, run_command=subprocess
 
         outcome = {"mod_name": pin.name, "mod_id": pin.mod_id, "pin_path": pin.pin_path}
         try:
-            candidate = modrinth_compat.resolve_latest_compatible_version(
-                pin.mod_id, game_version=game_version, loader=loader, fetcher=fetcher,
+            candidate = _resolve_candidate_preserving_channel(
+                pin, game_version=game_version, loader=loader, fetcher=fetcher, token=token,
             )
         # Order matters: both subclasses must be caught before the base
         # CompatResolutionError, which stays the catch-all for anything

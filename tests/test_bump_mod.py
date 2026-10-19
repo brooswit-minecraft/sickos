@@ -527,6 +527,58 @@ def _find_packwiz():
     return None
 
 
+class TestChannelPreservation(EngineTestCase):
+    """MINECRAFT-421 review, point 1: run_engine's version_type gate
+    refuses a prerelease candidate UNLESS this pin's own CURRENTLY-pinned
+    version is itself non-release -- never a global default. This pack's
+    real Biomes O' Plenty/GlitchCore/IceAndFire Community Edition pins are
+    the confirmed-live positive case; a pin pinned to a real release is
+    the negative case and must behave exactly as before this round."""
+
+    def test_prerelease_candidate_refused_when_pin_is_on_the_release_channel_negative(self):
+        content = b"prerelease jar"
+        candidate = make_candidate(content=content, version_number="1.1.0-beta.1")
+        self.register(candidate.version_id, metadata_for(candidate, version_type="beta"))
+        self.register(OLD_VERSION_ID, {
+            "id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0", "version_type": "release",
+        })
+        pin = make_pin()
+        before = self.porcelain()
+        with self.assertRaises(bump_mod.EngineError) as ctx:
+            self.run_engine(pin, candidate, content=content)
+        self.assertEqual(ctx.exception.exit_code, bump_mod.EXIT_INTEGRITY_FAILURE)
+        self.assertIn("not 'release'", ctx.exception.message)
+        self.assertEqual(self.porcelain(), before)
+
+    def test_prerelease_candidate_accepted_when_pin_is_already_on_a_prerelease_channel_positive(self):
+        content = b"prerelease jar"
+        candidate = make_candidate(content=content, version_number="1.1.0-beta.1")
+        self.register(candidate.version_id, metadata_for(candidate, version_type="beta"))
+        self.register(OLD_VERSION_ID, {
+            "id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0-beta.1", "version_type": "beta",
+        })
+        pin = make_pin()
+        summary, exit_code, _ = self.run_engine(pin, candidate, content=content)
+        self.assertEqual(exit_code, bump_mod.EXIT_OK)
+        self.assertTrue(summary["changed"])
+        self.assertEqual(summary["outcome"], "bumped")
+
+    def test_release_candidate_always_accepted_regardless_of_previous_channel(self):
+        # A pin on a prerelease channel still prefers a real release the
+        # moment one shows up -- channel preservation never BLOCKS a
+        # release, it only ever un-blocks a prerelease.
+        content = b"real release jar"
+        candidate = make_candidate(content=content, version_number="1.1.0")
+        self.register(candidate.version_id, metadata_for(candidate, version_type="release"))
+        self.register(OLD_VERSION_ID, {
+            "id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0-beta.1", "version_type": "beta",
+        })
+        pin = make_pin()
+        summary, exit_code, _ = self.run_engine(pin, candidate, content=content)
+        self.assertEqual(exit_code, bump_mod.EXIT_OK)
+        self.assertEqual(summary["outcome"], "bumped")
+
+
 class TestRealPackwizDryRun(EngineTestCase):
     """MINECRAFT-362 review, fourteenth round: the one test in this file
     that calls run_engine with REAL default_gate_commands-shaped commands

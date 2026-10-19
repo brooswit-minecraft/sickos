@@ -195,7 +195,7 @@ def version_candidate_from_json(version_json):
     )
 
 
-def resolve_latest_compatible_version(mod_id, *, game_version, loader, fetcher):
+def resolve_latest_compatible_version(mod_id, *, game_version, loader, fetcher, include_prerelease=False):
     """Return the newest VersionCandidate compatible with (game_version, loader), or None.
 
     Modrinth's own `game_versions`/`loaders` query filter already does the
@@ -216,12 +216,27 @@ def resolve_latest_compatible_version(mod_id, *, game_version, loader, fetcher):
     releases available, and for Cristel Lib, where the un-normalized
     comparison previously selected an older version as "best").
 
-    Only `version_type == "release"` entries are considered: Modrinth's
-    `version_type` ("release"/"beta"/"alpha") is independent of
+    Only `version_type == "release"` entries are considered by default:
+    Modrinth's `version_type` ("release"/"beta"/"alpha") is independent of
     `version_number`, so a prerelease that happens to sort higher by
     semver (e.g. "1.3.0-beta.1" > "1.2.0") must not be auto-pinned into
     the public pack ahead of its own eventual full release
-    (MINECRAFT-362 review).
+    (MINECRAFT-362 review). `include_prerelease` (default False) lifts
+    that filter for THIS call only -- it must be set True explicitly, per
+    pin, by a caller that has independently confirmed the pin's OWN
+    currently-pinned version is itself non-release (MINECRAFT-421 channel
+    preservation, mirroring github_release_identity.
+    resolve_latest_matching_release's identical per-pin
+    `include_prerelease` contract for GitHub-tracked pins): this module
+    never infers it from this call alone, so a stable-channel mod is
+    never silently opted into prereleases, and a mod whose accepted
+    channel genuinely IS prerelease (this pack's real Biomes O' Plenty,
+    GlitchCore, and IceAndFire Community Edition pins, confirmed live) is
+    not silently blocked from a real update on that same channel either.
+    When True, a prerelease entry competes for `best` on equal footing
+    with a release entry -- whichever has the higher semver precedence
+    wins regardless of type, so a pin on this channel still prefers an
+    actual release the moment its author publishes one.
 
     `None` means ONLY "no entry declaring (game_version, loader)
     compatibility exists at all for this project" -- genuinely nothing
@@ -259,8 +274,10 @@ def resolve_latest_compatible_version(mod_id, *, game_version, loader, fetcher):
             continue
         # Compatible by (game_version, loader) from here on -- now check
         # version_type, so a prerelease-only project can be told apart
-        # from a project with no compatible entry at all.
-        if entry.get("version_type") != "release":
+        # from a project with no compatible entry at all. Unless
+        # include_prerelease (MINECRAFT-421), a non-release entry is
+        # counted and skipped, never allowed to become `best`.
+        if entry.get("version_type") != "release" and not include_prerelease:
             prerelease_only_count += 1
             continue
         candidate = version_candidate_from_json(entry)

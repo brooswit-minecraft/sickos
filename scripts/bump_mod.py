@@ -399,26 +399,6 @@ def run_engine(repo_root, pin, candidate, *, category=None,
             f"Modrinth version metadata check failed for {candidate.version_id}: {error}",
         )
 
-    # modrinth_compat.resolve_latest_compatible_version already filters
-    # to version_type == "release" -- but that filter lives in the POLL
-    # path's own resolver, not here, so scripts/bump_mod.py's CLI (which
-    # is handed a version id directly and never calls that resolver) had
-    # no equivalent check at all: it could pin a beta/alpha by id, which
-    # would then be permanently downgrade_refused by every future poll
-    # run (itself an expected per-pin gap since this round, so a
-    # mis-pinned prerelease would read as a quiet ::warning:: forever,
-    # not a failure anyone notices). Re-checking the FRESH metadata here
-    # -- never trusting a filter this call did not itself verify, same
-    # principle as modrinth_compat's own docstring -- closes that gap
-    # for both callers at once (MINECRAFT-362 review, eighth round).
-    if metadata.get("version_type") != "release":
-        raise EngineError(
-            EXIT_INTEGRITY_FAILURE, "integrity_failure",
-            f"Modrinth version {candidate.version_id} for {pin.name} has version_type "
-            f"{metadata.get('version_type')!r}, not 'release' -- refusing to pin a "
-            "prerelease/alpha/beta build",
-        )
-
     # Strong no-downgrade check: a pin only stores the previously-pinned
     # Modrinth version ID, not its semver string, so look that version's
     # own version_number up before judging whether the candidate is
@@ -428,7 +408,11 @@ def run_engine(repo_root, pin, candidate, *, category=None,
     # the check" would let an attacker-controlled or merely stale resolver
     # response silently pin a real downgrade (MINECRAFT-362 review) --
     # exactly the "stale-event handling without downgrades" guarantee this
-    # pass exists to provide.
+    # pass exists to provide. Moved ahead of the version_type gate below
+    # (MINECRAFT-421): that gate now needs to know this pin's OWN
+    # currently-pinned channel before it can decide whether a prerelease
+    # candidate is a channel expansion (refuse) or a channel preservation
+    # (allow), so previous_metadata must already be in hand.
     try:
         previous_metadata = metadata_fetcher(pin.pinned_version_id)
     except Exception as error:  # noqa: BLE001 - any lookup failure fails closed
@@ -483,6 +467,40 @@ def run_engine(repo_root, pin, candidate, *, category=None,
             f"could not verify {pin.name} is not a downgrade: looking up version "
             f"{pin.pinned_version_id!r} returned metadata for a different version id "
             f"({previous_metadata_id!r}) -- refusing to trust its version_number",
+        )
+
+    # modrinth_compat.resolve_latest_compatible_version already filters
+    # to version_type == "release" -- but that filter lives in the POLL
+    # path's own resolver, not here, so scripts/bump_mod.py's CLI (which
+    # is handed a version id directly and never calls that resolver) had
+    # no equivalent check at all: it could pin a beta/alpha by id, which
+    # would then be permanently downgrade_refused by every future poll
+    # run (itself an expected per-pin gap since this round, so a
+    # mis-pinned prerelease would read as a quiet ::warning:: forever,
+    # not a failure anyone notices). Re-checking the FRESH metadata here
+    # -- never trusting a filter this call did not itself verify, same
+    # principle as modrinth_compat's own docstring -- closes that gap
+    # for both callers at once (MINECRAFT-362 review, eighth round).
+    #
+    # MINECRAFT-421 channel preservation: a prerelease candidate is
+    # refused UNLESS this pin's own CURRENTLY-pinned version is itself
+    # non-release -- never a global default, determined fresh, per pin,
+    # from previous_metadata fetched just above (this pack's real Biomes
+    # O' Plenty/GlitchCore/IceAndFire Community Edition pins are
+    # confirmed-live on this channel already; a pin pinned to a real
+    # release stays stable-only). This is channel PRESERVATION, not
+    # expansion: a pin cannot newly opt into prereleases through this
+    # gate, only continue accepting them if it was already there.
+    pin_channel_is_prerelease = (
+        isinstance(previous_metadata, dict) and previous_metadata.get("version_type") not in (None, "release")
+    )
+    if metadata.get("version_type") != "release" and not pin_channel_is_prerelease:
+        raise EngineError(
+            EXIT_INTEGRITY_FAILURE, "integrity_failure",
+            f"Modrinth version {candidate.version_id} for {pin.name} has version_type "
+            f"{metadata.get('version_type')!r}, not 'release', and this pin's own currently-"
+            f"pinned channel ({previous_metadata.get('version_type')!r}) is not a prerelease "
+            "channel either -- refusing to pin a prerelease/alpha/beta build",
         )
 
     downgrade_decision = decide_update(
