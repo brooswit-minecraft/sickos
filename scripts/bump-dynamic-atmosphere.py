@@ -8,7 +8,6 @@ Never pushes, commits, tags, or touches Modrinth. Stdlib only.
 
 import argparse
 import hashlib
-import io
 import json
 import os
 import re
@@ -21,7 +20,6 @@ import types
 import urllib.error
 import urllib.parse
 import urllib.request
-import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -683,6 +681,20 @@ def run_gate(repo_root, run_command, commands, name):
 # both hashes before anything is written to the repo.
 # --------------------------------------------------------------------------
 
+# MINECRAFT-362 review, kickback on round 22, comment 47928, smaller
+# item (d): download_and_verify now returns the full jar bytes (needed
+# by check_runtime_compatibility_or_die) and holds them alive through
+# every gate that runs after it, instead of the old streaming
+# hash-and-discard loop. No real mod jar this pack manages is anywhere
+# near this size (the largest pinned jar today is a few MB); this is a
+# cheap backstop against a pathological/compromised response trying to
+# OOM the runner, checked against the file ALREADY ON DISK (the
+# downloader's own temp file) before it is ever read into memory, not
+# against an in-memory buffer that would already exist by the time this
+# check ran.
+MAX_JAR_SIZE_BYTES = 512 * 1024 * 1024
+
+
 def download_and_verify(download_url, expected_sha1, expected_sha512, downloader):
     """Download, hash-verify, and return the jar's own bytes (MINECRAFT-362
     review, twenty-second round: previously verified and discarded the
@@ -698,6 +710,14 @@ def download_and_verify(download_url, expected_sha1, expected_sha512, downloader
         except Exception as error:  # noqa: BLE001 - any download failure fails closed
             raise EngineError(EXIT_INTEGRITY_FAILURE, "integrity_failure",
                                f"failed to download {download_url}: {error}") from error
+
+        size = os.path.getsize(temp_path)
+        if size > MAX_JAR_SIZE_BYTES:
+            raise EngineError(
+                EXIT_INTEGRITY_FAILURE, "integrity_failure",
+                f"downloaded file from {download_url} is {size} bytes, over the "
+                f"{MAX_JAR_SIZE_BYTES}-byte sanity cap -- refusing to read it into memory",
+            )
 
         sha1 = hashlib.sha1()
         sha512 = hashlib.sha512()
@@ -759,7 +779,7 @@ def _lower_bound_violated(pinned_version, range_spec):
         body = part[1:-1]
         lower = body.split(",", 1)[0].strip() if "," in body else body.strip()
         if not lower:
-            continue  # this alternative has no lower bound at all -- satisfied
+            return False  # this alternative has no lower bound at all -- satisfied
         comparison = dependency_closure_check.compare(pinned_version, lower)
         if comparison > 0 or (comparison == 0 and lower_inclusive):
             return False
@@ -775,32 +795,40 @@ def check_runtime_compatibility_or_die(jar_bytes, pinned_versions):
     `dependency_closure_check.pack_versions` already returns).
 
     A jar that fails to parse at all (not a real zip, or no recognised
-    mods.toml inside it) is not this function's problem -- the identity/
-    hash gate already verified these exact bytes match what Modrinth/the
-    payload declared, and scripts/dependency_closure_check.py's own
-    FAIL on an unreadable jar covers that failure mode; this check skips
-    silently rather than raising a second, confusing error for the same
-    root cause.
+    mods.toml inside it, or a corrupt jarjar manifest) is not this
+    function's problem -- the identity/hash gate already verified these
+    exact bytes match what Modrinth/the payload declared, and
+    scripts/dependency_closure_check.py's own FAIL on an unreadable jar
+    covers that failure mode; this check skips silently rather than
+    raising a second, confusing error for the same root cause.
+
+    Walks NESTED (jarjar) jars too, via the vendored module's own
+    `load_jar`/`flatten` (MINECRAFT-362 review, kickback on round 22,
+    comment 47928, smaller item (a)): the top-level-only `read_mods`
+    this check previously called missed a shaded/bundled library
+    declaring its OWN platform requirement -- today's real pack has 36
+    nested jars, so this was not theoretical. Same walk the vendored
+    checker's own `analyze()` already does for required-dependency
+    satisfaction, reused here rather than re-implemented.
     """
     try:
-        zf = zipfile.ZipFile(io.BytesIO(jar_bytes))
-    except zipfile.BadZipFile:
+        top = dependency_closure_check.load_jar("candidate", jar_bytes)
+    except dependency_closure_check.CheckError:
         return
-    with zf:
-        _mods, deps = dependency_closure_check.read_mods(zf)
     violations = []
-    for dependency in deps:
-        dependency_id = dependency["id"]
-        if dependency_id not in dependency_closure_check.PLATFORM:
-            continue
-        pinned = pinned_versions.get(dependency_id)
-        if not pinned or not dependency["range"]:
-            continue
-        if _lower_bound_violated(pinned, dependency["range"]):
-            violations.append(
-                f"declares {dependency_id} {dependency['range']!r}, whose lower bound "
-                f"exceeds this pack's own pinned {dependency_id} {pinned!r}"
-            )
+    for jar in dependency_closure_check.flatten(top):
+        for dependency in jar["deps"]:
+            dependency_id = dependency["id"]
+            if dependency_id not in dependency_closure_check.PLATFORM:
+                continue
+            pinned = pinned_versions.get(dependency_id)
+            if not pinned or not dependency["range"]:
+                continue
+            if _lower_bound_violated(pinned, dependency["range"]):
+                violations.append(
+                    f"{jar['label']} declares {dependency_id} {dependency['range']!r}, whose "
+                    f"lower bound exceeds this pack's own pinned {dependency_id} {pinned!r}"
+                )
     if violations:
         raise EngineError(
             EXIT_CONFIG_ERROR, "runtime_incompatible",

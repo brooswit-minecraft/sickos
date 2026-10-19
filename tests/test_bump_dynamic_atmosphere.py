@@ -2,6 +2,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -256,6 +257,35 @@ class TestHashAnomaly(EngineTestCase):
             self.run_engine(payload)
         self.assertEqual(ctx.exception.exit_code, bump.EXIT_ANOMALY)
         self.assertEqual(self.porcelain(), "")
+
+
+class TestDownloadSizeCap(EngineTestCase):
+    """MINECRAFT-362 review, kickback on round 22, comment 47928, smaller
+    item (d): download_and_verify now returns the full jar bytes and
+    holds them alive through every later gate (needed by
+    check_runtime_compatibility_or_die) -- MAX_JAR_SIZE_BYTES is a cheap
+    backstop, checked against the downloaded file's size ON DISK before
+    it is ever read into memory, so a pathological/compromised response
+    cannot OOM the runner. Patches the module constant down to a tiny
+    value rather than actually downloading 512 MiB in a test."""
+
+    def test_oversized_download_fails_closed_without_reading_it_into_memory(self):
+        content = b"this is definitely over ten bytes"
+        payload = make_payload(category="patch", content=content)
+        with mock.patch.object(bump, "MAX_JAR_SIZE_BYTES", 10):
+            with self.assertRaises(bump.EngineError) as ctx:
+                self.run_engine(payload, content=content)
+        self.assertEqual(ctx.exception.exit_code, bump.EXIT_INTEGRITY_FAILURE)
+        self.assertIn("sanity cap", ctx.exception.message)
+        self.assertEqual(self.porcelain(), "")
+
+    def test_download_under_the_cap_is_unaffected(self):
+        content = b"small jar"
+        payload = make_payload(category="patch", content=content)
+        with mock.patch.object(bump, "MAX_JAR_SIZE_BYTES", 10):
+            summary, exit_code, _ = self.run_engine(payload, content=content)
+        self.assertEqual(exit_code, bump.EXIT_OK)
+        self.assertTrue(summary["changed"])
 
 
 class TestDowngradeRefused(EngineTestCase):
@@ -1182,6 +1212,40 @@ class TestRuntimeCompatibilityCheck(EngineTestCase):
         summary, exit_code, _ = self.run_engine(payload, content=jar_bytes)
         self.assertEqual(exit_code, bump.EXIT_OK)
         self.assertTrue(summary["changed"])
+
+    def test_candidate_jar_with_an_empty_lower_bound_still_bumps(self):
+        # Same fix as tests/test_bump_mod.py's own test of this name
+        # (MINECRAFT-362 review, kickback on round 22, comment 47928,
+        # P1): _lower_bound_violated's "no lower bound at all" branch
+        # was `continue`, which fell through to its terminal `return
+        # True` -- the opposite of what it should do for an
+        # upper-bound-only range like `(,1.22)`.
+        jar_bytes = _build_neoforge_jar("dynamicatmosphere", "0.19.1-alpha.1", requires=[("minecraft", "(,1.22)")])
+        payload = make_payload(version="0.19.1-alpha.1", category="patch", content=jar_bytes)
+        summary, exit_code, _ = self.run_engine(payload, content=jar_bytes)
+        self.assertEqual(exit_code, bump.EXIT_OK)
+        self.assertTrue(summary["changed"])
+
+
+class TestDefaultGateCommandsStrict(unittest.TestCase):
+    """MINECRAFT-362 review, kickback on round 22, comment 47928, smaller
+    item (b): default_gate_commands' dependency_closure command string
+    (the one actually used unattended -- the real-gate TESTS build their
+    own gate dicts without --strict, so nothing previously asserted this
+    flag is actually in the PRODUCTION command, meaning it could silently
+    disappear with no test catching it)."""
+
+    def test_dependency_closure_command_includes_strict_by_default(self):
+        commands = bump.default_gate_commands(Path("/tmp/example-repo-root"))
+        self.assertIn("--strict", commands["dependency_closure"])
+
+    def test_dependency_closure_command_env_override_is_not_forced_to_include_strict(self):
+        # DA_BUMP_DEPENDENCY_CLOSURE_CMD stays a full override, same as
+        # every other *_CMD env var here -- an operator who overrides it
+        # is trusted to include --strict themselves if they want it.
+        with mock.patch.dict(os.environ, {"DA_BUMP_DEPENDENCY_CLOSURE_CMD": "python3 scripts/dependency_closure_check.py"}):
+            commands = bump.default_gate_commands(Path("/tmp/example-repo-root"))
+        self.assertNotIn("--strict", commands["dependency_closure"])
 
 
 class TestMetadataFetcherAuth(unittest.TestCase):

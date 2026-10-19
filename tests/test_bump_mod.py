@@ -647,6 +647,74 @@ class TestRuntimeCompatibilityCheck(EngineTestCase):
         self.assertEqual(exit_code, bump_mod.EXIT_OK)
         self.assertTrue(summary["changed"])
 
+    def test_candidate_jar_with_an_empty_lower_bound_still_bumps(self):
+        # MINECRAFT-362 review (task-review-opus, kickback on round 22,
+        # comment 47928), P1: _lower_bound_violated's "no lower bound at
+        # all" branch (`[,1.22)` / `(,1.22)` -- an upper-bound-ONLY Maven
+        # range, legal and real in NeoForge/Forge mods.toml) was `continue`
+        # instead of `return False`, which fell through to the function's
+        # terminal `return True` -- the OPPOSITE of what its own comment
+        # on that line said. Confirmed live before this fix: pinned
+        # minecraft 1.21.1 against `(,1.22)`, `(,1.21.1]`, and `[,1.22)`
+        # all reported violated=True, a false positive the vendored
+        # checker's own `in_range` does not share. Dangerous specifically
+        # because runtime_incompatible is in poll-mod-updates.py's
+        # _UNLISTABLE_EXPECTED_GAP_OUTCOMES (this same round) -- the false
+        # positive would not fail loudly, it would silently freeze an
+        # affected mod's updates forever as an "expected" gap.
+        jar_bytes = _build_neoforge_jar("examplemod", "1.1.0", requires=[("minecraft", "(,1.22)")])
+        candidate = make_candidate(
+            content=jar_bytes, file_name="examplemod-1.1.0.jar",
+            sha1=hashlib.sha1(jar_bytes).hexdigest(), sha512=hashlib.sha512(jar_bytes).hexdigest(),
+        )
+        self.register(candidate.version_id, metadata_for(candidate))
+        self.register(OLD_VERSION_ID, {"id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0"})
+        pin = make_pin()
+
+        summary, exit_code, _ = self.run_engine(pin, candidate, content=jar_bytes)
+        self.assertEqual(exit_code, bump_mod.EXIT_OK)
+        self.assertTrue(summary["changed"])
+
+    def test_nested_jarjar_jar_requiring_a_newer_neoforge_fails_closed(self):
+        # MINECRAFT-362 review, kickback on round 22, comment 47928,
+        # smaller item (a): a shaded/bundled nested jar's OWN declared
+        # platform requirement must be checked too, not just the
+        # top-level jar's -- today's real pack has 36 nested jars, so
+        # this is a real gap, not a theoretical one.
+        nested_bytes = _build_neoforge_jar("shadedlib", "1.0.0", requires=[("neoforge", "[21.2,)")])
+        jar_bytes = _build_jarjar_wrapper("examplemod", "1.1.0", nested_bytes)
+        candidate = make_candidate(
+            content=jar_bytes, file_name="examplemod-1.1.0.jar",
+            sha1=hashlib.sha1(jar_bytes).hexdigest(), sha512=hashlib.sha512(jar_bytes).hexdigest(),
+        )
+        self.register(candidate.version_id, metadata_for(candidate))
+        self.register(OLD_VERSION_ID, {"id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0"})
+        pin = make_pin()
+
+        before = self.porcelain()
+        with self.assertRaises(bump_mod.EngineError) as ctx:
+            self.run_engine(pin, candidate, content=jar_bytes)
+        self.assertEqual(ctx.exception.exit_code, bump_mod.EXIT_CONFIG_ERROR)
+        self.assertEqual(ctx.exception.outcome, "runtime_incompatible")
+        self.assertIn("neoforge", ctx.exception.message)
+        self.assertIn("21.1.250", ctx.exception.message)
+        self.assertEqual(self.porcelain(), before)
+
+    def test_nested_jarjar_jar_with_a_satisfied_neoforge_still_bumps(self):
+        nested_bytes = _build_neoforge_jar("shadedlib", "1.0.0", requires=[("neoforge", "[21.1,)")])
+        jar_bytes = _build_jarjar_wrapper("examplemod", "1.1.0", nested_bytes)
+        candidate = make_candidate(
+            content=jar_bytes, file_name="examplemod-1.1.0.jar",
+            sha1=hashlib.sha1(jar_bytes).hexdigest(), sha512=hashlib.sha512(jar_bytes).hexdigest(),
+        )
+        self.register(candidate.version_id, metadata_for(candidate))
+        self.register(OLD_VERSION_ID, {"id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0"})
+        pin = make_pin()
+
+        summary, exit_code, _ = self.run_engine(pin, candidate, content=jar_bytes)
+        self.assertEqual(exit_code, bump_mod.EXIT_OK)
+        self.assertTrue(summary["changed"])
+
 
 class TestGateFailureRestoresRepo(EngineTestCase):
     def test_failing_check_gate_restores_repo(self):
@@ -723,6 +791,27 @@ def _build_neoforge_jar(mod_id, version, requires=()):
     return buf.getvalue()
 
 
+def _build_jarjar_wrapper(outer_mod_id, outer_version, nested_jar_bytes, nested_entry_name="nested.jar"):
+    """A real, valid NeoForge jar that shades `nested_jar_bytes` via the
+    real jarjar convention (META-INF/jarjar/metadata.json +
+    META-INF/jarjar/<entry>) scripts/dependency_closure_check.py's own
+    `load_jar` walks -- MINECRAFT-362 review, kickback on round 22,
+    comment 47928, smaller item (a): check_runtime_compatibility_or_die
+    previously only looked at the TOP-level jar's own declared platform
+    requirement, missing one declared by a shaded/bundled nested jar."""
+    outer_bytes = _build_neoforge_jar(outer_mod_id, outer_version)
+    with zipfile.ZipFile(io.BytesIO(outer_bytes)) as outer_zf:
+        outer_entries = {name: outer_zf.read(name) for name in outer_zf.namelist()}
+    entry_path = f"META-INF/jarjar/{nested_entry_name}"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for name, data in outer_entries.items():
+            zf.writestr(name, data)
+        zf.writestr("META-INF/jarjar/metadata.json", json.dumps({"jars": [{"path": entry_path}]}))
+        zf.writestr(entry_path, nested_jar_bytes)
+    return buf.getvalue()
+
+
 class TestRealDependencyClosureGate(EngineTestCase):
     """MINECRAFT-362 review, twenty-first round, required item:
     modrinth_compat.find_dependency_conflicts can only compare an EXACT
@@ -789,6 +878,18 @@ class TestRealDependencyClosureGate(EngineTestCase):
                       f'"{self.PACKWIZ}" refresh >/dev/null && '
                       'git diff --quiet -- pack.toml index.toml mods'],
             "build": ["true"],
+            # Deliberately WITHOUT --strict, unlike default_gate_commands'
+            # own production invocation: these minimal fixtures have no
+            # nested (jarjar) jars at all, which --strict turns into a
+            # hard failure (confirmed live -- adding --strict here broke
+            # the positive-control test below with a real pack that
+            # happens to have zero nesting, not a bug in the candidate
+            # being tested). --strict itself is covered directly, without
+            # this network/packwiz dependency, by
+            # TestDefaultGateCommandsStrict in
+            # tests/test_bump_dynamic_atmosphere.py (MINECRAFT-362
+            # review, kickback on round 22, comment 47928, smaller item
+            # (b)).
             "dependency_closure": ["python3", str(REAL_DEPENDENCY_CLOSURE_SCRIPT)],
         }
 
