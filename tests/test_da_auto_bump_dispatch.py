@@ -256,7 +256,7 @@ class TestBuildCommitMessage(unittest.TestCase):
         # bullet list -- exactly the shape SICKOS-79's review flagged as
         # unrecognised when a trailer isn't in its own final paragraph.
         final_paragraph = message.strip("\n").split("\n\n")[-1]
-        self.assertEqual(final_paragraph, "Release-Only: true\nDA-Auto-Bump: 0.20.0 abc123")
+        self.assertEqual(final_paragraph, "DA-Auto-Bump: 0.20.0 abc123")
 
     def test_trailer_survives_multiline_body_and_bullet_list(self):
         message = build_commit_message(
@@ -269,23 +269,23 @@ class TestBuildCommitMessage(unittest.TestCase):
         self.assertIn("- Mapping rule:", message)
         self.assertTrue(has_da_auto_bump_trailer(message))
 
-    def test_generated_message_never_deploys_patch(self):
+    def test_generated_message_deploys_normally_patch(self):
         message = build_commit_message(
             mapping_rule="patch", new_pack_version="0.22.2",
             da_version="0.19.2", modrinth_version_id="abc123",
         )
-        self.assertFalse(should_deploy(message))
+        self.assertTrue(should_deploy(message))
         self.assertTrue(has_da_auto_bump_trailer(message))
 
-    def test_generated_message_never_deploys_minor(self):
+    def test_generated_message_deploys_normally_minor(self):
         message = build_commit_message(
             mapping_rule="minor", new_pack_version="0.23.0",
             da_version="0.20.0", modrinth_version_id="abc123",
         )
-        self.assertFalse(should_deploy(message))
+        self.assertTrue(should_deploy(message))
         self.assertTrue(has_da_auto_bump_trailer(message))
 
-    def test_generated_message_never_deploys_minor_default_rules(self):
+    def test_generated_message_deploys_normally_minor_default_rules(self):
         for default_rule in (
             "minor_default_absent_category",
             "minor_default_unrecognised_category",
@@ -295,15 +295,15 @@ class TestBuildCommitMessage(unittest.TestCase):
                     mapping_rule=default_rule, new_pack_version="0.23.0",
                     da_version="0.20.0", modrinth_version_id="abc123",
                 )
-                self.assertFalse(should_deploy(message))
+                self.assertTrue(should_deploy(message))
                 self.assertTrue(has_da_auto_bump_trailer(message))
 
-    def test_generated_message_never_deploys_breaking(self):
+    def test_generated_message_deploys_normally_breaking(self):
         message = build_commit_message(
             mapping_rule="breaking_as_minor", new_pack_version="1.0.0",
             da_version="1.0.0-beta.1", modrinth_version_id="xyz789",
         )
-        self.assertFalse(should_deploy(message))
+        self.assertTrue(should_deploy(message))
         self.assertTrue(has_da_auto_bump_trailer(message))
 
 
@@ -346,7 +346,7 @@ class TestBuildGenericCommitMessage(unittest.TestCase):
             mod_id="EXAMPLE1", modrinth_version_id="abc123", version_number="1.1.0",
         )
         final_paragraph = message.strip("\n").split("\n\n")[-1]
-        self.assertEqual(final_paragraph, "Release-Only: true\nMod-Auto-Bump: EXAMPLE1 abc123")
+        self.assertEqual(final_paragraph, "Mod-Auto-Bump: EXAMPLE1 abc123")
         self.assertTrue(_has_generic_mod_auto_bump_trailer(message))
 
     def test_never_mistaken_for_a_da_trailer(self):
@@ -356,14 +356,14 @@ class TestBuildGenericCommitMessage(unittest.TestCase):
         )
         self.assertFalse(has_da_auto_bump_trailer(message))
 
-    def test_generated_message_never_deploys(self):
+    def test_generated_message_deploys_normally(self):
         for mapping_rule in ("patch", "minor", "breaking_as_minor"):
             with self.subTest(mapping_rule=mapping_rule):
                 message = build_generic_commit_message(
                     mapping_rule=mapping_rule, new_pack_version="0.23.0", mod_name="Example Mod",
                     mod_id="EXAMPLE1", modrinth_version_id="abc123", version_number="1.1.0",
                 )
-                self.assertFalse(should_deploy(message))
+                self.assertTrue(should_deploy(message))
 
 
 class TestListingIssue(unittest.TestCase):

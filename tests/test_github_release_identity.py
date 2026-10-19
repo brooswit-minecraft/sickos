@@ -41,6 +41,14 @@ def _release(tag, *, assets=(), created_at="2026-01-01T00:00:00Z", draft=False, 
     }
 
 
+def _ref(sha, obj_type="commit"):
+    return {"object": {"sha": sha, "type": obj_type}}
+
+
+def _tag_object(sha):
+    return {"object": {"sha": sha, "type": "commit"}}
+
+
 class TestMatchAsset(unittest.TestCase):
     def test_lookbehind_pattern_excludes_named_suffixes(self):
         names = ["foo.jar", "foo-api.jar", "foo-dev.jar", "foo-dev-preshadow.jar", "foo-sources.jar", "foo.txt"]
@@ -74,7 +82,7 @@ class TestCandidateFromReleaseJson(unittest.TestCase):
         self.assertEqual(candidate.version_number, "0.3.4")
         self.assertEqual(candidate.asset_name, "dynamicdespawn-0.3.4.jar")
         self.assertEqual(candidate.sha256, "a" * 64)
-        self.assertEqual(candidate.source_commitish, "b" * 40)
+        self.assertFalse(candidate.prerelease)
 
     def test_ambiguous_asset_fails_closed(self):
         release = _release("v0.3.4", assets=[_asset("one.jar"), _asset("two.jar")])
@@ -107,7 +115,7 @@ class TestResolveLatestMatchingRelease(unittest.TestCase):
             candidate = m.resolve_latest_matching_release(SLUG, PLAIN_JAR_REGEX)
         self.assertEqual(candidate.tag, "v0.3.4")
 
-    def test_excludes_drafts_and_prereleases(self):
+    def test_excludes_drafts_and_prereleases_by_default(self):
         draft = _release("v0.4.0", assets=[_asset("x-0.4.0.jar")], created_at="2026-03-01T00:00:00Z", draft=True)
         prerelease = _release(
             "v0.3.9", assets=[_asset("x-0.3.9.jar")], created_at="2026-02-15T00:00:00Z", prerelease=True,
@@ -116,6 +124,31 @@ class TestResolveLatestMatchingRelease(unittest.TestCase):
         with mock.patch.object(m, "fetch_releases_json", return_value=[draft, prerelease, real]):
             candidate = m.resolve_latest_matching_release(SLUG, PLAIN_JAR_REGEX)
         self.assertEqual(candidate.tag, "v0.3.4")
+
+    def test_include_prerelease_still_excludes_drafts(self):
+        """MINECRAFT-362 review, comment 48456, item 4: a pin whose
+        accepted channel IS prerelease (this pack's real dynamic-
+        atmosphere and dynamic-population pins) must still never
+        consider a DRAFT -- draft and prerelease are independent
+        GitHub flags, and `include_prerelease` only widens the second."""
+        draft = _release("v0.5.0", assets=[_asset("x-0.5.0.jar")], created_at="2026-04-01T00:00:00Z", draft=True)
+        prerelease = _release(
+            "v0.4.0-alpha.1", assets=[_asset("x-0.4.0-alpha.1.jar")],
+            created_at="2026-03-01T00:00:00Z", prerelease=True,
+        )
+        with mock.patch.object(m, "fetch_releases_json", return_value=[draft, prerelease]):
+            candidate = m.resolve_latest_matching_release(SLUG, PLAIN_JAR_REGEX, include_prerelease=True)
+        self.assertEqual(candidate.tag, "v0.4.0-alpha.1")
+
+    def test_include_prerelease_picks_newest_prerelease_over_older_stable(self):
+        stable = _release("v0.3.0", assets=[_asset("x-0.3.0.jar")], created_at="2026-01-01T00:00:00Z")
+        newer_prerelease = _release(
+            "v0.4.0-alpha.1", assets=[_asset("x-0.4.0-alpha.1.jar")],
+            created_at="2026-02-01T00:00:00Z", prerelease=True,
+        )
+        with mock.patch.object(m, "fetch_releases_json", return_value=[stable, newer_prerelease]):
+            candidate = m.resolve_latest_matching_release(SLUG, PLAIN_JAR_REGEX, include_prerelease=True)
+        self.assertEqual(candidate.tag, "v0.4.0-alpha.1")
 
     def test_no_qualifying_release_is_no_candidate(self):
         with mock.patch.object(m, "fetch_releases_json", return_value=[]):
@@ -140,34 +173,75 @@ class TestResolveLatestMatchingRelease(unittest.TestCase):
         self.assertEqual(candidate.tag, "v0.3.4")
 
 
-class TestResolveSourceSha(unittest.TestCase):
-    def test_already_a_sha_is_returned_as_is_no_extra_call(self):
-        sha = "a" * 40
-        with mock.patch.object(m, "_api_get") as mocked:
-            result = m.resolve_source_sha(SLUG, sha)
-        self.assertEqual(result, sha)
-        mocked.assert_not_called()
+class TestResolveTagSourceSha(unittest.TestCase):
+    """MINECRAFT-362 review, comment 48456, item 1: provenance must bind
+    to the released TAG's own target (via refs/tags, peeling an
+    annotated tag), never to the release's target_commitish."""
 
-    def test_branch_name_is_resolved_via_commits_api(self):
-        """The real magicavoxel-loader pin's target_commitish is the
-        branch name 'MINECRAFT-284', not a SHA -- confirmed live,
-        read anonymously (MINECRAFT-362 review, comment 48415's
-        'resolve tag to immutable source')."""
-        with mock.patch.object(m, "_api_get", return_value={"sha": "c" * 40}) as mocked:
-            result = m.resolve_source_sha(SLUG, "MINECRAFT-284")
-        self.assertEqual(result, "c" * 40)
-        (path,), kwargs = mocked.call_args
-        self.assertIn("/commits/MINECRAFT-284", path)
+    def test_lightweight_tag_returns_its_commit_directly(self):
+        with mock.patch.object(m, "_api_get", return_value=_ref("e" * 40)) as mocked:
+            result = m.resolve_tag_source_sha(SLUG, "v0.2.1")
+        self.assertEqual(result, "e" * 40)
+        mocked.assert_called_once()
+        (path,), _kwargs = mocked.call_args
+        self.assertIn("/git/refs/tags/v0.2.1", path)
 
-    def test_commits_api_failure_fails_closed(self):
-        with mock.patch.object(m, "_api_get", side_effect=OSError("boom")):
-            with self.assertRaises(Exception):
-                m.resolve_source_sha(SLUG, "some-branch")
+    def test_annotated_tag_is_peeled_one_more_hop(self):
+        """The real magicavoxel-loader v0.1.3 tag is annotated -- GET
+        refs/tags returns a `tag` object, which must be peeled via GET
+        git/tags/{sha} to reach the actual commit (confirmed live,
+        read anonymously)."""
+        tag_obj_sha = "f" * 40
+        commit_sha = "c" * 40
 
-    def test_commits_api_returning_no_sha_fails_closed(self):
-        with mock.patch.object(m, "_api_get", return_value={}):
+        def fake_api_get(path, **kwargs):
+            if "/git/refs/tags/" in path:
+                return _ref(tag_obj_sha, obj_type="tag")
+            if f"/git/tags/{tag_obj_sha}" in path:
+                return _tag_object(commit_sha)
+            raise AssertionError(f"unexpected path {path!r}")
+
+        with mock.patch.object(m, "_api_get", side_effect=fake_api_get):
+            result = m.resolve_tag_source_sha(SLUG, "v0.1.3")
+        self.assertEqual(result, commit_sha)
+
+    def test_branch_advancing_after_release_does_not_change_the_result(self):
+        """The exact drift class this function exists to prevent
+        (MINECRAFT-362 review, comment 48456, item 1): a release's
+        target_commitish names whatever the target branch's HEAD was AT
+        RELEASE-CREATION TIME, which can keep moving -- this function
+        never consults target_commitish or any branch HEAD at all, only
+        the tag's own ref, so a branch advancing afterward changes
+        nothing about the result."""
+        with mock.patch.object(m, "_api_get", return_value=_ref("e" * 40)) as mocked:
+            result = m.resolve_tag_source_sha(SLUG, "v0.2.1")
+        self.assertEqual(result, "e" * 40)
+        for (path,), _kwargs in mocked.call_args_list:
+            self.assertNotIn("/commits/", path)
+
+    def test_refs_lookup_failure_fails_closed(self):
+        import urllib.error
+        with mock.patch.object(m, "_api_get", side_effect=urllib.error.URLError("boom")):
+            with self.assertRaises(m.GithubIdentityError):
+                m.resolve_tag_source_sha(SLUG, "v0.2.1")
+
+    def test_peeled_annotated_tag_pointing_at_a_non_commit_fails_closed(self):
+        tag_obj_sha = "f" * 40
+
+        def fake_api_get(path, **kwargs):
+            if "/git/refs/tags/" in path:
+                return _ref(tag_obj_sha, obj_type="tag")
+            return {"object": {"sha": "d" * 40, "type": "tree"}}
+
+        with mock.patch.object(m, "_api_get", side_effect=fake_api_get):
             with self.assertRaises(m.GithubIdentityError) as ctx:
-                m.resolve_source_sha(SLUG, "some-branch")
+                m.resolve_tag_source_sha(SLUG, "v0.1.3")
+        self.assertEqual(ctx.exception.outcome, "integrity_failure")
+
+    def test_unrecognised_object_type_fails_closed(self):
+        with mock.patch.object(m, "_api_get", return_value=_ref("e" * 40, obj_type="blob")):
+            with self.assertRaises(m.GithubIdentityError) as ctx:
+                m.resolve_tag_source_sha(SLUG, "v0.2.1")
         self.assertEqual(ctx.exception.outcome, "integrity_failure")
 
 

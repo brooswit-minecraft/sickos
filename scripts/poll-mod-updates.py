@@ -521,8 +521,29 @@ def poll_and_bump(repo_root, *, token=None, fetcher=None, run_command=subprocess
                 continue
 
             outcome = {"mod_name": pin.name, "mod_id": None, "pin_path": pin.pin_path}
+            # Preserve this pin's own accepted release channel (MINECRAFT-362
+            # review, comment 48456, item 4): determined fresh, per pin, from
+            # whatever the CURRENTLY-pinned tag's own `prerelease` flag
+            # actually is -- never a global default, so a stable-channel mod
+            # is never silently opted into prereleases and an accepted-
+            # prerelease mod (this pack's real dynamic-atmosphere and
+            # dynamic-population pins) is never silently dropped out of its
+            # own channel.
             try:
-                candidate = github_release_identity.resolve_latest_matching_release(pin.slug, pin.regex)
+                include_prerelease = bool(
+                    pin.pinned_tag
+                    and github_release_identity.fetch_release_by_tag_json(
+                        pin.slug, pin.pinned_tag,
+                    ).get("prerelease")
+                )
+            except github_release_identity.GithubIdentityError as error:
+                outcome.update(outcome=error.outcome, changed=False, error=error.message)
+                outcomes.append(outcome)
+                continue
+            try:
+                candidate = github_release_identity.resolve_latest_matching_release(
+                    pin.slug, pin.regex, include_prerelease=include_prerelease,
+                )
             except github_release_identity.GithubIdentityError as error:
                 outcome.update(outcome=error.outcome, changed=False, error=error.message)
                 outcomes.append(outcome)

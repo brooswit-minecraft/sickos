@@ -257,13 +257,17 @@ def build_commit_message(*, mapping_rule: str, new_pack_version: str, da_version
         f"- Modrinth version id: {modrinth_version_id}",
         f"- Mapping rule: {mapping_rule}",
     ]
-    # Release-Only: true keeps server_update_policy.should_deploy() from
-    # treating this pack publication as a deploy/restart trigger -- the
-    # review for MINECRAFT-362 requires automatic pack commits to never
-    # deploy or restart the server. Both trailers sit together, alone in
-    # the final paragraph, so git's trailer parser (has_da_auto_bump_trailer
-    # and trailer_value) recognises both.
-    trailer = f"Release-Only: true\nDA-Auto-Bump: {da_version} {modrinth_version_id}"
+    # No Release-Only trailer: this ships the normal rollout contract
+    # (MINECRAFT-362 review, comment 48456, item 5 -- per the resumed
+    # user directive in comment 48363, "make sure the server is updated
+    # (should be auto)") -- server_update_policy.should_deploy() already
+    # defaults to True when no Release-Only trailer is present at all, so
+    # an ordinary automated bump now deploys/restarts normally, the same
+    # as a human-authored release. An explicitly HELD release (a genuine
+    # publication-only case, decided elsewhere, not by this builder)
+    # still sets Release-Only: true itself; this builder just no longer
+    # adds it unconditionally to every automated bump.
+    trailer = f"DA-Auto-Bump: {da_version} {modrinth_version_id}"
     return subject + "\n\n" + "\n".join(body) + "\n\n" + trailer + "\n"
 
 
@@ -298,9 +302,9 @@ def build_generic_commit_message(*, mapping_rule: str, new_pack_version: str, mo
         f"- Modrinth version id: {modrinth_version_id}",
         f"- Mapping rule: {mapping_rule}",
     ]
-    # Same Release-Only reasoning as build_commit_message above: an
-    # automatic pack commit must never deploy/restart the server.
-    trailer = f"Release-Only: true\nMod-Auto-Bump: {mod_id} {modrinth_version_id}"
+    # Same normal-rollout reasoning as build_commit_message above (no
+    # Release-Only trailer).
+    trailer = f"Mod-Auto-Bump: {mod_id} {modrinth_version_id}"
     return subject + "\n\n" + "\n".join(body) + "\n\n" + trailer + "\n"
 
 

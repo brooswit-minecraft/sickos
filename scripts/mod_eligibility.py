@@ -98,6 +98,14 @@ class GithubPin:
     # reproduce packwiz's own freeze bug) -- only written back by the bump engine as
     # a record of which source commit the CURRENTLY pinned jar was built from.
     regex: str  # [update.github].regex verbatim -- the asset-name filter
+    pinned_url: str  # [download].url verbatim -- the on-disk artifact identity
+    pinned_hash: str  # [download].hash verbatim
+    pinned_hash_format: str  # [download].hash-format verbatim -- "sha256" on every
+    # real pin this engine has ever written, but an older/human-authored pin may
+    # still carry a different format (e.g. this pack's own dynamic-despawn pin was
+    # "sha512" before this engine ever touched it) -- scripts/bump_mod_github.py's
+    # own identity-conflict check only compares the hash when this is "sha256",
+    # the one format GitHub's own asset digest can be compared against directly.
 
 
 def discover_eligible_pins(repo_root: Path) -> tuple[list[EligiblePin], list[UntrackedPin]]:
@@ -181,6 +189,7 @@ def discover_github_pins(repo_root: Path) -> list[GithubPin]:
         github = update.get("github")
         if not isinstance(github, dict) or not github.get("slug"):
             continue
+        download = data.get("download", {}) if isinstance(data.get("download"), dict) else {}
         github_pins.append(
             GithubPin(
                 pin_path=relative,
@@ -190,6 +199,9 @@ def discover_github_pins(repo_root: Path) -> list[GithubPin]:
                 pinned_tag=github.get("tag", ""),
                 pinned_source=github.get("branch", ""),
                 regex=github.get("regex", ""),
+                pinned_url=download.get("url", ""),
+                pinned_hash=download.get("hash", ""),
+                pinned_hash_format=download.get("hash-format", ""),
             )
         )
     return github_pins

@@ -89,10 +89,10 @@ def render_github_pin(name, filename, side, download_url, sha256, slug, tag, sou
     """Native packwiz [update.github] shape (slug/tag/branch/regex -- see
     scripts/mod_eligibility.py's own docstring), NOT the owner/repo pair
     an earlier round of this ticket invented. `source_sha` is written to
-    `branch` as the new release's own resolved, immutable commit (see
-    github_release_identity.resolve_source_sha) -- a record of
-    provenance, never read back for discovery (MINECRAFT-362 review,
-    comment 48415)."""
+    `branch` as the new release's own TAG resolved to its immutable
+    commit (see github_release_identity.resolve_tag_source_sha) -- a
+    record of provenance, never read back for discovery (MINECRAFT-362
+    review, comments 48415/48456)."""
     return (
         f'name = "{toml_escape(name)}"\n'
         f'filename = "{toml_escape(filename)}"\n'
@@ -175,6 +175,33 @@ def _no_candidate_summary(pin):
     }
 
 
+def _verify_identity_matches_pin(pin, resolved_candidate):
+    """Compare a freshly GitHub-resolved candidate's own artifact
+    identity (download_url, and sha256 when the pin's own on-disk hash
+    is in that format) against what this pin ACTUALLY has on disk.
+    Raises EngineError(EXIT_INTEGRITY_FAILURE, "integrity_conflict", ...)
+    on any mismatch -- MINECRAFT-362 review, comment 48456, item 2:
+    "already_pinned"/"no change" must never be returned on tag or
+    version equality alone; a replaced asset or moved tag under an
+    unchanged tag/version string is a conflict, not a harmless replay."""
+    if pin.pinned_url and resolved_candidate.download_url != pin.pinned_url:
+        raise EngineError(
+            EXIT_INTEGRITY_FAILURE, "integrity_conflict",
+            f"{pin.name}'s currently-pinned tag {pin.pinned_tag!r} now resolves to a different "
+            f"download URL ({resolved_candidate.download_url!r}) than this pin's own on-disk "
+            f"record ({pin.pinned_url!r}) -- the tag was moved or the asset was replaced; "
+            "refusing to treat this as a harmless replay",
+        )
+    if pin.pinned_hash_format == "sha256" and pin.pinned_hash and resolved_candidate.sha256 != pin.pinned_hash:
+        raise EngineError(
+            EXIT_INTEGRITY_FAILURE, "integrity_conflict",
+            f"{pin.name}'s currently-pinned tag {pin.pinned_tag!r} now resolves to a different "
+            f"sha256 ({resolved_candidate.sha256}) than this pin's own on-disk hash "
+            f"({pin.pinned_hash}) -- the asset bytes were replaced since this pin was written; "
+            "refusing to treat this as a harmless replay",
+        )
+
+
 def run_engine(repo_root, pin, candidate, *, downloader=default_downloader, run_command=subprocess.run,
                 gate_commands=None):
     """Bump `pin` (scripts/mod_eligibility.GithubPin) to `candidate`
@@ -186,6 +213,39 @@ def run_engine(repo_root, pin, candidate, *, downloader=default_downloader, run_
     repo_root = Path(repo_root)
 
     assert_restore_targets_clean(repo_root, pin.pin_path, run_command=run_command)
+
+    if not pin.pinned_tag:
+        return (
+            _no_candidate_summary(pin),
+            EXIT_OK,
+            f"{pin.name} has no currently-pinned tag to compare against. No changes made.",
+        )
+
+    # Re-verify the CURRENTLY-pinned tag's own metadata against GitHub
+    # fresh, right now -- never trust the on-disk pin's tag string alone
+    # for the no-downgrade comparison below, same "never trust a prior
+    # lookup this call did not itself verify" principle scripts/
+    # bump_mod.py's own run_engine applies to Modrinth's previously-
+    # pinned version metadata. ALSO used (MINECRAFT-362 review, comment
+    # 48456, item 2) to verify this pin's own on-disk artifact identity
+    # still matches what the tag currently serves, BEFORE either
+    # "already_pinned" fast path below is allowed to return a bare
+    # tag/version-string match as if it were a verified no-op.
+    try:
+        previous_release = github_release_identity.fetch_release_by_tag_json(
+            pin.slug, pin.pinned_tag,
+        )
+        previous_candidate = github_release_identity.candidate_from_release_json(
+            pin.slug, previous_release, pin.regex,
+        )
+    except github_release_identity.GithubIdentityError as error:
+        raise EngineError(
+            EXIT_INTEGRITY_FAILURE, "integrity_failure",
+            f"could not verify {pin.name} is not a downgrade: looking up the currently-pinned "
+            f"tag {pin.pinned_tag!r} failed: {error.message}",
+        ) from error
+    _verify_identity_matches_pin(pin, previous_candidate)
+    previous_version_number = previous_candidate.version_number
 
     if candidate.tag == pin.pinned_tag:
         return (
@@ -207,33 +267,6 @@ def run_engine(repo_root, pin, candidate, *, downloader=default_downloader, run_
             f"Already pinned: {pin.name} is already at {pin.pinned_tag}. No changes made.",
         )
 
-    if not pin.pinned_tag:
-        return (
-            _no_candidate_summary(pin),
-            EXIT_OK,
-            f"{pin.name} has no currently-pinned tag to compare against. No changes made.",
-        )
-
-    # Re-verify the CURRENTLY-pinned tag's own metadata against GitHub
-    # fresh, right now -- never trust the on-disk pin's tag string alone
-    # for the no-downgrade comparison below, same "never trust a prior
-    # lookup this call did not itself verify" principle scripts/
-    # bump_mod.py's own run_engine applies to Modrinth's previously-
-    # pinned version metadata.
-    try:
-        previous_release = github_release_identity.fetch_release_by_tag_json(
-            pin.slug, pin.pinned_tag,
-        )
-    except github_release_identity.GithubIdentityError as error:
-        raise EngineError(
-            EXIT_INTEGRITY_FAILURE, "integrity_failure",
-            f"could not verify {pin.name} is not a downgrade: looking up the currently-pinned "
-            f"tag {pin.pinned_tag!r} failed: {error.message}",
-        ) from error
-    previous_version_number = github_release_identity._tag_to_version_number(
-        previous_release.get("tag_name", pin.pinned_tag),
-    )
-
     try:
         comparison = semver_compare.compare_semver(previous_version_number, candidate.version_number)
     except ValueError:
@@ -250,7 +283,23 @@ def run_engine(repo_root, pin, candidate, *, downloader=default_downloader, run_
         )
     if comparison == 0:
         # Same version number under a different tag spelling (e.g. a
-        # re-tag) -- nothing to do, not an error.
+        # re-tag). A harmless replay ONLY if the asset BYTES are
+        # actually identical -- verified against the just-fetched
+        # candidate for the NEW tag, not assumed from the version string
+        # alone (MINECRAFT-362 review, comment 48456, item 2). Compares
+        # sha256 only, not download_url: the URL legitimately differs by
+        # tag-name alone even for a genuinely identical re-tag (the tag
+        # is part of GitHub's download path), so url equality is not a
+        # meaningful signal here the way it is in _verify_identity_
+        # matches_pin's same-tag check above.
+        if candidate.sha256 != previous_candidate.sha256:
+            raise EngineError(
+                EXIT_INTEGRITY_FAILURE, "integrity_conflict",
+                f"{pin.name} candidate tag {candidate.tag!r} has the same version number "
+                f"({candidate.version_number}) as the currently-pinned {pin.pinned_tag!r}, but a "
+                "different sha256 -- refusing to treat an equal-version retag with different "
+                "bytes as a harmless replay",
+            )
         return (
             {
                 **_no_candidate_summary(pin),
@@ -318,13 +367,14 @@ def run_engine(repo_root, pin, candidate, *, downloader=default_downloader, run_
         jar_bytes, bump_mod.dependency_closure_check.pack_versions(repo_root / "pack.toml"),
     )
 
-    # Resolve the NEW release's own target_commitish to an immutable
-    # commit SHA before writing anything (MINECRAFT-362 review, comment
-    # 48415) -- a failure here fails closed exactly like the identity/
-    # hash checks above, before any file is touched.
+    # Resolve the NEW release's own TAG (never target_commitish -- see
+    # github_release_identity.resolve_tag_source_sha's own docstring,
+    # MINECRAFT-362 review comment 48456 item 1) to an immutable commit
+    # SHA before writing anything -- a failure here fails closed exactly
+    # like the identity/hash checks above, before any file is touched.
     try:
-        source_sha = github_release_identity.resolve_source_sha(
-            pin.slug, candidate.source_commitish,
+        source_sha = github_release_identity.resolve_tag_source_sha(
+            pin.slug, candidate.tag,
         )
     except github_release_identity.GithubIdentityError as error:
         raise EngineError(EXIT_INTEGRITY_FAILURE, error.outcome, error.message) from error
@@ -385,10 +435,11 @@ def run_engine(repo_root, pin, candidate, *, downloader=default_downloader, run_
 # build_generic_commit_message shape, keyed by slug/tag identity instead
 # of a Modrinth mod_id/version_id -- these mods have no Modrinth project
 # at all (see this module's own docstring), so there is nothing to put
-# in a "Modrinth mod id"/"Modrinth version id" line. Same Release-Only/
-# Mod-Auto-Bump trailer shape; server_update_policy.should_deploy only
-# ever reads Release-Only, so a GitHub-sourced bump's commit is read the
-# exact same way a Modrinth-sourced one's is.
+# in a "Modrinth mod id"/"Modrinth version id" line. No Release-Only
+# trailer, same normal-rollout contract build_generic_commit_message now
+# uses (MINECRAFT-362 review, comment 48456, item 5) -- a GitHub-sourced
+# bump's commit deploys/restarts the server the same way a Modrinth-
+# sourced one's now does.
 # --------------------------------------------------------------------------
 
 def _load_da_dispatch_module():
@@ -420,7 +471,7 @@ def build_github_commit_message(*, mapping_rule, new_pack_version, mod_name, slu
         f"- GitHub release: https://github.com/{slug}/releases/tag/{tag}",
         f"- Mapping rule: {mapping_rule}",
     ]
-    # Same Release-Only reasoning as build_generic_commit_message: an
-    # automatic pack commit must never deploy/restart the server.
-    trailer = f"Release-Only: true\nMod-Auto-Bump: github:{slug} {tag}"
+    # Same normal-rollout reasoning as build_generic_commit_message above
+    # (no Release-Only trailer).
+    trailer = f"Mod-Auto-Bump: github:{slug} {tag}"
     return subject + "\n\n" + "\n".join(body) + "\n\n" + trailer + "\n"

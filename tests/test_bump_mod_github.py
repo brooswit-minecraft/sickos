@@ -141,30 +141,49 @@ def make_downloader(content):
     return downloader
 
 
+OLD_URL = f"https://github.com/{SLUG}/releases/download/{OLD_TAG}/dynamicdespawn-0.3.3.jar"
+
+
 def make_pin(**overrides):
     defaults = dict(
         pin_path="mods/dynamic-despawn.pw.toml", name="Dynamic Despawn", side="both",
         slug=SLUG, pinned_tag=OLD_TAG, pinned_source=OLD_SOURCE_SHA, regex=REGEX,
+        pinned_url=OLD_URL, pinned_hash=OLD_SHA256, pinned_hash_format="sha256",
     )
     defaults.update(overrides)
     return GithubPin(**defaults)
 
 
 def make_candidate(*, tag="v0.3.4", version_number="0.3.4", content=b"new despawn jar",
-                    source_commitish="b" * 40, **overrides):
+                    prerelease=False, **overrides):
     defaults = dict(
         slug=SLUG, tag=tag, version_number=version_number,
         asset_name=f"dynamicdespawn-{version_number}.jar",
         download_url=f"https://github.com/{SLUG}/releases/download/{tag}/dynamicdespawn-{version_number}.jar",
         sha256=hashlib.sha256(content).hexdigest(), size=len(content), body="",
-        source_commitish=source_commitish,
+        prerelease=prerelease,
     )
     defaults.update(overrides)
     return GithubReleaseCandidate(**defaults)
 
 
-def release_json_for(tag, version_number):
-    return {"tag_name": tag, "name": f"dynamic-despawn {version_number}"}
+def release_json_for(tag, version_number, *, sha256=OLD_SHA256, filename=None, prerelease=False):
+    """A release-by-tag JSON response that `candidate_from_release_json`
+    can actually parse (an asset matching REGEX, with a usable sha256
+    digest) -- MINECRAFT-362 review, comment 48456, item 2: run_engine
+    now builds a real candidate for the currently-pinned tag too (to
+    verify identity before any already_pinned/no-op return), not just
+    read `tag_name` off a bare dict."""
+    filename = filename or f"dynamicdespawn-{version_number}.jar"
+    return {
+        "tag_name": tag,
+        "assets": [{
+            "name": filename, "digest": f"sha256:{sha256}",
+            "browser_download_url": f"https://github.com/{SLUG}/releases/download/{tag}/{filename}",
+            "size": 1,
+        }],
+        "prerelease": prerelease,
+    }
 
 
 def _build_neoforge_jar(mod_id, version, requires=()):
@@ -204,7 +223,7 @@ class EngineTestCase(unittest.TestCase):
         with mock.patch.object(
             github_release_identity, "fetch_release_by_tag_json", return_value=previous_release_json,
         ), mock.patch.object(
-            github_release_identity, "resolve_source_sha", return_value=source_sha,
+            github_release_identity, "resolve_tag_source_sha", return_value=source_sha,
         ):
             return bump.run_engine(
                 self.repo, pin, candidate,
@@ -241,17 +260,72 @@ class TestDowngradeRefused(EngineTestCase):
         self.assertEqual(self.porcelain(), "")
 
     def test_same_version_different_tag_spelling_is_a_clean_noop(self):
-        pin = make_pin()
-        candidate = make_candidate(tag="0.3.3", version_number="0.3.3")
+        # Identical bytes under a re-tag -- a genuine harmless replay,
+        # verified (not assumed) by sha256 (MINECRAFT-362 review, comment
+        # 48456, item 2). The pin's own on-disk hash must match too, or
+        # _verify_identity_matches_pin's same-tag check fails first.
+        identical_sha256 = hashlib.sha256(b"identical bytes").hexdigest()
+        pin = make_pin(pinned_hash=identical_sha256)
+        candidate = make_candidate(
+            tag="0.3.3", version_number="0.3.3", content=b"identical bytes", sha256=identical_sha256,
+        )
         summary, exit_code, _ = self.run_engine(
-            pin, candidate, previous_release_json=release_json_for(OLD_TAG, "0.3.3"),
+            pin, candidate,
+            previous_release_json=release_json_for(OLD_TAG, "0.3.3", sha256=identical_sha256),
         )
         self.assertEqual(exit_code, bump.EXIT_OK)
         self.assertFalse(summary["changed"])
         self.assertEqual(self.porcelain(), "")
 
+    def test_same_version_different_tag_different_bytes_is_rejected(self):
+        """MINECRAFT-362 review, comment 48456, item 2: an equal-version
+        retag with DIFFERENT bytes is a conflict, not a harmless
+        replay -- must not be silently accepted as a no-op."""
+        pin = make_pin()
+        candidate = make_candidate(
+            tag="0.3.3", version_number="0.3.3", content=b"different bytes",
+        )
+        with self.assertRaises(bump.EngineError) as ctx:
+            self.run_engine(
+                pin, candidate, content=b"different bytes",
+                previous_release_json=release_json_for(OLD_TAG, "0.3.3"),  # still OLD_SHA256
+            )
+        self.assertEqual(ctx.exception.exit_code, bump.EXIT_INTEGRITY_FAILURE)
+        self.assertEqual(ctx.exception.outcome, "integrity_conflict")
+        self.assertEqual(self.porcelain(), "")
+
 
 class TestIntegrityFailures(EngineTestCase):
+    def test_already_pinned_with_changed_digest_is_rejected_not_a_replay(self):
+        """MINECRAFT-362 review, comment 48456, item 2: candidate.tag ==
+        pin.pinned_tag used to return a bare, unverified 'already_pinned'
+        -- a replaced asset under an unchanged tag must now be rejected,
+        not silently accepted as a harmless no-op."""
+        pin = make_pin()
+        candidate = make_candidate(tag=OLD_TAG, version_number="0.3.3")
+        with self.assertRaises(bump.EngineError) as ctx:
+            self.run_engine(
+                pin, candidate,
+                previous_release_json=release_json_for(OLD_TAG, "0.3.3", sha256="f" * 64),
+            )
+        self.assertEqual(ctx.exception.exit_code, bump.EXIT_INTEGRITY_FAILURE)
+        self.assertEqual(ctx.exception.outcome, "integrity_conflict")
+        self.assertEqual(self.porcelain(), "")
+
+    def test_already_pinned_with_changed_download_url_is_rejected(self):
+        pin = make_pin()
+        candidate = make_candidate(tag=OLD_TAG, version_number="0.3.3")
+        with self.assertRaises(bump.EngineError) as ctx:
+            self.run_engine(
+                pin, candidate,
+                previous_release_json=release_json_for(
+                    OLD_TAG, "0.3.3", filename="dynamicdespawn-moved.jar",
+                ),
+            )
+        self.assertEqual(ctx.exception.exit_code, bump.EXIT_INTEGRITY_FAILURE)
+        self.assertEqual(ctx.exception.outcome, "integrity_conflict")
+        self.assertEqual(self.porcelain(), "")
+
     def test_sha256_mismatch_fails_closed(self):
         content = b"real bytes"
         wrong_sha256 = hashlib.sha256(b"different bytes").hexdigest()
@@ -278,18 +352,18 @@ class TestIntegrityFailures(EngineTestCase):
         self.assertEqual(ctx.exception.exit_code, bump.EXIT_INTEGRITY_FAILURE)
         self.assertEqual(self.porcelain(), "")
 
-    def test_resolve_source_sha_failure_fails_closed_before_any_write(self):
-        """MINECRAFT-362 review, comment 48415: resolving the new
-        release's target_commitish to an immutable commit must happen
-        BEFORE anything is written -- a failure here is exactly as fatal
-        as a hash mismatch, not a best-effort annotation."""
+    def test_resolve_tag_source_sha_failure_fails_closed_before_any_write(self):
+        """MINECRAFT-362 review, comments 48415/48456: resolving the new
+        release's TAG to an immutable commit must happen BEFORE anything
+        is written -- a failure here is exactly as fatal as a hash
+        mismatch, not a best-effort annotation."""
         pin = make_pin()
         candidate = make_candidate()
         with mock.patch.object(
             github_release_identity, "fetch_release_by_tag_json",
             return_value=release_json_for(OLD_TAG, "0.3.3"),
         ), mock.patch.object(
-            github_release_identity, "resolve_source_sha",
+            github_release_identity, "resolve_tag_source_sha",
             side_effect=github_release_identity.GithubIdentityError("integrity_failure", "could not resolve"),
         ):
             with self.assertRaises(bump.EngineError) as ctx:

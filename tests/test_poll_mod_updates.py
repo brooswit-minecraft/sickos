@@ -221,7 +221,10 @@ class TestPollAndBump(unittest.TestCase):
 
         log = _git(self.repo, "log", "-1", "--format=%B").stdout
         self.assertIn("Mod-Auto-Bump: ALPHA1 ALPHANEW", log)
-        self.assertIn("Release-Only: true", log)
+        # Normal rollout is the current contract (MINECRAFT-362 review,
+        # comment 48456, item 5): no Release-Only trailer, so this
+        # commit deploys/restarts the server the usual way once released.
+        self.assertNotIn("Release-Only", log)
 
     def test_two_mods_pending_only_the_first_bumps_this_run(self):
         # At most one bump commit per run (MINECRAFT-362 review, second
@@ -521,8 +524,9 @@ class TestPollAndBumpGithubPins(unittest.TestCase):
         import shutil
         shutil.rmtree(self.repo, ignore_errors=True)
 
-    def run_poll(self, *, release=None):
-        release = release or self._release(tag="v0.3.3")
+    def run_poll(self, *, release=None, previous_release=None):
+        release = release or self._release(tag="v0.3.3", digest_hex="a" * 64)
+        previous_release = previous_release or self._release(tag="v0.3.3", digest_hex="a" * 64)
         original_run_engine = poll_mod_updates.bump_mod.run_engine
 
         def patched_run_engine(repo_root, pin, candidate, **kwargs):
@@ -545,25 +549,27 @@ class TestPollAndBumpGithubPins(unittest.TestCase):
             poll_mod_updates.github_release_identity, "fetch_releases_json", return_value=[release],
         ), mock.patch.object(
             poll_mod_updates.github_release_identity, "fetch_release_by_tag_json",
-            return_value={"tag_name": "v0.3.3"},
+            return_value=previous_release,
         ), mock.patch.object(
-            poll_mod_updates.github_release_identity, "resolve_source_sha", return_value="b" * 40,
+            poll_mod_updates.github_release_identity, "resolve_tag_source_sha", return_value="b" * 40,
         ), mock.patch.object(
             poll_mod_updates.github_release_identity, "download_and_verify_sha256",
             return_value=b"new despawn jar",
         ):
             return poll_mod_updates.poll_and_bump(self.repo, fetcher=self.modrinth.list_fetcher)
 
-    def _release(self, *, tag="v0.3.4", content=b"new despawn jar"):
+    def _release(self, *, tag="v0.3.4", content=b"new despawn jar", digest_hex=None, prerelease=False):
+        digest_hex = digest_hex or hashlib.sha256(content).hexdigest()
+        filename = f"dynamicdespawn-{tag.lstrip('v')}.jar"
         return {
             "tag_name": tag,
             "assets": [{
-                "name": f"dynamicdespawn-{tag.lstrip('v')}.jar",
-                "digest": "sha256:" + hashlib.sha256(content).hexdigest(),
-                "browser_download_url": "https://example.invalid/asset.jar",
+                "name": filename,
+                "digest": "sha256:" + digest_hex,
+                "browser_download_url": f"https://github.com/{GITHUB_PIN_SLUG}/releases/download/{tag}/{filename}",
                 "size": len(content),
             }],
-            "created_at": "2026-02-01T00:00:00Z", "draft": False, "prerelease": False,
+            "created_at": "2026-02-01T00:00:00Z", "draft": False, "prerelease": prerelease,
             "target_commitish": "b" * 40, "body": "",
         }
 
@@ -590,6 +596,19 @@ class TestPollAndBumpGithubPins(unittest.TestCase):
         by_path = {o["pin_path"]: o for o in outcomes}
         self.assertEqual(by_path["mods/alpha-mod.pw.toml"]["outcome"], "bumped")
         self.assertNotIn("mods/dynamic-despawn.pw.toml", by_path)
+
+    def test_accepted_prerelease_channel_is_preserved(self):
+        """MINECRAFT-362 review, comment 48456, item 4: a pin whose
+        CURRENTLY-pinned release is itself a prerelease (this pack's
+        real dynamic-atmosphere/dynamic-population pins) must still
+        discover a newer prerelease -- include_prerelease is derived
+        from the currently-pinned release's own flag, not a global
+        default."""
+        previous = self._release(tag="v0.3.3", digest_hex="a" * 64, prerelease=True)
+        newer_prerelease = self._release(tag="v0.4.0-alpha.1", prerelease=True)
+        outcomes = self.run_poll(release=newer_prerelease, previous_release=previous)
+        by_path = {o["pin_path"]: o for o in outcomes}
+        self.assertEqual(by_path["mods/dynamic-despawn.pw.toml"]["outcome"], "bumped")
 
 
 class TestMainExitCode(unittest.TestCase):

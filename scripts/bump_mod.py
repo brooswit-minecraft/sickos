@@ -990,38 +990,41 @@ def cli_main(argv=None):
             version_number=summary["candidate_version_number"],
             source_text="a human-run CLI (scripts/bump_mod.py)",
         )
-        # Defense in depth, not the only thing standing between this and
-        # a live deploy: build_generic_commit_message already always
-        # attaches Release-Only: true, but check it holds for the exact
-        # message about to be committed anyway (MINECRAFT-362 review,
-        # fourth round -- a CLI-authored commit with no Release-Only
-        # trailer reads as permission to deploy/restart the live server).
-        # A plain `if`, not `assert`: an assert vanishes entirely under
-        # `python3 -O`, silently dropping this exact guard (fifth round).
-        if server_update_policy.should_deploy(commit_message):
+        # Normal rollout is the current contract (MINECRAFT-362 review,
+        # comment 48456, item 5): build_generic_commit_message no longer
+        # attaches Release-Only: true, so server_update_policy.
+        # should_deploy(commit_message) is expected to be True here --
+        # confirm that rather than asserting the opposite, so a future
+        # regression that silently reintroduces Release-Only on this path
+        # is caught (MINECRAFT-362 review, fourth round's original
+        # guard, inverted for the new contract). A plain `if`, not
+        # `assert`: an assert vanishes entirely under `python3 -O`,
+        # silently dropping this exact guard (fifth round).
+        if not server_update_policy.should_deploy(commit_message):
             raise SystemExit(
-                "refusing to commit: the generated commit message would not be read as "
-                "Release-Only by server_update_policy.should_deploy -- this should not be "
-                "possible; please report it rather than committing by hand."
+                "refusing to commit: the generated commit message would be read as "
+                "Release-Only by server_update_policy.should_deploy, which is no longer this "
+                "CLI's contract -- this should not be possible; please report it rather than "
+                "committing by hand."
             )
         commit_paths = ("pack.toml", "index.toml", pin.pin_path, summary["notes_path"])
         commit_sha = cli_commit_bump(args.repo_root, commit_message, commit_paths)
         summary["commit_sha"] = commit_sha
         print(
-            f"Committed {commit_sha} (Release-Only; will not trigger a server deploy/restart). "
-            "This commit is LOCAL ONLY -- push it to main yourself (e.g. `git push origin "
-            "main`) for release.yml to fire; nothing here pushes on your behalf."
+            f"Committed {commit_sha} (normal rollout; will trigger the usual release.yml -> "
+            "server-update.yml deploy/restart once pushed and released). This commit is LOCAL "
+            "ONLY -- push it to main yourself (e.g. `git push origin main`) for release.yml to "
+            "fire; nothing here pushes on your behalf."
         )
     elif summary["changed"]:
         print(
             "--no-commit: bump staged but not committed. Do NOT run a bare `git commit`, and do "
             "NOT pass `$(git diff --cached --name-only)` as the pathspec either -- that "
             "substitutes every staged path, including anything else you already had staged, "
-            "defeating the point of a pathspec; and a commit with no Release-Only trailer is "
-            "read as permission to deploy/restart the live server. Commit exactly these four "
+            "defeating the point of a pathspec. Commit exactly these four "
             "paths: `git commit -F <message-file> -- pack.toml index.toml "
             f"{pin.pin_path} {summary['notes_path']}`, where <message-file> holds a message "
-            "carrying `Release-Only: true` and "
+            "carrying "
             f"`Mod-Auto-Bump: {pin.mod_id} {candidate.version_id}` alone in its final paragraph "
             "(see scripts/da-auto-bump-dispatch.py's build_generic_commit_message for the exact "
             "shape git's trailer parser requires)."

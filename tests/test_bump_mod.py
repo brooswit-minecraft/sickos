@@ -1272,9 +1272,11 @@ class TestCliMain(unittest.TestCase):
 
         mock_commit.assert_called_once()
         committed_message = mock_commit.call_args[0][1]
-        self.assertIn("Release-Only: true", committed_message)
+        # Normal rollout is the current contract (MINECRAFT-362 review,
+        # comment 48456, item 5): no Release-Only trailer.
+        self.assertNotIn("Release-Only", committed_message)
         self.assertIn("Mod-Auto-Bump:", committed_message)
-        self.assertFalse(bump_mod.server_update_policy.should_deploy(committed_message))
+        self.assertTrue(bump_mod.server_update_policy.should_deploy(committed_message))
 
     def test_no_commit_guidance_names_literal_paths_not_an_unsafe_substitution(self):
         # MINECRAFT-362 review, seventh round: a prior round's --no-commit

@@ -40,10 +40,12 @@ it), completely independent of `branch`.
 
 `branch` is still meaningful on the WRITE side: after a bump, the new
 pin's `branch` is written as the resolved, *immutable* commit the new
-release's own `target_commitish` names -- resolved via the commits API
-when target_commitish is a mutable ref (a branch name) rather than
-already a bare 40-hex SHA, so this never freezes a pin to a ref that can
-move out from under it after the fact (see resolve_source_sha).
+release's own TAG points at -- resolved via `refs/tags/{tag}`, peeling
+one more hop for an ANNOTATED tag (see resolve_tag_source_sha), never
+via the release's `target_commitish` (MINECRAFT-362 review, comment
+48456, item 1): `target_commitish` only names the branch/commit a
+release was CREATED against, which can itself move after the fact, and
+is not proof of what the tag itself currently points at.
 
 Deliberately narrower than modrinth_compat.py's VersionCandidate:
 - No structured dependency data (GitHub releases carry no equivalent of
@@ -130,9 +132,7 @@ class GithubReleaseCandidate:
     sha256: str
     size: int
     body: str  # release notes text, GitHub's rough analogue of a Modrinth changelog
-    source_commitish: str  # the release's OWN target_commitish, unresolved -- may be
-    # a branch name or a SHA; see resolve_source_sha for turning this into the
-    # immutable value actually written to the pin's `branch` field
+    prerelease: bool  # the release's own `prerelease` flag, as GitHub reports it
 
 
 def _tag_to_version_number(tag):
@@ -207,42 +207,84 @@ def fetch_release_by_tag_json(slug, tag, *, token=None):
         ) from error
 
 
-def resolve_source_sha(slug, commitish, *, token=None):
-    """Turn a release's own `target_commitish` into the exact, immutable
-    commit SHA this module writes to a pin's `branch` field. Already a
-    bare 40-hex SHA -> returned as-is, no extra call (every real pin
-    resolved this way today happens to be this case, but a mod author is
-    free to tag a release against a named branch instead, as
-    magicavoxel-loader's real `MINECRAFT-284` target_commitish does --
-    confirmed live, read anonymously). Otherwise resolved via GET
-    /repos/{slug}/commits/{commitish}, the same anonymous, read-only
-    call class used everywhere else in this module -- never trust a
-    mutable ref as a frozen identity (MINECRAFT-362 review, comment
-    48415's "resolve tag to immutable source")."""
-    if _SHA_RE.match(commitish or ""):
-        return commitish
+def resolve_tag_source_sha(slug, tag, *, token=None):
+    """Resolve `tag`'s OWN target to the exact, immutable commit SHA this
+    module writes to a pin's `branch` field -- via `refs/tags/{tag}`,
+    peeling an ANNOTATED tag to the commit it points at, never via the
+    release's `target_commitish` (MINECRAFT-362 review, comment 48456,
+    item 1): `target_commitish` only names the branch/commit a release
+    was CREATED against, with no guarantee it still names the tag's own
+    target, or that the string is even a commit at all -- a release
+    targeting a branch acquires THAT BRANCH'S CURRENT HEAD at release-
+    creation time, which can itself move after the fact; the tag itself,
+    not the branch, is the one thing a release's identity is pinned to.
+
+    GET /repos/{slug}/git/refs/tags/{tag} returns `object.sha` with
+    `object.type` either "commit" (a LIGHTWEIGHT tag -- e.g. this pack's
+    real dynamic-battle-axes v0.2.1) or "tag" (an ANNOTATED tag object,
+    which must be peeled one more hop via GET /repos/{slug}/git/tags/
+    {sha} to reach the commit it actually points at -- e.g. this pack's
+    real magicavoxel-loader v0.1.3, confirmed live: its lightweight-
+    looking `target_commitish` of "MINECRAFT-284" happens to resolve to
+    the SAME commit its annotated tag peels to today, which is exactly
+    why this was a latent drift defect rather than an observed
+    corruption -- the two sources can diverge the moment that branch
+    moves, and only one of them is the tag's own immutable target)."""
     owner, repo = _split_slug(slug)
     try:
-        data = _api_get(
-            f"/repos/{urllib.parse.quote(owner)}/{urllib.parse.quote(repo)}/commits/{urllib.parse.quote(commitish)}",
+        ref = _api_get(
+            f"/repos/{urllib.parse.quote(owner)}/{urllib.parse.quote(repo)}/git/refs/tags/{urllib.parse.quote(tag)}",
             token=token,
         )
     except urllib.error.HTTPError as error:
         raise GithubIdentityError(
             "integrity_failure",
-            f"could not resolve {slug}@{commitish!r} to an immutable commit SHA: HTTP {error.code}",
+            f"could not resolve {slug}@{tag!r} to an immutable commit SHA: HTTP {error.code} "
+            "on refs/tags lookup",
         ) from error
     except urllib.error.URLError as error:
         raise GithubIdentityError(
             "integrity_failure",
-            f"could not resolve {slug}@{commitish!r} to an immutable commit SHA: {error.reason}",
+            f"could not resolve {slug}@{tag!r} to an immutable commit SHA: {error.reason} "
+            "on refs/tags lookup",
         ) from error
-    sha = data.get("sha")
-    if not sha or not _SHA_RE.match(sha):
-        raise GithubIdentityError(
-            "integrity_failure", f"GET /repos/{slug}/commits/{commitish} returned no usable commit sha",
-        )
-    return sha
+    obj = ref.get("object") or {}
+    sha, obj_type = obj.get("sha"), obj.get("type")
+    if obj_type == "commit":
+        if not sha or not _SHA_RE.match(sha):
+            raise GithubIdentityError(
+                "integrity_failure", f"refs/tags/{tag} for {slug} named a commit with no usable sha",
+            )
+        return sha
+    if obj_type == "tag":
+        # Annotated tag -- peel one more hop to the commit it points at.
+        try:
+            tag_object = _api_get(
+                f"/repos/{urllib.parse.quote(owner)}/{urllib.parse.quote(repo)}/git/tags/{urllib.parse.quote(sha)}",
+                token=token,
+            )
+        except urllib.error.HTTPError as error:
+            raise GithubIdentityError(
+                "integrity_failure",
+                f"could not peel annotated tag {slug}@{tag!r} to its commit: HTTP {error.code}",
+            ) from error
+        except urllib.error.URLError as error:
+            raise GithubIdentityError(
+                "integrity_failure",
+                f"could not peel annotated tag {slug}@{tag!r} to its commit: {error.reason}",
+            ) from error
+        peeled = tag_object.get("object") or {}
+        peeled_sha, peeled_type = peeled.get("sha"), peeled.get("type")
+        if peeled_type != "commit" or not peeled_sha or not _SHA_RE.match(peeled_sha):
+            raise GithubIdentityError(
+                "integrity_failure",
+                f"annotated tag {slug}@{tag!r} peels to a non-commit object ({peeled_type!r}) -- "
+                "refusing to bind provenance to it",
+            )
+        return peeled_sha
+    raise GithubIdentityError(
+        "integrity_failure", f"refs/tags/{tag} for {slug} named an unrecognised object type {obj_type!r}",
+    )
 
 
 def match_asset(regex, asset_names):
@@ -305,24 +347,39 @@ def candidate_from_release_json(slug, data, regex):
         slug=slug, tag=tag, version_number=_tag_to_version_number(tag),
         asset_name=asset["name"], download_url=download_url,
         sha256=digest.split(":", 1)[1], size=asset.get("size", 0),
-        body=data.get("body") or "", source_commitish=data.get("target_commitish") or "",
+        body=data.get("body") or "", prerelease=bool(data.get("prerelease")),
     )
 
 
-def resolve_latest_matching_release(slug, regex, *, token=None):
-    """List every release for `slug`, keep only non-draft, non-prerelease
-    ones, sort by `created_at` descending (explicitly -- see this
-    module's own docstring on why this does not trust the list
-    endpoint's own ordering), and build a candidate from the newest one.
-    Deliberately does NOT filter by, or otherwise consult, any pin's own
-    `branch`/`pinned_source` value -- that is exactly the discovery
-    mechanism packwiz's own ghUpdater.CheckUpdate uses, and exactly the
-    one a frozen-SHA `branch` value permanently breaks (MINECRAFT-362
-    review, comment 48415)."""
+def resolve_latest_matching_release(slug, regex, *, include_prerelease=False, token=None):
+    """List every release for `slug`, keep only non-draft ones (and,
+    unless `include_prerelease`, non-prerelease too), sort by
+    `created_at` descending (explicitly -- see this module's own
+    docstring on why this does not trust the list endpoint's own
+    ordering), and build a candidate from the newest one. Deliberately
+    does NOT filter by, or otherwise consult, any pin's own `branch`/
+    source value -- that is exactly the discovery mechanism packwiz's
+    own ghUpdater.CheckUpdate uses, and exactly the one a frozen-SHA
+    `branch` value permanently breaks (MINECRAFT-362 review, comment
+    48415).
+
+    `include_prerelease` defaults to False and must be set true
+    EXPLICITLY, per pin, by a caller that has independently confirmed
+    the CURRENTLY-pinned release for that pin is itself a prerelease
+    (MINECRAFT-362 review, comment 48456, item 4) -- this module never
+    infers it from this call alone, so a stable-channel mod is never
+    silently opted into prereleases, and a mod whose accepted channel
+    genuinely IS prerelease (this pack's real dynamic-atmosphere
+    0.36.0-alpha.1 and dynamic-population 0.3.0-alpha.1 pins, confirmed
+    live) is not silently dropped out of discovery either."""
     releases = fetch_releases_json(slug, token=token)
-    candidates = [r for r in releases if not r.get("draft") and not r.get("prerelease")]
+    candidates = [
+        r for r in releases
+        if not r.get("draft") and (include_prerelease or not r.get("prerelease"))
+    ]
     if not candidates:
-        raise GithubIdentityError("no_candidate", f"{slug} has no published, non-draft, non-prerelease release")
+        reason = "non-draft" if include_prerelease else "non-draft, non-prerelease"
+        raise GithubIdentityError("no_candidate", f"{slug} has no published, {reason} release")
     candidates.sort(key=lambda r: r.get("created_at") or "", reverse=True)
     return candidate_from_release_json(slug, candidates[0], regex)
 

@@ -15,7 +15,17 @@ and splits them into:
 - **Eligible**: a pin with an `[update.modrinth]` table (`mod-id` +
   `version`) -- packwiz's own update-tracking fields, reused rather than
   duplicated into a second enrollment file that could drift from the pack.
-  At the time of writing this is 78 of the pack's pins.
+  At the time of writing this is 75 of the pack's pins, including
+  `dynamic-skateboards.pw.toml` -- its `[download].url` happens to point
+  at a `github.com` asset URL, which comment 48456's "reconcile
+  Skateboards' mixed GitHub-download/Modrinth-update identity" flagged
+  for a look. Confirmed NOT a bug: enrollment keys on the `[update.*]`
+  table, never the download host, and Skateboards' only `[update]`
+  table is `[update.modrinth]`, with a real, resolvable `mod-id`/
+  `version` -- Modrinth mirrors some mods' own GitHub-hosted jars
+  rather than rehosting them, which is unrelated to how this pin is
+  tracked. It is `eligible`, not `[update.github]`-tracked, and belongs
+  nowhere near the 10-pin count below.
 - **Untracked**: everything else under `mods/`, for two distinct reasons,
   both reported explicitly rather than silently dropped:
   - `EXCLUDED_MOD_NAMES` (Herobrine API, Baritone): local-only client
@@ -294,12 +304,13 @@ closure → runtime compatibility → refresh/check/build → commit; no
 commit if any step fails) every other write path in this ticket gets:
 
 - Discovery (`resolve_latest_matching_release`) lists ALL of a slug's
-  releases, keeps only non-draft/non-prerelease ones, and picks the
-  newest by `created_at` -- explicitly re-sorted, not trusted to already
-  be ordered that way by the API. It takes no `branch`/`pinned_source`
-  argument at all: it is completely independent of the pin's own frozen
-  `branch` value, which is exactly what avoids packwiz's own freeze bug
-  above.
+  releases, keeps only non-draft ones (and, unless the CALLER passes
+  `include_prerelease=True`, non-prerelease ones too -- see "Preserved
+  release channels" below), and picks the newest by `created_at` --
+  explicitly re-sorted, not trusted to already be ordered that way by
+  the API. It takes no `branch`/`pinned_source` argument at all: it is
+  completely independent of the pin's own frozen `branch` value, which
+  is exactly what avoids packwiz's own freeze bug above.
 - Asset selection (`match_asset`) evaluates the pin's own `regex` against
   the release's asset names, but only understands the one shape every
   real pin in this pack actually uses today -- `^.+(?<!SUF1|SUF2|...)\.jar$`
@@ -313,14 +324,33 @@ commit if any step fails) every other write path in this ticket gets:
   rather than being silently mis-evaluated.
 - Identity (`sha256` from GitHub's own `assets[].digest`) is verified
   against the downloaded bytes the same way DA's `sha1`/`sha512` is.
-- On a real bump, the NEW release's own `target_commitish` is resolved to
-  an immutable commit SHA (`resolve_source_sha`) -- already a bare
-  40-hex SHA, returned as-is; a mutable ref (the real
-  `magicavoxel-loader` pin's `target_commitish` is the branch name
-  `MINECRAFT-284`, confirmed live) resolved via GitHub's commits API --
-  and written to the new pin's `branch` field. `branch` is written-only
-  from the write path's own perspective: nothing in this engine ever
-  reads it back for discovery.
+  Before that, `run_engine` re-resolves the CURRENTLY-pinned tag's own
+  asset identity fresh (never just compares tag/version strings) and
+  compares it against what this pin actually has on disk
+  (`[download].url`/`.hash`) -- a bare tag-string or version-number
+  match is never alone enough to return `already_pinned`; a changed
+  digest, a moved asset, or an equal-version retag with different bytes
+  all fail closed as `integrity_conflict` instead of being accepted as
+  a harmless replay (twenty-fourth review round, comment 48456 item 2).
+- On a real bump, the NEW release's own TAG is resolved to the
+  immutable commit it points at (`resolve_tag_source_sha`, via
+  `refs/tags/{tag}`, peeling one more hop for an ANNOTATED tag) and
+  written to the new pin's `branch` field -- NEVER via the release's
+  `target_commitish`, which only names the branch/commit a release was
+  CREATED against and is not proof of what the tag itself currently
+  points at (twenty-fourth round, comment 48456 item 1; the real
+  `magicavoxel-loader` v0.1.3 tag is annotated, confirmed live).
+  `branch` is written-only from the write path's own perspective:
+  nothing in this engine ever reads it back for discovery.
+- **Preserved release channels** (twenty-fourth round, comment 48456
+  item 4): `scripts/poll-mod-updates.py`'s own poll loop determines
+  `include_prerelease` fresh, per pin, from whatever the CURRENTLY-
+  pinned tag's own `prerelease` flag actually is, before calling
+  discovery -- never a global default. This pack's real
+  `dynamic-atmosphere` (`v0.36.0-alpha.1`) and `dynamic-population`
+  (`v0.3.0-alpha.1`) pins are themselves prereleases, confirmed live;
+  without this, discovery's default (stable-only) would silently drop
+  them out of their own accepted channel the first time either polled.
 - No Modrinth-style `find_dependency_conflicts` (GitHub releases carry no
   structured dependency metadata to check against); required-dependency
   satisfaction is still fully covered by the real-jar `dependency_closure`
@@ -395,6 +425,36 @@ unreachable currently-pinned version silently disables the exact
 provide (MINECRAFT-362 review; previously this degraded to dedup-only
 safety on a lookup failure, which is the behaviour this paragraph
 corrects).
+
+## Normal rollout (twenty-fourth review round)
+
+Every commit message builder in this ticket -- DA's `build_commit_
+message`, the generalized `build_generic_commit_message`, and
+`scripts/bump_mod_github.py`'s `build_github_commit_message` -- used to
+attach `Release-Only: true` to every automated bump unconditionally
+(added in an earlier round of this same ticket, on the premise that an
+automatic pack commit should never deploy/restart the server by
+itself). `scripts/server_update_policy.should_deploy` reads that
+trailer's ABSENCE as permission to deploy (`value is None: return
+True` -- it is an opt-OUT a release can set, not an opt-in an automated
+commit needed to earn), so the unconditional trailer meant every
+automated bump published WITHOUT ever updating the hosted server.
+
+Reversed in the twenty-fourth round (MINECRAFT-362 review, comment
+48456, item 5), per the ticket owner's own resumed directive (comment
+48363: "whenever any mod is updated, update the modpack and cut a
+release... make sure the server is updated (should be auto)"): none of
+the three builders attaches `Release-Only` any more. An ordinary
+automated bump -- DA's, the generalized Modrinth path's, or the GitHub-
+release path's -- now deploys/restarts the server through the existing
+chain (`release.yml` -> Modrinth publish -> `server-update.yml`) the
+same way a human-authored release always has. This is not a new
+deployment gate and does not touch `should_deploy`'s own logic at all --
+it only stops these three builders from setting the one trailer that
+opts a release OUT. A genuinely held, publication-only release remains
+possible by setting `Release-Only: true` explicitly wherever that
+decision is actually made; nothing in this ticket removes that
+mechanism, only its blanket, automatic application to every bump.
 
 ## Direct-pin vs. `packwiz update`
 
@@ -521,18 +581,19 @@ through `_resolve_or_die` exactly like the other three fields, and
 `--mod-id` is optional (defaults from the pin on disk) rather than
 required.
 
-**The CLI now commits, with the same trailers the automated path uses,
+**The CLI now commits, with the same trailer the automated path uses,
 and an explicit pathspec.** A third round's CLI called `run_engine`
 (which only stages) and stopped, leaving the operator to write their own
-commit message with no `Release-Only`/`Mod-Auto-Bump` trailer --
-`scripts/server_update_policy.should_deploy` reads a trailer-less
-message as permission to deploy, so publishing a breaking change through
-the one documented path would also restart the live server. `cli_main`
+commit message with no `Mod-Auto-Bump` trailer -- not itself a deploy
+problem (normal rollout is the contract either way, see "Normal rollout"
+below), but it meant the operator had to hand-transcribe a trailer shape
+git's parser is picky about, and the commit body would silently lose the
+mod/version identity a real automated bump always records. `cli_main`
 now builds the commit with the same `build_generic_commit_message`
 `scripts/poll-mod-updates.py` uses (passing its own `source_text`, so
 the commit body no longer claims "via scheduled Modrinth reconciliation"
 on a bump a human made by hand) and checks `should_deploy(message)` is
-`False` before committing (a plain `if`, not `assert` -- an `assert`
+`True` before committing (a plain `if`, not `assert` -- an `assert`
 vanishes under `python3 -O`) (`--no-commit` skips this for inspection).
 Its printed follow-up guidance names the four intended paths literally
 (`pack.toml index.toml <pin> <notes file>`) -- an earlier round's
@@ -549,10 +610,11 @@ against real git in a scratch repo with an unrelated file also staged).
 on a human's working checkout -- where an unrelated in-progress edit
 being staged is ordinary, unlike the automated path's always-empty fresh
 CI checkout -- it would sweep that unreviewed content into this release
-commit too, authored as `sickos-mod-auto-bump[bot]` with `Release-Only:
-true`, which `release.yml` then publishes. A pathspec'd `git commit --
-<paths>` records a snapshot of exactly those paths and leaves anything
-else staged untouched (still staged, neither stolen nor discarded).
+commit too, authored as `sickos-mod-auto-bump[bot]`, which `release.yml`
+then publishes (and, per "Normal rollout" below, deploys). A pathspec'd
+`git commit -- <paths>` records a snapshot of exactly those paths and
+leaves anything else staged untouched (still staged, neither stolen nor
+discarded).
 
 Fetching a project Modrinth will not serve anonymously (`GET
 /v2/version/{id}` returning HTTP 404) previously surfaced as a bare,
@@ -585,8 +647,8 @@ reaching `run_engine`, an anonymous 404 naming `MODRINTH_TOKEN` and a
 transport failure (URLError/timeout) exiting cleanly, neither as a bare
 traceback, the `--no-commit` guidance naming the four intended paths
 literally rather than an unsafe `$(git diff --cached --name-only)`
-substitution, and the commit step carrying the Release-Only/Mod-Auto-
-Bump trailers (`TestCliMain`), an unrelated staged file surviving a
+substitution, and the commit step carrying the Mod-Auto-Bump trailer
+and normal-rollout contract (`TestCliMain`), an unrelated staged file surviving a
 CLI-triggered commit untouched (`TestCliCommitBump`), `_fenced`'s
 defanging/truncation (`TestFenced`), downgrade refusal, the
 identity/hash gate's failure modes (wrong project, forged bytes, a 404
@@ -930,7 +992,8 @@ is covered separately (`TestCommitBump`), for symmetry with
 for this -- same shape as `build_commit_message`, with its own
 `Mod-Auto-Bump: <mod-id> <version-id>` trailer (never `DA-Auto-Bump`, so
 nothing that greps commit history for either trailer specifically can
-confuse a generic bump for a DA one) and the same `Release-Only: true`.
+confuse a generic bump for a DA one) and the same normal-rollout
+contract (no `Release-Only` trailer -- see "Normal rollout" below).
 
 ## Concurrency / shared-lock / latest-main handling
 
@@ -1025,7 +1088,9 @@ runs, not a captured sha from whenever the job was first queued.
   a genuinely-matching-category version delta rather than relying on
   the old payload-only default).
 - The direct-pin-vs-packwiz decision above.
-- `Release-Only: true` on DA's generated commits (see `da-auto-bump.md`).
+- Normal rollout on both DA's and the generalized path's generated
+  commits (no `Release-Only` trailer -- MINECRAFT-362 review, comment
+  48456, item 5; see `da-auto-bump.md`).
 - `scripts/bump_mod.py` -- the generalized write path, with the
   no-downgrade lookup now failing closed, its own "cannot compare
   non-semver versions" outcome now distinct (`unsupported_version_scheme`,
@@ -1182,6 +1247,16 @@ runs, not a captured sha from whenever the job was first queued.
   prerequisite -- it is not added through this or any path until
   MINECRAFT-29's Fillager integration lands and a compatible verified
   release exists.
+- `render_github_pin` reconstructs a fixed field subset (name, filename,
+  side, download url/hash, update.github slug/tag/branch/regex) rather
+  than surgically merging into the pin's existing TOML (comment 48456,
+  item 3's "preserve unrelated metadata" concern). Checked against
+  every real `[update.github]` pin on `origin/main` directly: none
+  carries any field beyond this fixed set today, so this is not a live
+  bug -- but it is a real latent gap if a future pin ever gains one
+  (e.g. a packwiz `[option]` table), left as a known limitation rather
+  than built speculatively against a field shape nothing in this pack
+  has yet.
 - No live run of either mechanism has happened, since PR #104 (this
   ticket's implementation) has not merged: `mod-auto-bump-poll.yml` has
   never actually fired against the real Modrinth API. Two DIFFERENT
