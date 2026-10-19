@@ -206,7 +206,7 @@ metafile = true
 
 [[files]]
 file = "mods/isometric-camera.pw.toml"
-hash = "7022d5dbef3115198e08af4143e44c7fc8b7633e8a4a68ba5286ce0e5e2fbb85"
+hash = "b15b1c84d52cf4802a7f9a96f50aed8e0842c5df9bbffe2be8a233c058495726"
 metafile = true
 
 [[files]]
