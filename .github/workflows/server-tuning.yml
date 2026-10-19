@@ -33,6 +33,72 @@ name: Server tuning
 #     group below is shared with reset-world.yml (see README.md, "Live
 #     server tuning"), not with server-update.yml. The workflow_run trigger
 #     above is what orders this workflow after a deploy — not a shared lock.
+#
+#     MINECRAFT-258 FOLLOW-UP: "Server update" completing with conclusion
+#     success does NOT mean it deployed — its own deployment-policy job
+#     honors a `Release-Only: true` trailer by skipping the restart, but a
+#     skipped job still leaves the workflow's overall conclusion as
+#     success, so the naive `conclusion == 'success'` check below used to
+#     fire this live SFTP sync even on a Release-Only release (observed:
+#     https://github.com/brooswit-minecraft/sickos/actions/runs/39049941209
+#     ran right after https://github.com/brooswit-minecraft/sickos/actions/runs/39049928024
+#     skipped its own deploy).
+#
+#     FIRST FIX, FOUND WRONG BY REVIEW: re-reading the Release-Only trailer
+#     off `github.event.workflow_run.head_sha` is not safe — that field is
+#     NOT guaranteed to be the commit that actually triggered the chain.
+#     If main moves between "Release" starting and "Server update"
+#     finishing, head_sha can resolve to a LATER commit than the one
+#     deployment-policy actually evaluated, so this workflow would honor
+#     a different commit's trailer than the one "Server update" itself
+#     used — exactly backwards for a second hop in a workflow_run chain.
+#     (GitHub's own workflow_run docs: the event reports the default
+#     branch's current head, not a pinned reference to the triggering
+#     push.) FIX: don't re-derive the decision from a commit at all —
+#     read the ACTUAL job evidence of the specific triggering run, by its
+#     immutable `github.event.workflow_run.id`, via the Actions API. A
+#     literal job named "server-update" (not "server-update / ...") only
+#     ever appears, and only with conclusion skipped, when
+#     deployment-policy decided deploy=false and the reusable-workflow
+#     call itself never ran. This is authoritative for THAT run
+#     specifically — no commit, no trailer, no SHA-drift possible, since
+#     a run's own job list cannot describe any other run.
+#
+#     SECOND FIX, FOUND INCOMPLETE BY REVIEW: counting "server-update /
+#     deploy-method" success as deployment evidence was wrong — it's pure
+#     validation (one case statement over the configured deploy method)
+#     and never touches the server. Worse, "server-update / Update
+#     server" (the Modrinth-API deploy method's own job) can also succeed
+#     on a no-op "not configured, skipping" path without deploying
+#     anything. FIX: only "server-update / Upload and restart server"
+#     (the SFTP path's actual upload-and-restart step) succeeding counts
+#     as positive evidence; any sibling job in a
+#     failure/cancelled/timed_out/action_required state still
+#     disqualifies it. The classification itself now lives in
+#     scripts/server_tuning_deploy_evidence.py (not inline bash/jq), unit
+#     tested against eight real/synthetic job-list fixtures captured from
+#     the provider in tests/test_server_update_policy.py — a regression
+#     here, including all the way back to the original MINECRAFT-258 bug,
+#     now has behavioral coverage, not just YAML-text assertions.
+#     Ambiguous, missing or partially-failed job evidence fails CLOSED
+#     (no live write), same polarity as server-update.yml's own
+#     `deploy == 'true'` and the fail-closed contract
+#     scripts/server_update_policy.py already asserts for a malformed
+#     trailer (tests/test_server_update_policy.py::test_invalid_value_fails_closed).
+#     The sync job's gate below is `== 'true'` (not `!= 'false'`) with
+#     `!cancelled()` (not `always()`) for the same reason: a guard-job
+#     failure or an operator cancel must not leave the live write
+#     eligible by default.
+#
+#     KNOWN NOT HARDENED (recorded, not fixed, per review): the Actions
+#     API's /jobs endpoint returns the LATEST attempt of the triggering
+#     run, not necessarily its original github.event.workflow_run.run_attempt
+#     (re-runs do happen on this repo); it also reads only page 1 of jobs
+#     (fails in the safe direction if ever paginated); and nothing pins
+#     the hardcoded "server-update" job name to server-update.yml's own
+#     job key, so a rename there would silently make this guard permanent
+#     deploy=false (safe, but it would quietly stop MINECRAFT-50's
+#     post-deploy sync with CI green throughout).
 on:
   push:
     branches: [main]
@@ -48,14 +114,78 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: schematic-sftp-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:
+  release-only-guard:
+    if: github.event_name == 'workflow_run'
+    runs-on: ubuntu-latest
+    outputs:
+      deploy: ${{ steps.policy.outputs.deploy }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Read actual deploy evidence from the triggering run's own jobs
+        id: policy
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          # The classifier (scripts/server_tuning_deploy_evidence.py,
+          # unit-tested against eight real/synthetic job-list fixtures in
+          # tests/test_server_update_policy.py) decides; this step only
+          # fetches. A failed `gh api` call produces no stdout, which the
+          # script's own JSON-parse failure path already treats as
+          # deploy=false -- no separate error handling needed here.
+          gh api "repos/${{ github.repository }}/actions/runs/${RUN_ID}/jobs" \
+            | python3 scripts/server_tuning_deploy_evidence.py >> "$GITHUB_OUTPUT"
+
+  # MINECRAFT-378: a single commit can touch a tuning-only path (firing the
+  # push trigger above immediately) AND a release-triggering path like
+  # mods/dynamic-atmosphere.pw.toml in the same push -- e.g. a DA version bump
+  # landing together with the tuning-key rename that version needs. Syncing
+  # immediately in that case would race the Release -> Server update deploy
+  # chain and write into a config file for a DA version that isn't live yet.
+  # scripts/tuning_push_sync_policy.py (unit-tested in
+  # tests/test_tuning_push_sync_policy.py) decides from this push's own
+  # changed-file list; the workflow_run("Server update") trigger above already
+  # re-syncs correctly once that deploy actually completes, so deferring here
+  # loses nothing.
+  push-ordering-guard:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      sync: ${{ steps.policy.outputs.sync }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Decide whether this push's own commit also ships a pack release
+        id: policy
+        run: |
+          git diff --name-only HEAD~1 HEAD | python3 scripts/tuning_push_sync_policy.py >> "$GITHUB_OUTPUT"
+
   sync:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    needs: [release-only-guard, push-ordering-guard]
+    if: >-
+      !cancelled() &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'push' && needs.push-ordering-guard.outputs.sync == 'true') ||
+       (github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        needs.release-only-guard.outputs.deploy == 'true'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

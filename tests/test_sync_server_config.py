@@ -132,17 +132,47 @@ class ServerConfigSyncTest(unittest.TestCase):
         })
         self.assertIn(b"createFanTransportPerRpm = 1.0", sftp.files[target])
 
-    def test_sync_refuses_ambiguous_modern_and_legacy_layouts(self):
+    def test_sync_prefers_the_per_world_override_whenever_it_exists(self):
+        # NeoForge's own SERVER-type ModConfig loading (DynamicAtmosphereMod's
+        # own documented behavior, confirmed there by decompiling NeoForge
+        # 21.1's ServerLifecycleHooks.class) actively loads the per-world
+        # serverconfig/ file once it exists, not the global config/ copy --
+        # this is not an ambiguity to refuse, it's the ordinary, expected
+        # state for any world that has ever had DA's config version checked.
+        global_path = "/srv/minecraft/config/dynamicatmosphere-server.toml"
+        world_path = "/srv/minecraft/world/serverconfig/dynamicatmosphere-server.toml"
         sftp = MemorySftp({
             "/srv/minecraft/server.properties": b"level-name=world\n",
-            "/srv/minecraft/config/dynamicatmosphere-server.toml": b"[integrations]\n",
-            "/srv/minecraft/world/serverconfig/dynamicatmosphere-server.toml": b"[integrations]\n",
+            global_path: b"[integrations]\ncreateFanTransportPerRpm = 0.2\n",
+            world_path: b"[integrations]\ncreateFanTransportPerRpm = 0.1\n",
         })
-        with self.assertRaises(ValueError):
-            sync.synchronize(sftp, "/srv/minecraft", {
-                ("integrations", "createFanTransportPerRpm"): 1.0,
-            })
-        self.assertEqual(0, sftp.renames)
+        sync.synchronize(sftp, "/srv/minecraft", {
+            ("integrations", "createFanTransportPerRpm"): 1.0,
+        })
+        self.assertIn(b"createFanTransportPerRpm = 1.0", sftp.files[world_path])
+        self.assertIn(b"createFanTransportPerRpm = 0.2", sftp.files[global_path])  # left untouched
+
+    def test_sync_patches_a_fresh_worlds_bare_version_stub_override(self):
+        # Observed live on MINECRAFT-378 immediately after a world reset: the
+        # brand-new world's per-world override existed as only
+        # `configVersion = 1` (DA writes exactly that, and nothing else, the
+        # first time a world is loaded, before the file is ever populated).
+        # That stub is still the active override NeoForge will read for this
+        # world -- patch_toml() filling in the managed sections/keys it's
+        # missing is the correct outcome, not a special case.
+        global_path = "/srv/minecraft/config/dynamicatmosphere-server.toml"
+        stub_path = "/srv/minecraft/world-new/serverconfig/dynamicatmosphere-server.toml"
+        sftp = MemorySftp({
+            "/srv/minecraft/server.properties": b"level-name=world-new\n",
+            global_path: b"[integrations]\ncreateFanTransportPerRpm = 0.1\n",
+            stub_path: b"configVersion = 1\n",
+        })
+        sync.synchronize(sftp, "/srv/minecraft", {
+            ("integrations", "createFanTransportPerRpm"): 1.0,
+        })
+        self.assertIn(b"createFanTransportPerRpm = 1.0", sftp.files[stub_path])
+        self.assertIn(b"configVersion = 1", sftp.files[stub_path])
+        self.assertEqual(b"[integrations]\ncreateFanTransportPerRpm = 0.1\n", sftp.files[global_path])
 
     def test_rejects_unsafe_world_and_server_root(self):
         with self.assertRaises(ValueError):
@@ -151,33 +181,33 @@ class ServerConfigSyncTest(unittest.TestCase):
             sync.safe_root("/srv/../root")
 
     def test_regenerated_fields_detects_value_sitting_at_da_default(self):
-        original = "[enderGas]\nportalBlockEmission = 100\n"
+        original = "[obsidianPowder]\nportalBlockEmission = 100\n"
         found = sync.regenerated_fields(
-            original, {("enderGas", "portalBlockEmission"): 250})
-        self.assertEqual([("enderGas", "portalBlockEmission", 100, 250)], found)
+            original, {("obsidianPowder", "portalBlockEmission"): 250})
+        self.assertEqual([("obsidianPowder", "portalBlockEmission", 100, 250)], found)
 
     def test_regenerated_fields_ignores_a_field_already_at_the_tuned_value(self):
-        original = "[enderGas]\nportalBlockEmission = 250\n"
+        original = "[obsidianPowder]\nportalBlockEmission = 250\n"
         found = sync.regenerated_fields(
-            original, {("enderGas", "portalBlockEmission"): 250})
+            original, {("obsidianPowder", "portalBlockEmission"): 250})
         self.assertEqual([], found)
 
     def test_regenerated_fields_treats_a_missing_section_as_default(self):
         found = sync.regenerated_fields(
-            "", {("enderGas", "portalBlockEmission"): 250})
-        self.assertEqual([("enderGas", "portalBlockEmission", 100, 250)], found)
+            "", {("obsidianPowder", "portalBlockEmission"): 250})
+        self.assertEqual([("obsidianPowder", "portalBlockEmission", 100, 250)], found)
 
     def test_sync_reports_regeneration_in_job_summary_and_still_patches(self):
         target = "/srv/minecraft/config/dynamicatmosphere-server.toml"
         sftp = MemorySftp({
             "/srv/minecraft/server.properties": b"level-name=world\n",
-            target: b"[enderGas]\nportalBlockEmission = 100\n",
+            target: b"[obsidianPowder]\nportalBlockEmission = 100\n",
         })
         with tempfile.TemporaryDirectory() as directory:
             summary_path = Path(directory) / "summary.md"
             summary_path.write_text("")
             regenerated = sync.synchronize(sftp, "/srv/minecraft", {
-                ("enderGas", "portalBlockEmission"): 250,
+                ("obsidianPowder", "portalBlockEmission"): 250,
             })
             sync.report_regeneration(regenerated, {"GITHUB_STEP_SUMMARY": str(summary_path)})
             self.assertIn(b"portalBlockEmission = 250", sftp.files[target])

@@ -1,13 +1,15 @@
 name = "Dynamic Terrain"
-filename = "dynamicterrain-0.22.3.jar"
+filename = "dynamicterrain-0.28.2.jar"
 side = "both"
 
 [download]
-url = "https://cdn.modrinth.com/data/BCtj6RgM/versions/4CxktJ8C/dynamicterrain-0.22.3.jar"
-hash-format = "sha512"
-hash = "e63c644f0d9e8457933ad9306d4fb8de51d9eadfab627c5b7271818ed67d4974f00ab1448a0adc9d6439b80f04bf0d4b6ad0426e6f56e444ec19a72b487ece78"
+url = "https://github.com/brooswit-minecraft/dynamic-terrain/releases/download/v0.28.2/dynamicterrain-0.28.2.jar"
+hash-format = "sha256"
+hash = "e72fe8d1c0c0ef99c1dc570af66f36d00e794982ef7441f6d46e69ade41b3f31"
 
 [update]
-[update.modrinth]
-mod-id = "BCtj6RgM"
-version = "4CxktJ8C"
+[update.github]
+branch = "2017440641cff8c9d383fd6238087ed6dd485ee3"
+regex = "^.+(?<!-api|-dev|-dev-preshadow|-sources)\\.jar$"
+slug = "brooswit-minecraft/dynamic-terrain"
+tag = "v0.28.2"

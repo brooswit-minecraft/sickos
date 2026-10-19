@@ -1,0 +1,15 @@
+name = "Dynamic Backpacks"
+filename = "dynamicbackpacks-0.3.0.jar"
+side = "both"
+
+[download]
+url = "https://github.com/brooswit-minecraft/dynamic-backpacks/releases/download/v0.3.0/dynamicbackpacks-0.3.0.jar"
+hash-format = "sha256"
+hash = "9dfb5e050769a490626e706098e14cae7de83dac42dc2bcd328a0a42e8c58858"
+
+[update]
+[update.github]
+branch = "90464c99f5ac181bd014db4c9490ca880a1700e7"
+regex = "^.+(?<!-api|-dev|-dev-preshadow|-sources)\\.jar$"
+slug = "brooswit-minecraft/dynamic-backpacks"
+tag = "v0.3.0"

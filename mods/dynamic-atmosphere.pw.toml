@@ -1,13 +1,15 @@
 name = "Dynamic Atmosphere"
-filename = "dynamicatmosphere-0.20.3-alpha.1.jar"
+filename = "dynamicatmosphere-0.36.0-alpha.1.jar"
 side = "both"
 
 [download]
-url = "https://cdn.modrinth.com/data/PZV7RorC/versions/PgZ2uZsh/dynamicatmosphere-0.20.3-alpha.1.jar"
-hash-format = "sha512"
-hash = "a0726a991c6c183e8d4a081f991bff15594abc3d42e76cb7ea424ae5489626608df65fca607d56dd23949336088456931d4623c00acb0343c05ebb60ab20d2b6"
+url = "https://github.com/brooswit-minecraft/dynamic-atmosphere/releases/download/v0.36.0-alpha.1/dynamicatmosphere-0.36.0-alpha.1.jar"
+hash-format = "sha256"
+hash = "1d15948c9056dd8ce9e70bff7a9653e57e17953f9e7e2e151f51154326b8bbf2"
 
 [update]
-[update.modrinth]
-mod-id = "PZV7RorC"
-version = "PgZ2uZsh"
+[update.github]
+branch = "2d2a6d2b9a1fd14a6a4d36183d8ef920c8332e6d"
+regex = "^.+(?<!-api|-dev|-dev-preshadow|-sources)\\.jar$"
+slug = "brooswit-minecraft/dynamic-atmosphere"
+tag = "v0.36.0-alpha.1"
