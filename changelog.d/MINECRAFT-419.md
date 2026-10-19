@@ -8,15 +8,27 @@ bump: minor
   client-side dependency YetAnotherConfigLib (YACL) 3.8.2.
 - Tectonic Layers 2.0.1: stacks the Nether/End/Caves directly into the
   Overworld as a continuous, portal-less layout. Requires Tectonic (already
-  pinned) and Lithostitched 1.6.0+ (already pinned, currently 1.8.1);
-  Amplified Nether is an optional runtime-detected enhancement, not added
-  here since nothing else in the pack needs it and it wasn't requested on
-  its own.
+  pinned) and Lithostitched 1.6.0+ (already pinned, currently 1.8.1). The
+  jar's own neoforge.mods.toml declares Amplified Nether as an `optional`
+  dependency (will not block loading), but the mod's Modrinth listing
+  separately describes it as needed for the deep-Nether layer to use "the
+  real Nether source terrain" rather than a fallback -- i.e. optional to
+  load, but a real functional tradeoff to skip. Not added here since
+  nothing else in the pack needs it and it wasn't requested on its own;
+  flagging the tradeoff rather than silently omitting it.
 
-This mod alters dimension layout, portals, and End behavior; its own
-author recommends starting a new world for a seamless result on an
-existing save, though already-explored chunks are not retroactively
-rewritten by these additions.
+**Breaking: Tectonic Layers is a world-generation/chunk-conversion change,
+not a drop-in-safe addition.** Per its own Modrinth listing: "It changes
+dimensions, terrain generation, chunk conversion, portals, lighting, fog,
+and End behavior... Back up your worlds before installing or updating...
+For the best results, use this in a new world. Existing worlds may have
+already-generated chunks that do not fully match the stacked layout." This
+PR does not claim "existing chunks are left alone" -- that was an earlier,
+unverified assumption and has been corrected. No world migration/reset has
+been performed or decided by this PR; whether and when to reset the live
+server world is a separate decision tracked on MINECRAFT-419, coordinated
+with the release owner, and requires a preserved backup before any
+irreversible action.
 
 ### Excluded (not in this release)
 Blocked by sickos/AGENTS.md's Modrinth-only policy ("Only add mods hosted
