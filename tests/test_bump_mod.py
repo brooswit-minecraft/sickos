@@ -422,6 +422,45 @@ class TestDowngradeAndAnomaly(EngineTestCase):
             self.run_engine(pin, candidate, content=content)
         self.assertEqual(ctx.exception.exit_code, bump_mod.EXIT_DOWNGRADE_REFUSED)
 
+    def test_cross_scheme_candidate_vs_pinned_version_is_refused_not_written(self):
+        # MINECRAFT-421 review, point 3, second round (comment 48554,
+        # P1): the pin's own currently-pinned version uses the native
+        # four-component scheme (Biomes O' Plenty/GlitchCore's real
+        # shape); the candidate is a differently-shaped plain version.
+        # decide_update's no-downgrade check must refuse this as
+        # unparsable (unsupported_version_scheme), the same as any other
+        # cross-scheme mismatch -- never silently treat the candidate as
+        # newer (or older) than a scheme it cannot actually be ranked
+        # against, and never write anything to the tree either way.
+        content = b"cross scheme jar"
+        candidate = make_candidate(content=content, version_number="2.1.0")
+        self.register(candidate.version_id, metadata_for(candidate))
+        self.register(OLD_VERSION_ID, {
+            "id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "2.1.0.2",
+        })
+        pin = make_pin()
+        before = self.porcelain()
+        with self.assertRaises(bump_mod.EngineError) as ctx:
+            self.run_engine(pin, candidate, content=content)
+        self.assertEqual(ctx.exception.exit_code, bump_mod.EXIT_CONFIG_ERROR)
+        self.assertEqual(ctx.exception.outcome, "unsupported_version_scheme")
+        self.assertEqual(self.porcelain(), before)
+
+    def test_v_prefixed_four_component_pinned_version_vs_candidate_is_also_refused_not_written(self):
+        content = b"cross scheme jar"
+        candidate = make_candidate(content=content, version_number="2.1.0")
+        self.register(candidate.version_id, metadata_for(candidate))
+        self.register(OLD_VERSION_ID, {
+            "id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "v2.1.0.2+build",
+        })
+        pin = make_pin()
+        before = self.porcelain()
+        with self.assertRaises(bump_mod.EngineError) as ctx:
+            self.run_engine(pin, candidate, content=content)
+        self.assertEqual(ctx.exception.exit_code, bump_mod.EXIT_CONFIG_ERROR)
+        self.assertEqual(ctx.exception.outcome, "unsupported_version_scheme")
+        self.assertEqual(self.porcelain(), before)
+
 
 class TestMetadataGate(EngineTestCase):
     def test_wrong_project_id_fails_closed(self):
@@ -525,6 +564,94 @@ def _find_packwiz():
     if repo_bin.exists():
         return str(repo_bin)
     return None
+
+
+class TestChannelPreservation(EngineTestCase):
+    """MINECRAFT-421 review, point 1: run_engine's version_type gate
+    refuses a prerelease candidate UNLESS this pin's own CURRENTLY-pinned
+    version is itself non-release -- never a global default. This pack's
+    real Biomes O' Plenty/GlitchCore/IceAndFire Community Edition pins are
+    the confirmed-live positive case; a pin pinned to a real release is
+    the negative case and must behave exactly as before this round."""
+
+    def test_prerelease_candidate_refused_when_pin_is_on_the_release_channel_negative(self):
+        content = b"prerelease jar"
+        candidate = make_candidate(content=content, version_number="1.1.0-beta.1")
+        self.register(candidate.version_id, metadata_for(candidate, version_type="beta"))
+        self.register(OLD_VERSION_ID, {
+            "id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0", "version_type": "release",
+        })
+        pin = make_pin()
+        before = self.porcelain()
+        with self.assertRaises(bump_mod.EngineError) as ctx:
+            self.run_engine(pin, candidate, content=content)
+        self.assertEqual(ctx.exception.exit_code, bump_mod.EXIT_INTEGRITY_FAILURE)
+        self.assertIn("not 'release'", ctx.exception.message)
+        self.assertEqual(self.porcelain(), before)
+
+    def test_prerelease_candidate_accepted_when_pin_is_already_on_a_prerelease_channel_positive(self):
+        content = b"prerelease jar"
+        candidate = make_candidate(content=content, version_number="1.1.0-beta.1")
+        self.register(candidate.version_id, metadata_for(candidate, version_type="beta"))
+        self.register(OLD_VERSION_ID, {
+            "id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0-beta.1", "version_type": "beta",
+        })
+        pin = make_pin()
+        summary, exit_code, _ = self.run_engine(pin, candidate, content=content)
+        self.assertEqual(exit_code, bump_mod.EXIT_OK)
+        self.assertTrue(summary["changed"])
+        self.assertEqual(summary["outcome"], "bumped")
+
+    def test_release_candidate_always_accepted_regardless_of_previous_channel(self):
+        # A pin on a prerelease channel still prefers a real release the
+        # moment one shows up -- channel preservation never BLOCKS a
+        # release, it only ever un-blocks a prerelease.
+        content = b"real release jar"
+        candidate = make_candidate(content=content, version_number="1.1.0")
+        self.register(candidate.version_id, metadata_for(candidate, version_type="release"))
+        self.register(OLD_VERSION_ID, {
+            "id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0-beta.1", "version_type": "beta",
+        })
+        pin = make_pin()
+        summary, exit_code, _ = self.run_engine(pin, candidate, content=content)
+        self.assertEqual(exit_code, bump_mod.EXIT_OK)
+        self.assertEqual(summary["outcome"], "bumped")
+
+    def test_beta_pin_does_not_expand_to_accept_an_alpha_candidate(self):
+        # MINECRAFT-421 review, point 2, second round: a Beta-pinned pin
+        # must never accept an Alpha candidate -- that is a channel
+        # EXPANSION, not a preservation, even though Alpha is also
+        # non-release.
+        content = b"alpha jar"
+        candidate = make_candidate(content=content, version_number="1.1.0-alpha.1")
+        self.register(candidate.version_id, metadata_for(candidate, version_type="alpha"))
+        self.register(OLD_VERSION_ID, {
+            "id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0-beta.1", "version_type": "beta",
+        })
+        pin = make_pin()
+        before = self.porcelain()
+        with self.assertRaises(bump_mod.EngineError) as ctx:
+            self.run_engine(pin, candidate, content=content)
+        self.assertEqual(ctx.exception.exit_code, bump_mod.EXIT_INTEGRITY_FAILURE)
+        self.assertEqual(self.porcelain(), before)
+
+    def test_unknown_candidate_channel_is_refused_even_if_pin_matches_it(self):
+        # MINECRAFT-421 review, point 2, second round: an unrecognised
+        # version_type is never treated as a trusted channel, even when
+        # the pin's own currently-pinned version reports the SAME
+        # unrecognised value -- both must be a real, known channel.
+        content = b"surprise jar"
+        candidate = make_candidate(content=content, version_number="1.1.0")
+        self.register(candidate.version_id, metadata_for(candidate, version_type="surprise"))
+        self.register(OLD_VERSION_ID, {
+            "id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0", "version_type": "surprise",
+        })
+        pin = make_pin()
+        before = self.porcelain()
+        with self.assertRaises(bump_mod.EngineError) as ctx:
+            self.run_engine(pin, candidate, content=content)
+        self.assertEqual(ctx.exception.exit_code, bump_mod.EXIT_INTEGRITY_FAILURE)
+        self.assertEqual(self.porcelain(), before)
 
 
 class TestRealPackwizDryRun(EngineTestCase):

@@ -15,17 +15,31 @@ and splits them into:
 - **Eligible**: a pin with an `[update.modrinth]` table (`mod-id` +
   `version`) -- packwiz's own update-tracking fields, reused rather than
   duplicated into a second enrollment file that could drift from the pack.
-  At the time of writing this is 75 of the pack's pins, including
-  `dynamic-skateboards.pw.toml` -- its `[download].url` happens to point
-  at a `github.com` asset URL, which comment 48456's "reconcile
-  Skateboards' mixed GitHub-download/Modrinth-update identity" flagged
-  for a look. Confirmed NOT a bug: enrollment keys on the `[update.*]`
-  table, never the download host, and Skateboards' only `[update]`
-  table is `[update.modrinth]`, with a real, resolvable `mod-id`/
-  `version` -- Modrinth mirrors some mods' own GitHub-hosted jars
-  rather than rehosting them, which is unrelated to how this pin is
-  tracked. It is `eligible`, not `[update.github]`-tracked, and belongs
-  nowhere near the 10-pin count below.
+  At the time of writing this is 74 of the pack's pins.
+  `dynamic-skateboards.pw.toml` is NOT one of them (MINECRAFT-421,
+  superseding MINECRAFT-362 review comment 48456's "confirmed not a bug"
+  on this exact pin): that round's theory -- Modrinth mirrors Skateboards'
+  own GitHub-hosted jars as a real `release`-type version, so the
+  `[download].url` pointing at `github.com` was unrelated to how the pin
+  is tracked -- was never checked against a live, authenticated
+  resolution. MINECRAFT-421's first real scheduled-poll run was that live
+  check, with `MODRINTH_TOKEN` actually configured, and it found Modrinth
+  project `n0hFQ5AT` has no `release`-type version for this pack's
+  (game_version, loader) target at all, only prereleases
+  (`only_prerelease_available`) -- a real, run-failing gap, since
+  Skateboards is one of this pack's own managed mods, not a third-party
+  one the `KNOWN_ONLY_PRERELEASE_PIN_IDS` allowlist tolerates. Its actual
+  current, authoritative releases are the GitHub ones its `[download].url`
+  already named (confirmed live: `gh release list` shows `v0.3.0` as
+  latest, matching the pinned jar). Reconciled by switching its `[update]`
+  table from `[update.modrinth]` to the same native-schema
+  `[update.github]` (`slug`/`tag`/`branch`/`regex`) this pack's other
+  10 `[update.github]`-tracked pins already use (see "GitHub-release-only
+  managed mods" below) -- reusing the existing, reviewed GitHub-release
+  engine (`scripts/github_release_identity.py`, `scripts/bump_mod_github.py`)
+  rather than inventing a third channel. It is now `[update.github]`-tracked
+  (11 such pins total as of this change, confirmed via
+  `mod_eligibility.discover_github_pins`), not counted in this 74.
 - **Untracked**: everything else under `mods/`, for two distinct reasons,
   both reported explicitly rather than silently dropped:
   - `EXCLUDED_MOD_NAMES` (Herobrine API, Baritone): local-only client
@@ -100,6 +114,80 @@ and splits them into:
   scheme. Both the candidate's and the previous version's strings are
   normalized through the same `strip_known_version_prefixes` before
   `compare_semver` (ninth round, same reasoning as the resolver above).
+
+**MINECRAFT-421: channel preservation and native version-scheme
+normalization.** Two additions driven by the first real scheduled poll
+run's own nine observed coverage-gap outcomes, revised twice more after
+exact-head review (comments 48541, then 48554) reproduced further gaps
+live against each round's own shapes:
+
+- `resolve_latest_compatible_version` gained an `accepted_channel`
+  parameter (default `"release"`, same contract as
+  `github_release_identity.resolve_latest_matching_release`'s identical
+  per-pin flag for GitHub-tracked pins): an entry whose `version_type`
+  EXACTLY equals `accepted_channel` competes for `best` on equal footing
+  with a release entry. EXACT match, not "any prerelease" -- a first
+  round's `include_prerelease` boolean would have let a Beta-pinned pin
+  accept an Alpha candidate the moment one existed, a channel
+  EXPANSION, not a preservation. `accepted_channel` is validated against
+  `KNOWN_PRERELEASE_CHANNELS` (`{"alpha", "beta"}`); an unrecognised
+  value (a corrupt/invalid `version_type`, e.g. a typo'd string) is
+  refused, never silently trusted as a real channel to widen into.
+  `scripts/poll-mod-updates.py`'s `_resolve_candidate_preserving_channel`
+  resolves this pin's own channel UP FRONT, before any candidate
+  selection -- never only as a retry after `OnlyPrereleaseAvailableError`
+  (a first round's shape missed a real, reproduced case: an old stable
+  release plus a newer accepted-channel prerelease never raises that
+  error at all, since a release entry already exists, so the update was
+  silently reported as `downgrade_refused` forever instead of ever being
+  considered). `scripts/bump_mod.py`'s own hard version_type gate
+  requires the candidate's channel to equal the pin's own currently-
+  pinned channel exactly, and that channel to be a recognised one, same
+  discipline as the resolver -- so a candidate the resolver now returns
+  does not hit a second, contradicting (or more permissive) gate deeper
+  in the write path. A pin pinned to a real release is entirely
+  unaffected.
+- `semver_compare.normalize_native_version_scheme` (consulted by
+  `parse_semver` as a fallback only after the strict SemVer regex
+  already failed, so an already-valid version string is never touched)
+  rewrites four confirmed-live non-strict-SemVer shapes into an
+  equivalent SemVer string: a leading `v`/`V` stripped (Dungeons and
+  Taverns' real "v4.4.4+mod"), a missing patch component padded to `0`
+  (Create: Dynamic Village "0.5", Create: Pillager Arise "132.36",
+  Geophilic "3.7", IceAndFire Community Edition "2.1-beta.1"), and a 4th
+  numeric component folded into the prerelease slot (Biomes O' Plenty
+  "21.1.0.14", GlitchCore "2.1.0.2"). Create: Easy Structures' real
+  pinned "0.2a" is DELIBERATELY left unparseable -- a bare trailing
+  letter with no separator has no single, source-backed meaning this
+  module can assign without guessing; see that function's own docstring.
+  Applying this inside `parse_semver` itself means every existing caller
+  (the resolver above, `decide_update`, `semver_delta_category`,
+  `scripts/bump_mod.py`'s own category-message fallback) benefits with
+  no call-site changes. `compare_semver` carries its OWN separate guard
+  (second round, point 3): it refuses to compare a RAW four-numeric-
+  component string against a differently-shaped one at all, rather than
+  letting the fold above invent precedence against a scheme it was never
+  confirmed to apply to -- reproduced live: "2.1.0.2" folds to "2.1.0-2",
+  which SemVer's own "no prerelease beats any prerelease" rule then
+  ranks OLDER than a bare "2.1.0", though nothing establishes the two
+  schemes compare that way at all. Third round (comment 48554): that
+  guard originally checked the RAW shape with a separate, narrower regex
+  (bare digits only), which missed the exact same scheme wearing
+  `normalize_native_version_scheme`'s own other recognised dress -- a
+  leading `v`/`V`, or a `+build` suffix -- both of which still fold into
+  a prerelease slot and so still need the guard. Fixed by deriving "is
+  this a four-component scheme" from the SAME parsed identity
+  (`_NATIVE_SCHEME_RE`'s own `extra`/`prerelease` groups)
+  `normalize_native_version_scheme` itself already acts on, rather than
+  a second regex that can silently drift out of sync with what
+  normalization recognises. `resolve_latest_compatible_version`'s own
+  best-candidate loop catches that guard's `ValueError` and raises
+  `NoParseableCandidateError` -- a DETERMINISTIC ambiguity, not a
+  per-entry "skip it" that left whichever candidate was examined FIRST
+  as `best`: reproduced live, `[2.1.0, 2.1.0.3]` selected `2.1.0`;
+  reversing the list selected `2.1.0.3`. Both orderings now raise the
+  same error instead of returning either version by API response-order
+  accident.
 
 **Explicit scope limit**: compatibility here means the candidate's own
 declared `game_versions`/`loaders`. `modrinth_compat.py` also has
@@ -257,15 +345,17 @@ candidate jar's real manifest correctly refusing a real pack is exactly
 as unpredictable per-candidate as those two, so a poll run hitting it
 should not hard-fail the whole run any more than they do.
 
-## GitHub-release-only managed mods (twenty-third review round)
+## GitHub-release-only managed mods (twenty-third review round; `dynamic-skateboards` added MINECRAFT-421)
 
 Four managed mods ship jars as GitHub Release assets rather than through
 Modrinth -- `dynamic-despawn`, `magicavoxel-loader`, `dynamic-battle-axes`,
-`dynamic-whips`. All four, and three OTHER managed mods that DO have
-GitHub-release pins for reasons unrelated to this ticket (`dynamic-
-atmosphere`'s own pin, `dynamic-backpacks`, `dynamic-population`,
-`dynamic-terrain`, `dynamic-vehicles`, `isometric-camera` -- confirmed by
-reading `origin/main` directly), are tracked via packwiz's OWN native
+`dynamic-whips`. All four, `dynamic-skateboards` (MINECRAFT-421 -- see
+"Enrollment" above for why its Modrinth tracking was reconciled to
+GitHub), and the other managed mods that DO have GitHub-release pins for
+reasons unrelated to this ticket (`dynamic-atmosphere`'s own pin,
+`dynamic-backpacks`, `dynamic-population`, `dynamic-terrain`,
+`dynamic-vehicles`, `isometric-camera` -- confirmed by reading
+`origin/main` directly), are tracked via packwiz's OWN native
 `[update.github]` pin schema: `slug` (`"owner/repo"`), `tag` (the
 currently-pinned release tag), `branch` (see below), `regex` (an
 asset-name filter). This is NOT an invented schema -- an earlier round of

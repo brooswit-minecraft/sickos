@@ -8,6 +8,8 @@ hash-format = "sha256"
 hash = "1ff05eb63b20935d13dbd6c7c3f80cbaa8cb0060e0c12d6989797c6d4fbe834f"
 
 [update]
-[update.modrinth]
-mod-id = "n0hFQ5AT"
-version = "yWvoWum6"
+[update.github]
+branch = "96f162882e3856d6ebc32d9ee826fefc2e6a18f7"
+regex = "^.+(?<!-api|-dev|-dev-preshadow|-sources)\\.jar$"
+slug = "brooswit-minecraft/dynamic-skateboards"
+tag = "v0.3.0"

@@ -66,6 +66,18 @@ from semver_compare import (  # noqa: E402 - needs sys.path set up first
 USER_AGENT = "brooswit-minecraft/sickos (MINECRAFT-362 mod auto-bump resolver)"
 
 
+# The only non-release Modrinth `version_type` values this module will
+# ever trust as a pin's own preserved channel (MINECRAFT-421 review,
+# point 2, second round). An `accepted_channel` (resolve_latest_
+# compatible_version) or a pin's own currently-pinned `version_type`
+# (bump_mod.run_engine's write-gate) outside this set -- Modrinth's
+# "release"/"beta"/"alpha" plus this set covers every real value this
+# module has ever observed -- is treated as invalid/untrusted metadata,
+# never as "safe to widen into," per the reviewer's explicit "reject
+# invalid/mismatched metadata" instruction.
+KNOWN_PRERELEASE_CHANNELS = frozenset({"alpha", "beta"})
+
+
 class CompatResolutionError(Exception):
     """Fetching or parsing Modrinth's version list for a project failed --
     the TRUE catch-all/systemic class (HTTP 5xx, timeout, DNS failure,
@@ -195,7 +207,7 @@ def version_candidate_from_json(version_json):
     )
 
 
-def resolve_latest_compatible_version(mod_id, *, game_version, loader, fetcher):
+def resolve_latest_compatible_version(mod_id, *, game_version, loader, fetcher, accepted_channel="release"):
     """Return the newest VersionCandidate compatible with (game_version, loader), or None.
 
     Modrinth's own `game_versions`/`loaders` query filter already does the
@@ -216,12 +228,39 @@ def resolve_latest_compatible_version(mod_id, *, game_version, loader, fetcher):
     releases available, and for Cristel Lib, where the un-normalized
     comparison previously selected an older version as "best").
 
-    Only `version_type == "release"` entries are considered: Modrinth's
-    `version_type` ("release"/"beta"/"alpha") is independent of
+    Only `version_type == "release"` entries are considered by default:
+    Modrinth's `version_type` ("release"/"beta"/"alpha") is independent of
     `version_number`, so a prerelease that happens to sort higher by
     semver (e.g. "1.3.0-beta.1" > "1.2.0") must not be auto-pinned into
     the public pack ahead of its own eventual full release
-    (MINECRAFT-362 review).
+    (MINECRAFT-362 review). `accepted_channel` (default `"release"`)
+    additionally accepts entries whose `version_type` EXACTLY equals it
+    -- it must be set explicitly, per pin, by a caller that has
+    independently confirmed the pin's OWN currently-pinned version is
+    itself on that exact channel (MINECRAFT-421 channel preservation,
+    mirroring github_release_identity.resolve_latest_matching_release's
+    identical per-pin `include_prerelease` contract for GitHub-tracked
+    pins): this module never infers it from this call alone, so a
+    stable-channel mod is never silently opted into prereleases, and a
+    mod whose accepted channel genuinely IS a prerelease one (this
+    pack's real Biomes O' Plenty and GlitchCore pins, confirmed live) is
+    not silently blocked from a real update on that same channel either.
+    EXACT match, not "any prerelease" (MINECRAFT-421 review, point 2,
+    second round -- a prior version of this parameter was a bare
+    `include_prerelease` boolean that accepted ANY non-release entry once
+    true, which would have silently expanded a Beta-pinned mod onto an
+    Alpha candidate the moment one existed: a channel EXPANSION, not a
+    preservation): a Beta-pinned pin considers Release and Beta entries
+    only, never Alpha; an Alpha-pinned pin considers Release and Alpha
+    only. `accepted_channel` itself is validated against
+    `KNOWN_PRERELEASE_CHANNELS` below -- an unrecognised value (a
+    corrupt/invalid `version_type` on the pin's own currently-pinned
+    version, e.g. a typo'd string) is refused rather than silently
+    trusted as a real channel to widen into. Within the accepted set, a
+    release entry still wins over an accepted-channel one at equal or
+    higher semver precedence -- whichever has the higher precedence wins
+    regardless of type, so a pin still prefers an actual release the
+    moment its author publishes one.
 
     `None` means ONLY "no entry declaring (game_version, loader)
     compatibility exists at all for this project" -- genuinely nothing
@@ -242,6 +281,12 @@ def resolve_latest_compatible_version(mod_id, *, game_version, loader, fetcher):
       with a different remedy than the above (nothing a human bump can
       fix; only the mod author publishing a release helps).
     """
+    if accepted_channel != "release" and accepted_channel not in KNOWN_PRERELEASE_CHANNELS:
+        raise ValueError(
+            f"accepted_channel={accepted_channel!r} is not a recognised Modrinth version_type "
+            f"({KNOWN_PRERELEASE_CHANNELS | {'release'}}) -- refusing to treat an unrecognised "
+            "value as a channel safe to widen into"
+        )
     versions_json = fetch_project_versions(mod_id, game_version=game_version, loader=loader, fetcher=fetcher)
     if not isinstance(versions_json, list):
         raise CompatResolutionError(f"version list for {mod_id} was not a JSON array")
@@ -250,6 +295,18 @@ def resolve_latest_compatible_version(mod_id, *, game_version, loader, fetcher):
     best_normalized = None
     unparsable_count = 0
     prerelease_only_count = 0
+    # MINECRAFT-421 review, point 3, second round (comment 48554, P2): a
+    # cross-scheme ValueError used to just discard the newly-examined
+    # entry and keep whatever `best` happened to be picked first --
+    # which one of two mutually-incomparable candidates "wins" then
+    # depends entirely on the order Modrinth's API happened to return
+    # them in (reproduced live: [2.1.0, 2.1.0.3] selects 2.1.0; the
+    # reversed list selects 2.1.0.3). That is a silent, non-deterministic
+    # guess, not an absence of ambiguity. Tracked separately from
+    # `unparsable_count` so it is reported as its own explicit, always-
+    # fatal-when-triggered condition below, independent of iteration
+    # order and independent of what `best` ended up holding.
+    cross_scheme_ambiguous = False
     for entry in versions_json:
         if not isinstance(entry, dict):
             continue
@@ -259,8 +316,14 @@ def resolve_latest_compatible_version(mod_id, *, game_version, loader, fetcher):
             continue
         # Compatible by (game_version, loader) from here on -- now check
         # version_type, so a prerelease-only project can be told apart
-        # from a project with no compatible entry at all.
-        if entry.get("version_type") != "release":
+        # from a project with no compatible entry at all. An entry
+        # qualifies if it's a real release, OR its version_type EXACTLY
+        # matches accepted_channel (MINECRAFT-421, second round: exact
+        # match, not "any non-release" -- a Beta-pinned mod must never
+        # expand onto an Alpha candidate just because prereleases are
+        # accepted at all).
+        entry_channel = entry.get("version_type")
+        if entry_channel != "release" and entry_channel != accepted_channel:
             prerelease_only_count += 1
             continue
         candidate = version_candidate_from_json(entry)
@@ -270,10 +333,36 @@ def resolve_latest_compatible_version(mod_id, *, game_version, loader, fetcher):
         if parse_semver(normalized) is None:
             unparsable_count += 1
             continue
-        if best is None or compare_semver(normalized, best_normalized) > 0:
+        if best is None:
+            best = candidate
+            best_normalized = normalized
+            continue
+        try:
+            is_newer = compare_semver(normalized, best_normalized) > 0
+        except ValueError:
+            # compare_semver's own cross-scheme guard (MINECRAFT-421
+            # review, point 3): this entry and the current `best` are
+            # shaped differently (one is a four-numeric-component native
+            # version, the other is not) -- no evidence either scheme's
+            # precedence applies to the other, so this entry cannot be
+            # safely ranked against `best` either way. Marked ambiguous
+            # (see cross_scheme_ambiguous above), not allowed to crash
+            # this run and not silently resolved by discarding whichever
+            # one came second.
+            cross_scheme_ambiguous = True
+            continue
+        if is_newer:
             best = candidate
             best_normalized = normalized
 
+    if cross_scheme_ambiguous:
+        raise NoParseableCandidateError(
+            f"{mod_id} has multiple compatible version(s) using mutually-incomparable native "
+            "version schemes (e.g. a four-numeric-component scheme alongside a differently-"
+            "shaped one) -- refusing to silently pick one by API response order; this is a "
+            "genuine, deterministic ambiguity (needs a validated pinned scheme or the author "
+            "settling on one), not 'nothing newer upstream'"
+        )
     if best is not None:
         return best
     if unparsable_count > 0:

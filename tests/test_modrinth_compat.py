@@ -206,6 +206,130 @@ class TestResolveLatestCompatibleVersion(unittest.TestCase):
         candidate = resolve_latest_compatible_version("EXAMPLE", game_version="1.21.1", loader="neoforge", fetcher=fetcher)
         self.assertIsNone(candidate)
 
+    def test_cross_scheme_candidates_raise_a_deterministic_ambiguity_not_a_silent_pick(self):
+        # MINECRAFT-421 review, point 3, second round (comment 48554,
+        # P2): a prior round's guard correctly refused to RANK a
+        # four-component candidate against a differently-shaped one, but
+        # the resolver's own loop then just discarded whichever one it
+        # saw second and silently returned the other as "best" -- which
+        # one "wins" depended entirely on API response order. Reproduced
+        # live: [2.1.0, 2.1.0.3] selected 2.1.0; the reversed list
+        # selected 2.1.0.3. Both orderings below must now raise the SAME
+        # deterministic error instead of returning either version.
+        forward = mock.Mock(return_value=[
+            version_entry("OLD", "2.1.0"),
+            version_entry("NEW", "2.1.0.3"),
+        ])
+        reversed_order = mock.Mock(return_value=[
+            version_entry("NEW", "2.1.0.3"),
+            version_entry("OLD", "2.1.0"),
+        ])
+        for fetcher in (forward, reversed_order):
+            with self.assertRaises(modrinth_compat.NoParseableCandidateError):
+                resolve_latest_compatible_version("EXAMPLE", game_version="1.21.1", loader="neoforge", fetcher=fetcher)
+
+    def test_cross_scheme_ambiguity_also_triggers_for_v_prefixed_and_build_suffixed_shapes(self):
+        fetcher = mock.Mock(return_value=[
+            version_entry("OLD", "2.1.0"),
+            version_entry("NEW", "v2.1.0.3+build"),
+        ])
+        with self.assertRaises(modrinth_compat.NoParseableCandidateError):
+            resolve_latest_compatible_version("EXAMPLE", game_version="1.21.1", loader="neoforge", fetcher=fetcher)
+
+    def test_same_scheme_four_component_candidates_are_unaffected_by_the_ambiguity_guard(self):
+        # Positive control: real same-scheme entries (Biomes O'
+        # Plenty/GlitchCore's actual shape) must still resolve normally,
+        # in either order.
+        forward = mock.Mock(return_value=[
+            version_entry("OLD", "21.1.0.2"),
+            version_entry("NEW", "21.1.0.14"),
+        ])
+        reversed_order = mock.Mock(return_value=[
+            version_entry("NEW", "21.1.0.14"),
+            version_entry("OLD", "21.1.0.2"),
+        ])
+        for fetcher in (forward, reversed_order):
+            candidate = resolve_latest_compatible_version(
+                "EXAMPLE", game_version="1.21.1", loader="neoforge", fetcher=fetcher,
+            )
+            self.assertEqual(candidate.version_id, "NEW")
+
+
+class TestAcceptedChannelPreservation(unittest.TestCase):
+    """MINECRAFT-421 review, point 1 (second round, comment 48541):
+    `accepted_channel` lifts the release-only filter for a SINGLE call,
+    mirroring github_release_identity.resolve_latest_matching_release's
+    identical per-pin contract for GitHub-tracked pins -- but by EXACT
+    channel match, not a bare "any prerelease" boolean (a Beta-pinned pin
+    must never expand onto an Alpha candidate). This pack's real Biomes
+    O' Plenty/GlitchCore pins are the confirmed-live motivation -- see
+    poll-mod-updates.py's `_resolve_candidate_preserving_channel`, which
+    decides the exact value per pin, never a global default."""
+
+    def test_default_still_excludes_prerelease_negative(self):
+        fetcher = mock.Mock(return_value=[version_entry("V1", "1.0.0-alpha.1", version_type="alpha")])
+        with self.assertRaises(modrinth_compat.OnlyPrereleaseAvailableError):
+            resolve_latest_compatible_version("EXAMPLE", game_version="1.21.1", loader="neoforge", fetcher=fetcher)
+
+    def test_accepted_channel_resolves_a_prerelease_only_project_on_that_exact_channel_positive(self):
+        fetcher = mock.Mock(return_value=[version_entry("V1", "1.0.0-beta.1", version_type="beta")])
+        candidate = resolve_latest_compatible_version(
+            "EXAMPLE", game_version="1.21.1", loader="neoforge", fetcher=fetcher, accepted_channel="beta",
+        )
+        self.assertEqual(candidate.version_id, "V1")
+
+    def test_accepted_channel_does_not_expand_to_a_different_prerelease_channel_negative(self):
+        # A Beta-accepted pin must never pick up an Alpha candidate --
+        # that is an EXPANSION, not a preservation (review, point 2,
+        # second round).
+        fetcher = mock.Mock(return_value=[version_entry("V1", "1.0.0-alpha.1", version_type="alpha")])
+        with self.assertRaises(modrinth_compat.OnlyPrereleaseAvailableError):
+            resolve_latest_compatible_version(
+                "EXAMPLE", game_version="1.21.1", loader="neoforge", fetcher=fetcher, accepted_channel="beta",
+            )
+
+    def test_accepted_channel_still_prefers_a_real_release_when_newer(self):
+        fetcher = mock.Mock(return_value=[
+            version_entry("V1", "1.0.0-beta.1", version_type="beta"),
+            version_entry("V2", "1.1.0", version_type="release"),
+        ])
+        candidate = resolve_latest_compatible_version(
+            "EXAMPLE", game_version="1.21.1", loader="neoforge", fetcher=fetcher, accepted_channel="beta",
+        )
+        self.assertEqual(candidate.version_id, "V2")
+
+    def test_accepted_channel_picks_newest_on_that_channel_over_an_older_one(self):
+        fetcher = mock.Mock(return_value=[
+            version_entry("V1", "1.0.0-beta.1", version_type="beta"),
+            version_entry("V2", "1.1.0-beta.1", version_type="beta"),
+        ])
+        candidate = resolve_latest_compatible_version(
+            "EXAMPLE", game_version="1.21.1", loader="neoforge", fetcher=fetcher, accepted_channel="beta",
+        )
+        self.assertEqual(candidate.version_id, "V2")
+
+    def test_unrecognised_accepted_channel_is_refused(self):
+        fetcher = mock.Mock(return_value=[version_entry("V1", "1.0.0", version_type="release")])
+        with self.assertRaises(ValueError):
+            resolve_latest_compatible_version(
+                "EXAMPLE", game_version="1.21.1", loader="neoforge", fetcher=fetcher,
+                accepted_channel="surprise",
+            )
+
+    def test_mixed_stable_and_newer_accepted_channel_candidates_picks_the_newer_one(self):
+        # MINECRAFT-421 review, point 1, second round: an old stable
+        # RELEASE plus a newer candidate on the pin's own accepted
+        # channel must resolve to the newer one, not short-circuit on
+        # the release just because a release entry exists at all.
+        fetcher = mock.Mock(return_value=[
+            version_entry("OLD", "1.1.1", version_type="release"),
+            version_entry("NEW", "2.1.0-beta.2", version_type="beta"),
+        ])
+        candidate = resolve_latest_compatible_version(
+            "EXAMPLE", game_version="1.21.1", loader="neoforge", fetcher=fetcher, accepted_channel="beta",
+        )
+        self.assertEqual(candidate.version_id, "NEW")
+
 
 class TestMakeFetcher(unittest.TestCase):
     def test_no_token_sends_no_authorization_header(self):
