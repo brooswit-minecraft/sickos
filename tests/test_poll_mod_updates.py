@@ -482,6 +482,116 @@ class TestPollAndBump(unittest.TestCase):
         self.assertTrue(poll_mod_updates._is_expected_gap(excluded[0]))
 
 
+GITHUB_PIN_SLUG = "brooswit-minecraft/dynamic-despawn"
+GITHUB_PIN_REGEX = r"^.+\.jar$"
+
+
+class TestPollAndBumpGithubPins(unittest.TestCase):
+    """MINECRAFT-362 review, comment 48415: poll_and_bump must also
+    resolve packwiz-native [update.github] pins, sharing ONE
+    one-bump-per-run counter with the Modrinth loop above -- a Modrinth
+    bump this run means the GitHub loop does no work at all, not just
+    that it stops early."""
+
+    def setUp(self):
+        self.repo = build_fixture_repo()
+        self.modrinth = FakeModrinth()
+        pin_text = (
+            'name = "Dynamic Despawn"\n'
+            'filename = "dynamicdespawn-0.3.3.jar"\n'
+            'side = "both"\n'
+            "\n"
+            "[download]\n"
+            f'url = "https://github.com/{GITHUB_PIN_SLUG}/releases/download/v0.3.3/dynamicdespawn-0.3.3.jar"\n'
+            'hash-format = "sha256"\n'
+            f'hash = "{"a" * 64}"\n'
+            "\n"
+            "[update]\n"
+            "[update.github]\n"
+            f'slug = "{GITHUB_PIN_SLUG}"\n'
+            'tag = "v0.3.3"\n'
+            f'branch = "{"a" * 40}"\n'
+            + r'regex = "^.+\\.jar$"' + "\n"
+        )
+        (self.repo / "mods" / "dynamic-despawn.pw.toml").write_text(pin_text, encoding="utf-8")
+        _git(self.repo, "add", "-A")
+        _git(self.repo, "commit", "-q", "-m", "add github-tracked pin")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.repo, ignore_errors=True)
+
+    def run_poll(self, *, release=None):
+        release = release or self._release(tag="v0.3.3")
+        original_run_engine = poll_mod_updates.bump_mod.run_engine
+
+        def patched_run_engine(repo_root, pin, candidate, **kwargs):
+            kwargs["metadata_fetcher"] = self.modrinth.single_fetcher
+            kwargs["gate_commands"] = STUB_GATES
+            kwargs["downloader"] = self.modrinth.downloader
+            return original_run_engine(repo_root, pin, candidate, **kwargs)
+
+        original_github_run_engine = poll_mod_updates.bump_mod_github.run_engine
+
+        def patched_github_run_engine(repo_root, pin, candidate, **kwargs):
+            kwargs["gate_commands"] = STUB_GATES
+            return original_github_run_engine(repo_root, pin, candidate, **kwargs)
+
+        with mock.patch.object(
+            poll_mod_updates.bump_mod, "run_engine", side_effect=patched_run_engine,
+        ), mock.patch.object(
+            poll_mod_updates.bump_mod_github, "run_engine", side_effect=patched_github_run_engine,
+        ), mock.patch.object(
+            poll_mod_updates.github_release_identity, "fetch_releases_json", return_value=[release],
+        ), mock.patch.object(
+            poll_mod_updates.github_release_identity, "fetch_release_by_tag_json",
+            return_value={"tag_name": "v0.3.3"},
+        ), mock.patch.object(
+            poll_mod_updates.github_release_identity, "resolve_source_sha", return_value="b" * 40,
+        ), mock.patch.object(
+            poll_mod_updates.github_release_identity, "download_and_verify_sha256",
+            return_value=b"new despawn jar",
+        ):
+            return poll_mod_updates.poll_and_bump(self.repo, fetcher=self.modrinth.list_fetcher)
+
+    def _release(self, *, tag="v0.3.4", content=b"new despawn jar"):
+        return {
+            "tag_name": tag,
+            "assets": [{
+                "name": f"dynamicdespawn-{tag.lstrip('v')}.jar",
+                "digest": "sha256:" + hashlib.sha256(content).hexdigest(),
+                "browser_download_url": "https://example.invalid/asset.jar",
+                "size": len(content),
+            }],
+            "created_at": "2026-02-01T00:00:00Z", "draft": False, "prerelease": False,
+            "target_commitish": "b" * 40, "body": "",
+        }
+
+    def test_github_pin_bumps_when_nothing_newer_on_modrinth_side(self):
+        outcomes = self.run_poll(release=self._release())
+        by_path = {o["pin_path"]: o for o in outcomes}
+        self.assertEqual(by_path["mods/dynamic-despawn.pw.toml"]["outcome"], "bumped")
+        pin_text = (self.repo / "mods" / "dynamic-despawn.pw.toml").read_text(encoding="utf-8")
+        self.assertIn('tag = "v0.3.4"', pin_text)
+
+    def test_no_candidate_when_already_at_latest(self):
+        outcomes = self.run_poll()  # default release is already v0.3.3, the pinned tag
+        by_path = {o["pin_path"]: o for o in outcomes}
+        self.assertEqual(by_path["mods/dynamic-despawn.pw.toml"]["outcome"], "already_pinned")
+
+    def test_a_modrinth_bump_this_run_means_the_github_loop_does_no_work_at_all(self):
+        self.modrinth.register_latest("ALPHA1", "ALPHANEW", "1.1.0", b"alpha v2")
+        self.modrinth.register_old_pin_metadata("ALPHAOLD", "ALPHA1", "1.0.0")
+        # The ALPHA1 Modrinth pin sorts before dynamic-despawn.pw.toml
+        # alphabetically, so it bumps first and the shared `bumped`
+        # counter must skip the GitHub loop entirely -- it never even
+        # calls out to discover a candidate for dynamic-despawn.
+        outcomes = self.run_poll(release=self._release())
+        by_path = {o["pin_path"]: o for o in outcomes}
+        self.assertEqual(by_path["mods/alpha-mod.pw.toml"]["outcome"], "bumped")
+        self.assertNotIn("mods/dynamic-despawn.pw.toml", by_path)
+
+
 class TestMainExitCode(unittest.TestCase):
     """Exercises main()'s pass/fail classification directly (item 2,
     MINECRAFT-362 review second round) without touching Modrinth or git --
@@ -744,13 +854,21 @@ class TestMainExitCode(unittest.TestCase):
     def test_known_untracked_pin_is_an_expected_gap(self):
         # A pin on KNOWN_UNTRACKED_PIN_PATHS (no [update.modrinth] table,
         # a documented, standing gap) must warn, not fail.
-        known_untracked_path = next(iter(poll_mod_updates.KNOWN_UNTRACKED_PIN_PATHS))
+        # KNOWN_UNTRACKED_PIN_PATHS is empty on main today (MINECRAFT-362
+        # review, twenty-third round: its last 4 real entries all gained
+        # a native [update.github] table) -- patch in a throwaway one so
+        # this test still exercises the reconciliation mechanism itself,
+        # independent of whether anything real currently sits on the list.
+        known_untracked_path = "mods/some-future-untracked-pin.pw.toml"
         outcomes = [
             self._HEALTHY_PIN,
             {"mod_id": None, "mod_name": "Untracked", "pin_path": known_untracked_path,
              "outcome": "untracked", "error": "no [update.modrinth] table; not Modrinth-tracked"},
         ]
-        exit_code, output = self._run_main_with(outcomes)
+        with mock.patch.object(
+            poll_mod_updates, "KNOWN_UNTRACKED_PIN_PATHS", {known_untracked_path: "Some Future Untracked Pin"},
+        ):
+            exit_code, output = self._run_main_with(outcomes)
         self.assertEqual(exit_code, 0)
         self.assertIn(f"::warning::Untracked ({known_untracked_path})", output)
 

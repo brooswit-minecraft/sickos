@@ -6,3 +6,10 @@ side = "both"
 url = "https://github.com/brooswit-minecraft/dynamic-whips/releases/download/v0.7.0/dynamicwhips-0.7.0.jar"
 hash-format = "sha512"
 hash = "7b4caa0d58502452872613f623235cb6c27bfb6e9941cfe42223eba5437bc2dac6752f746ba98726565b4302372308d915cef3090c055aea3a208584e19879a5"
+
+[update]
+[update.github]
+slug = "brooswit-minecraft/dynamic-whips"
+tag = "v0.7.0"
+branch = "b8c5fd815b5992a96f2a8ba664130eebbf4acdca"
+regex = "^.+(?<!-api|-dev|-dev-preshadow|-sources)\\.jar$"

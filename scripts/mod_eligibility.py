@@ -12,30 +12,49 @@ Enrollment mechanism: a packwiz pin under mods/*.pw.toml with an
 Modrinth-tracked auto-update -- mod-id/version are exactly the fields
 packwiz itself uses to know what a pin tracks, so this reuses the pack's
 own existing metadata instead of inventing a second parallel enrollment
-file that could drift from it.
+file that could drift from it. A pin with an [update.github] table is
+enrolled the same way, for the GitHub-release-asset identity mechanism
+scripts/github_release_identity.py and scripts/bump_mod_github.py
+implement -- using packwiz's OWN native [update.github] schema (`slug`,
+`tag`, `branch`, `regex`; see github/updater.go in packwiz itself), not
+an invented owner/repo pair. This repo's 7 real [update.github] pins
+already use this native shape (confirmed by reading them directly), and
+every one of them stores `branch` as a frozen, exact 40-hex commit SHA
+rather than a mutable branch name -- MINECRAFT-362 review (comment
+48415): verified against pinned packwiz revision dfd8b68a, packwiz's own
+ghUpdater.CheckUpdate calls getLatestRelease(slug, branch), which --
+whenever branch is non-empty -- filters for a release whose OWN
+target_commitish equals that exact string and returns nothing otherwise.
+A release's target_commitish is essentially never going to equal an
+old, frozen SHA again, so bare `packwiz update` can never discover a new
+release for any of these pins as configured; this module and
+scripts/github_release_identity.py discover independently of `branch`
+entirely (see discover_github_pins and resolve_latest_matching_release),
+using it only as the write path's own record of exactly which source
+commit the CURRENTLY pinned jar was built from -- the one property these
+pins' authors clearly cared about enough to freeze. The ticket owner's
+own decision on comment 47927 (scope) and comment 48415 (schema) of
+MINECRAFT-362 was that these mods belong in THIS ticket's scope, reusing
+the shared fail-closed gates against packwiz's real schema -- not a
+separate ticket, and not an invented one.
 
-Two explicit kinds of exclusion, both read from this one place:
+Three explicit kinds of exclusion/enrollment, all read from this one
+place:
 - EXCLUDED_MOD_NAMES: local-only addons that must never be pulled into the
   public pack (Herobrine API, Baritone -- MINECRAFT-362's own requirement).
   Neither currently has a pin under mods/ at all (confirmed by inspecting
   this repo directly), so this list is defence in depth: if one were ever
   mistakenly added as a pin, discover_eligible_pins excludes it by name
   rather than silently enrolling it.
-- Pins with no [update.modrinth] table are not Modrinth-tracked at all, so
-  they are reported separately (see UNTRACKED_KIND) rather than silently
-  dropped -- at the time of writing this is 4 pins: mods/dynamic-despawn.pw.toml
-  and mods/magicavoxel-loader.pw.toml (GitHub-release-only first-party mods),
-  plus mods/dynamic-battle-axes.pw.toml and mods/dynamic-whips.pw.toml (added
-  since this count was first written; same reason -- no [update.modrinth]
-  table). Verifying a GitHub release's identity/hash is a different, not yet
-  implemented, mechanism (GitHub's release-asset API, not Modrinth's
-  version-file metadata) -- out of scope for this pass; callers should
-  surface them as a known gap, not pretend they are covered. This count
-  is a snapshot of mods/ at the time of writing, not a guarantee -- call
-  discover_eligible_pins() and read its own `untracked` list rather than
-  trusting a number in a docstring to stay current (MINECRAFT-362 review,
-  ninth round: a prior version of this docstring undercounted this by
-  half).
+- Pins with an [update.github] table are GitHub-release-tracked (see
+  discover_github_pins below), not reported as untracked.
+- Pins with neither table are not tracked by ANY mechanism this module
+  knows about, so they are reported separately (see UNTRACKED_KIND)
+  rather than silently dropped. This is a snapshot of mods/ at the time
+  of writing, not a guarantee -- call discover_eligible_pins() and read
+  its own `untracked` list rather than trusting a number in a docstring
+  to stay current (MINECRAFT-362 review, ninth round: a prior version of
+  this docstring undercounted this by half).
 """
 
 from __future__ import annotations
@@ -66,13 +85,31 @@ class UntrackedPin:
     reason: str
 
 
+@dataclass(frozen=True)
+class GithubPin:
+    pin_path: str  # relative to repo root
+    name: str
+    side: str
+    slug: str  # "owner/repo", packwiz's own [update.github].slug field verbatim
+    pinned_tag: str
+    pinned_source: str  # [update.github].branch verbatim -- see this module's own
+    # docstring: in every real pin today this is an exact, frozen 40-hex commit SHA,
+    # not a mutable branch name, and is NEVER used to filter discovery (that would
+    # reproduce packwiz's own freeze bug) -- only written back by the bump engine as
+    # a record of which source commit the CURRENTLY pinned jar was built from.
+    regex: str  # [update.github].regex verbatim -- the asset-name filter
+
+
 def discover_eligible_pins(repo_root: Path) -> tuple[list[EligiblePin], list[UntrackedPin]]:
     """Scan mods/*.pw.toml and split it into (eligible, untracked).
 
     `eligible` pins have an [update.modrinth] table and are not in
     EXCLUDED_MOD_NAMES. `untracked` pins exist under mods/ but have no
-    Modrinth tracking this module can verify against -- callers must
-    report these as a gap, never silently skip them.
+    tracking mechanism this module knows about at all -- callers must
+    report these as a gap, never silently skip them. A pin with an
+    [update.github] table is tracked too (see discover_github_pins
+    below), so it is excluded from BOTH lists here, not reported as
+    untracked -- MINECRAFT-362 review, twenty-second round.
     """
     mods_dir = Path(repo_root) / "mods"
     eligible: list[EligiblePin] = []
@@ -87,22 +124,75 @@ def discover_eligible_pins(repo_root: Path) -> tuple[list[EligiblePin], list[Unt
             untracked.append(UntrackedPin(relative, name, "excluded local-only mod"))
             continue
 
-        modrinth = data.get("update", {}).get("modrinth") if isinstance(data.get("update"), dict) else None
-        if not isinstance(modrinth, dict) or not modrinth.get("mod-id"):
-            untracked.append(UntrackedPin(relative, name, "no [update.modrinth] table; not Modrinth-tracked"))
+        update = data.get("update", {}) if isinstance(data.get("update"), dict) else {}
+        modrinth = update.get("modrinth")
+        if isinstance(modrinth, dict) and modrinth.get("mod-id"):
+            eligible.append(
+                EligiblePin(
+                    pin_path=relative,
+                    name=name,
+                    side=data.get("side", "both"),
+                    mod_id=modrinth["mod-id"],
+                    pinned_version_id=modrinth.get("version", ""),
+                )
+            )
             continue
 
-        eligible.append(
-            EligiblePin(
+        github = update.get("github")
+        if isinstance(github, dict) and github.get("slug"):
+            continue  # tracked -- see discover_github_pins
+
+        untracked.append(UntrackedPin(relative, name, "no [update.modrinth]/[update.github] table; untracked"))
+
+    return eligible, untracked
+
+
+def discover_github_pins(repo_root: Path) -> list[GithubPin]:
+    """Scan mods/*.pw.toml for pins with an [update.github] table (native
+    packwiz schema -- `slug`, `tag`, `branch`, `regex`; see this module's
+    own docstring): the GitHub-release-asset analogue of
+    discover_eligible_pins' Modrinth path. Deliberately a SEPARATE
+    function, not a third element of discover_eligible_pins' return
+    tuple -- that tuple's shape is a stable contract scripts/bump_mod.py's
+    CLI and scripts/poll-mod-updates.py's Modrinth loop already depend
+    on, and there is no reason a Modrinth-only caller should need to
+    learn about or ignore a third list it never uses.
+
+    `tag` and `branch` may legitimately be absent/empty on a pin that has
+    never been through this engine before (MINECRAFT-362 review, comment
+    48415's "add verified tracking for Despawn/MagicaVoxel/Battle Axes"):
+    enrollment only requires `slug`, matching packwiz's own ParseUpdate,
+    which has no required-field validation beyond what mapstructure
+    gives it for free. A missing `regex` also enrolls (packwiz allows it,
+    though an empty pattern would behave as "matches every asset name" if
+    actually compiled) -- scripts/github_release_identity.py's own asset
+    matcher fails closed with a clear message if `regex` is empty or not
+    the one shape it understands, rather than silently matching
+    everything."""
+    mods_dir = Path(repo_root) / "mods"
+    github_pins: list[GithubPin] = []
+    for pin_path in sorted(mods_dir.glob("*.pw.toml")):
+        relative = f"mods/{pin_path.name}"
+        data = tomllib.loads(pin_path.read_text(encoding="utf-8"))
+        name = data.get("name", pin_path.stem)
+        if name in EXCLUDED_MOD_NAMES:
+            continue
+        update = data.get("update", {}) if isinstance(data.get("update"), dict) else {}
+        github = update.get("github")
+        if not isinstance(github, dict) or not github.get("slug"):
+            continue
+        github_pins.append(
+            GithubPin(
                 pin_path=relative,
                 name=name,
                 side=data.get("side", "both"),
-                mod_id=modrinth["mod-id"],
-                pinned_version_id=modrinth.get("version", ""),
+                slug=github["slug"],
+                pinned_tag=github.get("tag", ""),
+                pinned_source=github.get("branch", ""),
+                regex=github.get("regex", ""),
             )
         )
-
-    return eligible, untracked
+    return github_pins
 
 
 def read_pack_targets(repo_root):

@@ -6,3 +6,10 @@ side = "both"
 url = "https://github.com/brooswit-minecraft/dynamic-despawn/releases/download/v0.3.3/dynamicdespawn-0.3.3.jar"
 hash-format = "sha512"
 hash = "cb976a6af665a014ba622718ca5d596eac795ad47a70d5bea28e2a310aab7f3ca8f90e956bc871919fbd8ea68743e08affbaa31813e7a7061238b1fe471eb5ab"
+
+[update]
+[update.github]
+slug = "brooswit-minecraft/dynamic-despawn"
+tag = "v0.3.3"
+branch = "35c4e76ec10ac3558f3a5aba327505c59529f404"
+regex = "^.+(?<!-api|-dev|-dev-preshadow|-sources)\\.jar$"

@@ -29,20 +29,20 @@ and splits them into:
     moment one of these intentionally-excluded pins exists, defeating
     the exclusion mechanism this ticket itself requires (thirteenth
     review round).
-  - No `[update.modrinth]` table: a GitHub-release-only first-party mod.
-    At the time of writing this is 4 pins: `dynamic-despawn.pw.toml` and
-    `magicavoxel-loader.pw.toml`, plus `dynamic-battle-axes.pw.toml` and
-    `dynamic-whips.pw.toml` (added since this count was first written).
-    Verifying a GitHub release's identity needs a different mechanism
-    (GitHub's release-asset API, not Modrinth's version-file metadata) --
-    **not implemented**; these 4 mods are not covered by anything in this
-    document yet. `scripts/poll-mod-updates.py` reports each as its own
-    `"untracked"` outcome every run (not silently dropped) and reconciles
-    the set against `KNOWN_UNTRACKED_PIN_PATHS` by `pin_path`, the same
-    way the four Modrinth-side gap classes below are reconciled by
-    `mod_id` -- a pin newly losing its `[update.modrinth]` table is a
-    coverage regression, not a known gap, and fails the run (twelfth
-    review round).
+  - No `[update.modrinth]` table AND no `[update.github]` table of any
+    shape: genuinely untracked by every mechanism this repo has. At the
+    time of writing this is 0 pins -- the 4 that used to be here
+    (`dynamic-despawn.pw.toml`, `magicavoxel-loader.pw.toml`,
+    `dynamic-battle-axes.pw.toml`, `dynamic-whips.pw.toml`) all gained a
+    real, native-schema `[update.github]` table in the twenty-third
+    review round; see "GitHub-release-only managed mods" below.
+    `scripts/poll-mod-updates.py` still reports a pin in this shape as
+    its own `"untracked"` outcome every run (not silently dropped) and
+    reconciles the set against `KNOWN_UNTRACKED_PIN_PATHS` (currently
+    empty) by `pin_path`, the same way the four Modrinth-side gap classes
+    below are reconciled by `mod_id` -- a pin newly losing ALL tracking
+    is a coverage regression, not a known gap, and fails the run
+    (twelfth review round).
 
 ## Compatibility and no-downgrade resolution
 
@@ -247,28 +247,96 @@ candidate jar's real manifest correctly refusing a real pack is exactly
 as unpredictable per-candidate as those two, so a poll run hitting it
 should not hard-fail the whole run any more than they do.
 
-## GitHub-release-only managed mods -- explicit scope gap (twenty-second review round)
+## GitHub-release-only managed mods (twenty-third review round)
 
-Four managed mods have a packwiz pin with no `[update.modrinth]` table
-at all -- `dynamic-despawn`, `magicavoxel-loader`, `dynamic-battle-axes`,
-`dynamic-whips` (GitHub-release-only first-party mods; see
-`scripts/mod_eligibility.py`'s own docstring, which has tracked this
-exact count across several rounds). `discover_eligible_pins` already
-reports each as `UntrackedPin`, and `poll-mod-updates.py` already
-surfaces that honestly (`"untracked"`, not silently skipped) -- so
-nothing about these four mods causes a false "all clear."
+Four managed mods ship jars as GitHub Release assets rather than through
+Modrinth -- `dynamic-despawn`, `magicavoxel-loader`, `dynamic-battle-axes`,
+`dynamic-whips`. All four, and three OTHER managed mods that DO have
+GitHub-release pins for reasons unrelated to this ticket (`dynamic-
+atmosphere`'s own pin, `dynamic-backpacks`, `dynamic-population`,
+`dynamic-terrain`, `dynamic-vehicles`, `isometric-camera` -- confirmed by
+reading `origin/main` directly), are tracked via packwiz's OWN native
+`[update.github]` pin schema: `slug` (`"owner/repo"`), `tag` (the
+currently-pinned release tag), `branch` (see below), `regex` (an
+asset-name filter). This is NOT an invented schema -- an earlier round of
+this ticket built one (`owner`/`repo` fields) before checking it against
+real pins, and comment 48415 on MINECRAFT-362 corrected it to match
+packwiz's actual shape (`github/updater.go` in packwiz itself).
 
-But no automated verified-release path reaches them: Modrinth's
-version-file API (`sha1`/`sha512`/`download_url`, the identity this
-whole ticket's fail-closed shape is built on) has no GitHub equivalent
-wired up here. Building one would mean a THIRD source of truth (GitHub's
-release-asset API, different auth/hash/identity shape from Modrinth's)
-feeding the same write paths, which both the GitHub-review persona (Jira
-comment 47919, task-review-opus) and this round's own judgment agree
-should not be built as a 22nd-round addendum without the ticket owner
-explicitly deciding it belongs in this ticket's scope at all -- rather
-than a separate, dedicated ticket. See the round-22 Jira comment for the
-explicit scope-adjustment request posed to the owner.
+**Why bare `packwiz update github` cannot do this job.** Verified against
+pinned packwiz revision `dfd8b68a4796c763e25bad50265ea1f1233e24f1`:
+`ghUpdater.CheckUpdate` calls `getLatestRelease(slug, branch)`, which --
+whenever `branch` is non-empty -- filters the repository's releases down
+to the one whose own `target_commitish` equals that exact string, and
+returns an error otherwise. Every real `[update.github]` pin in this pack
+stores `branch` as a frozen, exact 40-hex commit SHA (the source commit
+the CURRENTLY pinned jar was built from), and a brand-new release's own
+`target_commitish` essentially never equals an old, frozen SHA again --
+so bare `packwiz update github` can never discover a new release for any
+of these pins as configured. Separately, `ghUpdater.DoUpdate` discards
+`CheckUpdate`'s own regex-selected asset and picks "the last asset ending
+in `.jar`" from the release's full, UNFILTERED asset list instead (see
+that function's own `// yes, this is duplicated` comment) -- a real
+correctness gap if a release ever has more than one matching asset
+differently ordered than intended. `github/install.go`'s own hashing
+(`Asset.getSha256`) hashes whatever bytes it downloads but never compares
+them against GitHub's own `digest` field on the asset -- no independent
+tamper check. None of this makes packwiz "broken" for its own intended
+use (a human running `packwiz update` interactively, who can see and
+correct a wrong pick); it is simply the wrong tool for an unattended,
+fail-closed write path, for the same reason this whole ticket does not
+reuse packwiz's own Modrinth updater either.
+
+**What `scripts/github_release_identity.py` and `scripts/
+bump_mod_github.py` do instead**, reusing the same shared fail-closed
+gates (identity → digest verification of downloaded bytes → dependency
+closure → runtime compatibility → refresh/check/build → commit; no
+commit if any step fails) every other write path in this ticket gets:
+
+- Discovery (`resolve_latest_matching_release`) lists ALL of a slug's
+  releases, keeps only non-draft/non-prerelease ones, and picks the
+  newest by `created_at` -- explicitly re-sorted, not trusted to already
+  be ordered that way by the API. It takes no `branch`/`pinned_source`
+  argument at all: it is completely independent of the pin's own frozen
+  `branch` value, which is exactly what avoids packwiz's own freeze bug
+  above.
+- Asset selection (`match_asset`) evaluates the pin's own `regex` against
+  the release's asset names, but only understands the one shape every
+  real pin in this pack actually uses today -- `^.+(?<!SUF1|SUF2|...)\.jar$`
+  (packwiz's own install-command default) or the plain `^.+\.jar$` --
+  because Python's stdlib `re` cannot evaluate a variable-width negative
+  lookbehind alternation at all, and this repo is stdlib-only (see
+  `bump-dynamic-atmosphere.py`'s own docstring). Zero or multiple matches
+  fails closed (`no_parseable_candidate`), same "exactly one unambiguous
+  file" shape the Modrinth path already requires. An exotic regex this
+  module does not recognize also fails closed with a clear message,
+  rather than being silently mis-evaluated.
+- Identity (`sha256` from GitHub's own `assets[].digest`) is verified
+  against the downloaded bytes the same way DA's `sha1`/`sha512` is.
+- On a real bump, the NEW release's own `target_commitish` is resolved to
+  an immutable commit SHA (`resolve_source_sha`) -- already a bare
+  40-hex SHA, returned as-is; a mutable ref (the real
+  `magicavoxel-loader` pin's `target_commitish` is the branch name
+  `MINECRAFT-284`, confirmed live) resolved via GitHub's commits API --
+  and written to the new pin's `branch` field. `branch` is written-only
+  from the write path's own perspective: nothing in this engine ever
+  reads it back for discovery.
+- No Modrinth-style `find_dependency_conflicts` (GitHub releases carry no
+  structured dependency metadata to check against); required-dependency
+  satisfaction is still fully covered by the real-jar `dependency_closure`
+  gate every write path shares. No changelog-heading category escalation
+  (free-form prose, no measured heading convention); category comes from
+  the semver delta alone. No `--allow-breaking`/migration-text CLI path
+  yet -- none of these mods has shipped a major-version release to design
+  against; the `breaking_change_requires_human_review` gate refuses one
+  unattended, same as the Modrinth path's own gate, until a real case
+  exists to design a CLI around.
+
+`scripts/poll-mod-updates.py`'s scheduled poll resolves these pins too,
+sharing ONE one-bump-per-run counter with its Modrinth loop: a Modrinth
+bump this run means the GitHub loop runs no code at all this run, not
+just that it stops early -- the same "at most one `release.yml` run per
+poll" contract the Modrinth loop's own docstring already describes.
 
 ## Identity/hash verification -- shared with DA, not duplicated
 
@@ -762,17 +830,16 @@ lists (`KNOWN_ANONYMOUS_404_MOD_IDS`, `KNOWN_NON_SEMVER_PIN_NAMES`,
 each clause skips itself when its list is empty (sixteenth review round
 -- `KNOWN_ANONYMOUS_404_MOD_IDS` is currently empty, see below, and a
 hardcoded "0 pins ... ()" clause printed on every run would itself have
-been a standing false claim). As of this writing that is 16 pins across
-the four non-empty lists: the 3 non-semver ones need either a human
-bump or a different comparator this document does not attempt; the 5
-no-parseable-candidate ones have NO parseable version published on
-Modrinth at all, so a human bump cannot fix them either -- only a
-different comparator this document does not attempt would; the 4
-only-prerelease ones have never published a release build for this
-target and need the mod author to publish one, not a human bump; and
-the 4 untracked ones have no `[update.modrinth]` table at all and need
-a GitHub-release-based identity check this mechanism does not
-implement, so only a human bump covers them today. Deliberately NOT
+been a standing false claim). As of this writing that is 12 pins across
+the three non-empty lists (`KNOWN_UNTRACKED_PIN_PATHS` is now empty --
+see "GitHub-release-only managed mods" below): the 3 non-semver ones
+need either a human bump or a different comparator this document does
+not attempt; the 5 no-parseable-candidate ones have NO parseable version
+published on Modrinth at all, so a human bump cannot fix them either --
+only a different comparator this document does not attempt would; and
+the 4 only-prerelease ones have never published a release build for this
+target and need the mod author to publish one, not a human bump.
+Deliberately NOT
 named here: a pin matching `EXCLUDED_MOD_NAMES` (Herobrine API,
 Baritone) reports its own `"excluded_local_only"` outcome but is not a
 coverage gap at all -- it is a permanent, intentional non-enrollment,
@@ -1102,14 +1169,15 @@ runs, not a captured sha from whenever the job was first queued.
   requirement (a dependency of a dependency) or a semver RANGE against
   anything beyond one level of pinned/nested jars. That fuller graph
   solve remains out of scope.
-- The 4 GitHub-release-only mods (`dynamic-despawn`, `magicavoxel-loader`,
-  `dynamic-battle-axes`, `dynamic-whips`) have no verified-identity
-  mechanism at all yet -- a different source (GitHub's release-asset API,
-  not Modrinth's version-file metadata) would be needed, and nothing here
-  builds it. `scripts/poll-mod-updates.py` reports each as a standing
-  `"untracked"` gap every run (see "Enrollment" above) so this remains a
-  known, reconciled gap rather than a silent one; a human bump is the
-  only remedy today.
+- The GitHub-release-only mods (`dynamic-despawn`, `magicavoxel-loader`,
+  `dynamic-battle-axes`, `dynamic-whips`) now have a verified-identity
+  mechanism (`scripts/github_release_identity.py`, `scripts/
+  bump_mod_github.py` -- see "GitHub-release-only managed mods" above),
+  wired into `scripts/poll-mod-updates.py`'s scheduled poll. Not yet
+  exercised against a REAL new release for any of these mods (every one
+  is currently already at its own latest release) -- that first live run
+  is the same kind of gap "No live run of either mechanism" below already
+  names for the generalized Modrinth path.
 - **Dynamic Population**: explicitly deferred per this ticket's own
   prerequisite -- it is not added through this or any path until
   MINECRAFT-29's Fillager integration lands and a compatible verified

@@ -76,6 +76,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import bump_mod  # noqa: E402 - needs sys.path set up first
+import bump_mod_github  # noqa: E402
+import github_release_identity  # noqa: E402
 import mod_eligibility  # noqa: E402
 import modrinth_compat  # noqa: E402
 
@@ -217,24 +219,19 @@ KNOWN_ONLY_PRERELEASE_PIN_IDS = {
     "e0bNACJD": "Serene Seasons", "kkmrDlKT": "TerraBlender",
 }
 
-# 4 pins: mod_eligibility.discover_eligible_pins reports these as
-# `untracked` -- no [update.modrinth] table at all, so there is no
-# mod_id to key the other four lists by. Keyed by pin_path instead
-# (MINECRAFT-362 review, twelfth round: a prior round's _is_expected_gap
-# reconciled four gap-shaped outcomes against their own static lists by
-# mod_id, but poll_and_bump discarded discover_eligible_pins' own
-# `untracked` list entirely, so a pin silently losing its
-# [update.modrinth] table -- the one route that drops coverage without
-# producing ANY outcome at all -- was invisible to every one of this
-# module's guards). Each of these needs a GitHub-release-based identity
-# check (not yet implemented, see mod_eligibility.py) before it can be
-# auto-bumped at all; a human bump is the only remedy today.
-KNOWN_UNTRACKED_PIN_PATHS = {
-    "mods/dynamic-battle-axes.pw.toml": "Dynamic Battle Axes",
-    "mods/dynamic-despawn.pw.toml": "Dynamic Despawn",
-    "mods/dynamic-whips.pw.toml": "Dynamic Whips",
-    "mods/magicavoxel-loader.pw.toml": "MagicaVoxel Loader",
-}
+# Previously 4 pins (Dynamic Battle Axes, Dynamic Despawn, Dynamic
+# Whips, MagicaVoxel Loader) with no [update.modrinth] table and no
+# [update.github] table of ANY shape -- mod_eligibility.
+# discover_eligible_pins reported these as `untracked`, with no mod_id
+# to key the other four lists by, so this one was keyed by pin_path
+# instead (MINECRAFT-362 review, twelfth round). Emptied in the
+# twenty-third round (comment 48415): all 4 now carry a real,
+# native-schema [update.github] table (see mod_eligibility.py's own
+# docstring) and are covered by discover_github_pins/scripts/
+# bump_mod_github.py instead -- re-add an entry here only if a pin
+# genuinely loses ALL tracking again, with live evidence, same
+# discipline as every other KNOWN_* list in this module.
+KNOWN_UNTRACKED_PIN_PATHS = {}
 
 # Display-only convenience views, built from the dicts above so there is
 # one source of truth for membership AND display text.
@@ -414,6 +411,8 @@ def poll_and_bump(repo_root, *, token=None, fetcher=None, run_command=subprocess
             "changed": False, "error": pin.reason,
         })
 
+    bumped = False
+
     for pin in eligible:
         if pin.pin_path in EXCLUDED_PIN_PATHS:
             outcomes.append({
@@ -499,7 +498,67 @@ def poll_and_bump(repo_root, *, token=None, fetcher=None, run_command=subprocess
         # Stop here (see this module's and poll_and_bump's docstrings):
         # at most one bump commit per run, so at most one release.yml run
         # is ever triggered by this workflow at a time.
+        bumped = True
         break
+
+    # GitHub-release-tracked pins (MINECRAFT-362 review, comment 48415):
+    # same one-bump-per-run contract as the Modrinth loop above, sharing
+    # ONE counter across both loops -- a Modrinth bump this run means
+    # this loop is skipped entirely, not just stopped early, so a run
+    # never commits twice regardless of which mechanism found the
+    # update. discover_github_pins is read AFTER the Modrinth loop
+    # decides whether anything already bumped, not before, so a run that
+    # bumps a Modrinth pin does the minimum GitHub-side work (none) --
+    # mirrors the existing contract rather than adding a new one.
+    if not bumped:
+        for pin in mod_eligibility.discover_github_pins(repo_root):
+            if pin.pin_path in EXCLUDED_PIN_PATHS:
+                outcomes.append({
+                    "mod_name": pin.name, "mod_id": None, "pin_path": pin.pin_path,
+                    "outcome": "excluded_pin_path", "changed": False,
+                    "error": "pin_path explicitly excluded via EXCLUDED_PIN_PATHS",
+                })
+                continue
+
+            outcome = {"mod_name": pin.name, "mod_id": None, "pin_path": pin.pin_path}
+            try:
+                candidate = github_release_identity.resolve_latest_matching_release(pin.slug, pin.regex)
+            except github_release_identity.GithubIdentityError as error:
+                outcome.update(outcome=error.outcome, changed=False, error=error.message)
+                outcomes.append(outcome)
+                continue
+
+            try:
+                summary, exit_code, message = bump_mod_github.run_engine(
+                    repo_root, pin, candidate, run_command=run_command,
+                )
+            except bump_mod_github.EngineError as error:
+                outcome.update(outcome=error.outcome, changed=False, error=error.message)
+                outcomes.append(outcome)
+                continue
+
+            if not summary["changed"]:
+                outcome.update(outcome=summary["outcome"], changed=False, error=None)
+                outcomes.append(outcome)
+                continue
+
+            commit_message = bump_mod_github.build_github_commit_message(
+                mapping_rule=summary["mapping_rule"], new_pack_version=summary["new_pack_version"],
+                mod_name=pin.name, slug=pin.slug, tag=summary["candidate_tag"],
+                version_number=summary["candidate_version_number"],
+            )
+            commit_paths = ("pack.toml", "index.toml", pin.pin_path, summary["notes_path"])
+            commit_sha = commit_bump(repo_root, commit_message, commit_paths, run_command=run_command)
+            outcome.update(
+                outcome="bumped", changed=True, error=None,
+                new_pack_version=summary["new_pack_version"],
+                mapping_rule=summary["mapping_rule"],
+                commit_sha=commit_sha,
+                listing_review_required=summary["listing_review_required"],
+            )
+            outcomes.append(outcome)
+            bumped = True
+            break
 
     return outcomes
 
