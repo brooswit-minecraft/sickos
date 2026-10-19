@@ -1,0 +1,13 @@
+name = "Immersive Caves"
+filename = "immersivecaves-1.4.2-neoforge-1.21.1.jar"
+side = "both"
+
+[download]
+url = "https://cdn.modrinth.com/data/RXU83rKu/versions/6x7Vwgo1/immersivecaves-1.4.2-neoforge-1.21.1.jar"
+hash-format = "sha512"
+hash = "0964e1861d692d8ca0246ab271f73b191d51dca0e5295694e78b50e8e5f83d67d5eff29695d94a677098511314eaba9f5b11262dae1f29f47a1f80d17c53504f"
+
+[update]
+[update.modrinth]
+mod-id = "RXU83rKu"
+version = "6x7Vwgo1"

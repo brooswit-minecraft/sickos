@@ -1,0 +1,34 @@
+bump: minor
+
+### Added
+- Immersive Caves 1.4.2 (NeoForge 1.21.1 native build -- not the Forge
+  1.20.1 jar a prior lookup mistakenly flagged as the only available one).
+- Structurify 2.0.43 (structure placement/overlap/biome control, replacing
+  the need for datapack-based structure configuration), with its required
+  client-side dependency YetAnotherConfigLib (YACL) 3.8.2.
+- Tectonic Layers 2.0.1: stacks the Nether/End/Caves directly into the
+  Overworld as a continuous, portal-less layout. Requires Tectonic (already
+  pinned) and Lithostitched 1.6.0+ (already pinned, currently 1.8.1);
+  Amplified Nether is an optional runtime-detected enhancement, not added
+  here since nothing else in the pack needs it and it wasn't requested on
+  its own.
+
+This mod alters dimension layout, portals, and End behavior; its own
+author recommends starting a new world for a seamless result on an
+existing save, though already-explored chunks are not retroactively
+rewritten by these additions.
+
+### Excluded (not in this release)
+Blocked by sickos/AGENTS.md's Modrinth-only policy ("Only add mods hosted
+on Modrinth with native NeoForge builds... do not add CurseForge-only
+jars"); CurseForge-only, no Modrinth project exists for them:
+- Scorched Guns Neoforged + AsYasya's WW1 Weaponry (hard-requires
+  Framework, which is CurseForge/GitHub-only -- no Modrinth path exists to
+  ship these compliantly without it)
+- Framework, Curios (both only needed as the above's dependencies)
+- I Need Skating
+- Create: Structured
+
+These remain approved-scope per MINECRAFT-419 but need an explicit call on
+amending AGENTS.md's hosting policy, or on dropping them, before they can
+ship -- tracked on that ticket, not resolved by this PR.

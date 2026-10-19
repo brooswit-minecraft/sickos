@@ -1,0 +1,13 @@
+name = "Tectonic Layers"
+filename = "tectoniclayers-2.0.1.jar"
+side = "both"
+
+[download]
+url = "https://cdn.modrinth.com/data/y1WLFJBb/versions/dOcBdcBW/tectoniclayers-2.0.1.jar"
+hash-format = "sha512"
+hash = "11ff092dda8f27a23f0146c58b0f5df09302d0e6c214130306ffc66d7445bbda1a2dc36f7c6cd94f9ca52b17c31a3b14871a45db71360e524a67b12900a7fba4"
+
+[update]
+[update.modrinth]
+mod-id = "y1WLFJBb"
+version = "dOcBdcBW"
