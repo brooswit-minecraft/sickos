@@ -335,11 +335,6 @@ hash = "c7e7206384e1d5ab7caecc643dda50dae1886312e0aeca5aaef8852bb6b11b4e"
 metafile = true
 
 [[files]]
-file = "mods/tectonic-layers.pw.toml"
-hash = "b7e598679d62fe10b01ecff164cf227e13e37e59a7962191e55a8999cb15159f"
-metafile = true
-
-[[files]]
 file = "mods/tectonic.pw.toml"
 hash = "dd46fad79cf33a00123be0a74c73581da72cd98503ef23822a624a08f4b10ff2"
 metafile = true

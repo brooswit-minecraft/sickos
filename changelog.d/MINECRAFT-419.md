@@ -5,30 +5,23 @@ bump: minor
   1.20.1 jar a prior lookup mistakenly flagged as the only available one).
 - Structurify 2.0.43 (structure placement/overlap/biome control, replacing
   the need for datapack-based structure configuration), with its required
-  client-side dependency YetAnotherConfigLib (YACL) 3.8.2.
-- Tectonic Layers 2.0.1: stacks the Nether/End/Caves directly into the
-  Overworld as a continuous, portal-less layout. Requires Tectonic (already
-  pinned) and Lithostitched 1.6.0+ (already pinned, currently 1.8.1). The
-  jar's own neoforge.mods.toml declares Amplified Nether as an `optional`
-  dependency (will not block loading), but the mod's Modrinth listing
-  separately describes it as needed for the deep-Nether layer to use "the
-  real Nether source terrain" rather than a fallback -- i.e. optional to
-  load, but a real functional tradeoff to skip. Not added here since
-  nothing else in the pack needs it and it wasn't requested on its own;
-  flagging the tradeoff rather than silently omitting it.
+  client-only dependency YetAnotherConfigLib (YACL) 3.8.2.
 
-**Breaking: Tectonic Layers is a world-generation/chunk-conversion change,
-not a drop-in-safe addition.** Per its own Modrinth listing: "It changes
-dimensions, terrain generation, chunk conversion, portals, lighting, fog,
-and End behavior... Back up your worlds before installing or updating...
-For the best results, use this in a new world. Existing worlds may have
-already-generated chunks that do not fully match the stacked layout." This
-PR does not claim "existing chunks are left alone" -- that was an earlier,
-unverified assumption and has been corrected. No world migration/reset has
-been performed or decided by this PR; whether and when to reset the live
-server world is a separate decision tracked on MINECRAFT-419, coordinated
-with the release owner, and requires a preserved backup before any
-irreversible action.
+### Removed from this release: Tectonic Layers
+Tectonic Layers 2.0.1 was pinned, then pulled after an actual disposable
+server boot test (not just a dependency/metadata check) reproduced a
+reliable, repeated crash: `LayeredBiomeSource.getNoiseBiome` (tectonic
+layers) calls into Biolith's `EndBiomePlacement.sampleEndNoise`, which
+throws a `NullPointerException` on `temperatureNoise` -- Biolith is
+bundled inside this pack's existing Quark 4.1-487 pin (biolith-neoforge
+3.0.14). This happened hundreds of times during ordinary spawn-chunk
+generation on a brand-new world with no prior save, and crashed the
+server outright both times it was tested. Tectonic Layers' own listing
+already flags End/biome compatibility as "experimental"; this is that
+risk materializing, not a rare edge case. Not shipping it until this is
+resolved (upstream fix, a compatible Biolith/TerraBlender version, or
+confirmation there's a config path around it) -- re-adding it needs a
+fresh disposable boot test of its own, not just a dependency-closure pass.
 
 ### Excluded (not in this release)
 Blocked by sickos/AGENTS.md's Modrinth-only policy ("Only add mods hosted
