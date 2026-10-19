@@ -190,6 +190,11 @@ hash = "8a96fa65d0445933cb03c0d1f8cc9201b8a94739086758e8d938aa2f413b6fe3"
 metafile = true
 
 [[files]]
+file = "mods/immersive-caves.pw.toml"
+hash = "7968e2969f8e48343eb57d51388dcd2675833470a0cc5533682646228922bd5a"
+metafile = true
+
+[[files]]
 file = "mods/integrated-api.pw.toml"
 hash = "91e64f115f316af85a1162f327d2b14b4669e6f6dffafc468f633be4317cf3b4"
 metafile = true
@@ -320,6 +325,11 @@ hash = "3426d015c8bfd8f5158a84e8ccf1a0feb029ee80b70e065419ff587ca974ce7d"
 metafile = true
 
 [[files]]
+file = "mods/structurify.pw.toml"
+hash = "525721054a6788dfeb36276dee55100414b265a60b9bce655612930ad3705d15"
+metafile = true
+
+[[files]]
 file = "mods/supplementaries.pw.toml"
 hash = "c7e7206384e1d5ab7caecc643dda50dae1886312e0aeca5aaef8852bb6b11b4e"
 metafile = true
@@ -362,6 +372,11 @@ metafile = true
 [[files]]
 file = "mods/xaeros-world-map.pw.toml"
 hash = "f4bc20e3483a7a935b9ee674227aad73d24ecc4ea93e6c2d99955927a2197b20"
+metafile = true
+
+[[files]]
+file = "mods/yacl.pw.toml"
+hash = "1f47c89af2b4c6ab92735d68e58412d0b369f7035818e58d02f5982f7fc1186a"
 metafile = true
 
 [[files]]
