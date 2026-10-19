@@ -329,9 +329,31 @@ commit if any step fails) every other write path in this ticket gets:
   compares it against what this pin actually has on disk
   (`[download].url`/`.hash`) -- a bare tag-string or version-number
   match is never alone enough to return `already_pinned`; a changed
-  digest, a moved asset, or an equal-version retag with different bytes
-  all fail closed as `integrity_conflict` instead of being accepted as
-  a harmless replay (twenty-fourth review round, comment 48456 item 2).
+  digest, a moved asset, an equal-version retag with different bytes,
+  OR A MOVED SOURCE COMMIT all fail closed as `integrity_conflict`
+  instead of being accepted as a harmless replay (twenty-fourth review
+  round, comment 48456 item 2; twenty-fifth round, comment 48492's
+  follow-up closes two gaps the twenty-fourth round's version left
+  open):
+  - **Source identity**: `_verify_identity_matches_pin` independently
+    re-peels the tag's own current target (`resolve_tag_source_sha`)
+    and compares it against `pin.pinned_source` (the on-disk `branch`
+    field) -- a tag silently re-pointed to a different commit, with its
+    URL and digest both unchanged, previously passed as a no-op because
+    neither no-op return path ever called `resolve_tag_source_sha` at
+    all. The equal-version-retag path compares the NEW tag's peeled
+    source against the OLD pin's recorded source the same way, on top
+    of its existing digest check.
+  - **Non-sha256 on-disk hash formats**: the real `dynamic-despawn` pin
+    predates this engine and still records its hash as `sha512`.
+    Comparing only GitHub's sha256 digest against a `pin.pinned_hash`
+    that is never itself sha256 is comparing nothing -- skip the
+    content check entirely, and a byte-for-byte-replaced asset at an
+    unchanged URL passes as a verified no-op. For any `pinned_hash_
+    format` other than `"sha256"`, the asset's bytes are now actually
+    downloaded (reusing `download_and_verify_sha256`'s own sha256
+    check against GitHub's digest first) and re-hashed in the pin's own
+    format for comparison.
 - On a real bump, the NEW release's own TAG is resolved to the
   immutable commit it points at (`resolve_tag_source_sha`, via
   `refs/tags/{tag}`, peeling one more hop for an ANNOTATED tag) and

@@ -43,6 +43,7 @@ own docstring already gives for the generalized Modrinth path:
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import subprocess
 import sys
@@ -175,31 +176,81 @@ def _no_candidate_summary(pin):
     }
 
 
-def _verify_identity_matches_pin(pin, resolved_candidate):
-    """Compare a freshly GitHub-resolved candidate's own artifact
-    identity (download_url, and sha256 when the pin's own on-disk hash
-    is in that format) against what this pin ACTUALLY has on disk.
-    Raises EngineError(EXIT_INTEGRITY_FAILURE, "integrity_conflict", ...)
-    on any mismatch -- MINECRAFT-362 review, comment 48456, item 2:
-    "already_pinned"/"no change" must never be returned on tag or
-    version equality alone; a replaced asset or moved tag under an
-    unchanged tag/version string is a conflict, not a harmless replay."""
+def _verify_identity_matches_pin(pin, resolved_candidate, *, downloader, expected_source):
+    """Compare a freshly GitHub-resolved candidate's own COMPLETE
+    identity -- download_url, content hash, and source commit -- against
+    what this pin ACTUALLY has on disk. Raises EngineError(EXIT_
+    INTEGRITY_FAILURE, "integrity_conflict", ...) on any mismatch --
+    MINECRAFT-362 review, comment 48456 item 2 and its follow-up (comment
+    48492): "already_pinned"/"no change" must never be returned on tag
+    or version equality alone, or on a hash/url check that silently
+    passed because it only ever ran for a sha256-format pin.
+
+    Content hash: when the pin's own on-disk `[download].hash-format`
+    is "sha256", compared directly against `resolved_candidate.sha256`
+    (GitHub's own digest) -- no download needed. For any OTHER format
+    (this pack's real dynamic-despawn pin is "sha512", predating this
+    engine) the asset is actually DOWNLOADED and re-hashed in that same
+    format for comparison -- comment 48492's finding: skipping this
+    entirely for a non-sha256 pin let a byte-for-byte-replaced asset at
+    an unchanged URL pass as a verified no-op, because nothing ever
+    looked at the bytes themselves for that pin.
+
+    Source commit: `resolved_candidate.tag`'s own ref is independently
+    peeled via `resolve_tag_source_sha` and compared against
+    `expected_source` (normally `pin.pinned_source`, the on-disk
+    `branch` field) -- comment 48492's finding: a tag silently
+    re-pointed to a different commit, with its URL/digest unchanged,
+    previously passed as a no-op because nothing ever re-resolved the
+    tag's own current target before returning."""
     if pin.pinned_url and resolved_candidate.download_url != pin.pinned_url:
         raise EngineError(
             EXIT_INTEGRITY_FAILURE, "integrity_conflict",
-            f"{pin.name}'s currently-pinned tag {pin.pinned_tag!r} now resolves to a different "
-            f"download URL ({resolved_candidate.download_url!r}) than this pin's own on-disk "
-            f"record ({pin.pinned_url!r}) -- the tag was moved or the asset was replaced; "
-            "refusing to treat this as a harmless replay",
+            f"{pin.name}'s tag {resolved_candidate.tag!r} now resolves to a different download "
+            f"URL ({resolved_candidate.download_url!r}) than this pin's own on-disk record "
+            f"({pin.pinned_url!r}) -- the tag was moved or the asset was replaced; refusing to "
+            "treat this as a harmless replay",
         )
-    if pin.pinned_hash_format == "sha256" and pin.pinned_hash and resolved_candidate.sha256 != pin.pinned_hash:
-        raise EngineError(
-            EXIT_INTEGRITY_FAILURE, "integrity_conflict",
-            f"{pin.name}'s currently-pinned tag {pin.pinned_tag!r} now resolves to a different "
-            f"sha256 ({resolved_candidate.sha256}) than this pin's own on-disk hash "
-            f"({pin.pinned_hash}) -- the asset bytes were replaced since this pin was written; "
-            "refusing to treat this as a harmless replay",
-        )
+    if pin.pinned_hash_format and pin.pinned_hash:
+        if pin.pinned_hash_format == "sha256":
+            if resolved_candidate.sha256 != pin.pinned_hash:
+                raise EngineError(
+                    EXIT_INTEGRITY_FAILURE, "integrity_conflict",
+                    f"{pin.name}'s tag {resolved_candidate.tag!r} now resolves to a different "
+                    f"sha256 ({resolved_candidate.sha256}) than this pin's own on-disk hash "
+                    f"({pin.pinned_hash}) -- the asset bytes were replaced; refusing to treat "
+                    "this as a harmless replay",
+                )
+        else:
+            try:
+                jar_bytes = github_release_identity.download_and_verify_sha256(
+                    resolved_candidate.download_url, resolved_candidate.sha256, downloader,
+                )
+            except github_release_identity.GithubIdentityError as error:
+                raise EngineError(EXIT_INTEGRITY_FAILURE, error.outcome, error.message) from error
+            actual_hash = hashlib.new(pin.pinned_hash_format, jar_bytes).hexdigest()
+            if actual_hash != pin.pinned_hash:
+                raise EngineError(
+                    EXIT_INTEGRITY_FAILURE, "integrity_conflict",
+                    f"{pin.name}'s tag {resolved_candidate.tag!r} now downloads to a different "
+                    f"{pin.pinned_hash_format} ({actual_hash}) than this pin's own on-disk hash "
+                    f"({pin.pinned_hash}), even though GitHub's own sha256 digest matched -- the "
+                    "asset bytes were replaced; refusing to treat this as a harmless replay",
+                )
+    if expected_source:
+        try:
+            actual_source = github_release_identity.resolve_tag_source_sha(
+                pin.slug, resolved_candidate.tag,
+            )
+        except github_release_identity.GithubIdentityError as error:
+            raise EngineError(EXIT_INTEGRITY_FAILURE, error.outcome, error.message) from error
+        if actual_source != expected_source:
+            raise EngineError(
+                EXIT_INTEGRITY_FAILURE, "integrity_conflict",
+                f"{pin.name}'s tag {resolved_candidate.tag!r} now points at commit "
+                f"{actual_source} instead of the expected {expected_source} -- the tag was "
+                "moved to a different source; refusing to treat this as a harmless replay",
+            )
 
 
 def run_engine(repo_root, pin, candidate, *, downloader=default_downloader, run_command=subprocess.run,
@@ -244,7 +295,9 @@ def run_engine(repo_root, pin, candidate, *, downloader=default_downloader, run_
             f"could not verify {pin.name} is not a downgrade: looking up the currently-pinned "
             f"tag {pin.pinned_tag!r} failed: {error.message}",
         ) from error
-    _verify_identity_matches_pin(pin, previous_candidate)
+    _verify_identity_matches_pin(
+        pin, previous_candidate, downloader=downloader, expected_source=pin.pinned_source,
+    )
     previous_version_number = previous_candidate.version_number
 
     if candidate.tag == pin.pinned_tag:
@@ -284,14 +337,22 @@ def run_engine(repo_root, pin, candidate, *, downloader=default_downloader, run_
     if comparison == 0:
         # Same version number under a different tag spelling (e.g. a
         # re-tag). A harmless replay ONLY if the asset BYTES are
-        # actually identical -- verified against the just-fetched
-        # candidate for the NEW tag, not assumed from the version string
-        # alone (MINECRAFT-362 review, comment 48456, item 2). Compares
-        # sha256 only, not download_url: the URL legitimately differs by
+        # actually identical AND the new tag points at the SAME source
+        # commit as the one already pinned -- verified against the
+        # just-fetched candidate for the NEW tag, not assumed from the
+        # version string alone (MINECRAFT-362 review, comment 48456 item
+        # 2, and its follow-up comment 48492: a same-digest retag whose
+        # source had silently moved previously passed uncaught, since
+        # source was never checked on this path at all). Compares
+        # GitHub's own fresh sha256 digest for each tag, not the pin's
+        # on-disk hash-format/hash -- a hash-format mismatch (e.g. this
+        # pack's real sha512 despawn pin) is irrelevant here, since both
+        # sides of this comparison are freshly resolved from GitHub, not
+        # read from disk; _verify_identity_matches_pin above already
+        # re-verified the on-disk record separately. Deliberately does
+        # NOT compare download_url: the URL legitimately differs by
         # tag-name alone even for a genuinely identical re-tag (the tag
-        # is part of GitHub's download path), so url equality is not a
-        # meaningful signal here the way it is in _verify_identity_
-        # matches_pin's same-tag check above.
+        # is part of GitHub's download path).
         if candidate.sha256 != previous_candidate.sha256:
             raise EngineError(
                 EXIT_INTEGRITY_FAILURE, "integrity_conflict",
@@ -300,6 +361,21 @@ def run_engine(repo_root, pin, candidate, *, downloader=default_downloader, run_
                 "different sha256 -- refusing to treat an equal-version retag with different "
                 "bytes as a harmless replay",
             )
+        if pin.pinned_source:
+            try:
+                candidate_source = github_release_identity.resolve_tag_source_sha(
+                    pin.slug, candidate.tag,
+                )
+            except github_release_identity.GithubIdentityError as error:
+                raise EngineError(EXIT_INTEGRITY_FAILURE, error.outcome, error.message) from error
+            if candidate_source != pin.pinned_source:
+                raise EngineError(
+                    EXIT_INTEGRITY_FAILURE, "integrity_conflict",
+                    f"{pin.name} candidate tag {candidate.tag!r} has the same version number "
+                    f"and sha256 as the currently-pinned {pin.pinned_tag!r}, but points at a "
+                    f"different source commit ({candidate_source} instead of "
+                    f"{pin.pinned_source}) -- refusing to treat this as a harmless replay",
+                )
         return (
             {
                 **_no_candidate_summary(pin),

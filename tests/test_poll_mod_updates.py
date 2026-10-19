@@ -551,7 +551,14 @@ class TestPollAndBumpGithubPins(unittest.TestCase):
             poll_mod_updates.github_release_identity, "fetch_release_by_tag_json",
             return_value=previous_release,
         ), mock.patch.object(
-            poll_mod_updates.github_release_identity, "resolve_tag_source_sha", return_value="b" * 40,
+            # The pinned tag itself must resolve to the SAME source already
+            # recorded on disk ("a" * 40, see setUp's pin fixture) or
+            # _verify_identity_matches_pin's source check fails every one
+            # of these tests before reaching whatever they're actually
+            # exercising (MINECRAFT-362 review, comment 48492) -- only a
+            # genuinely NEW tag resolves to the "b" * 40 placeholder.
+            poll_mod_updates.github_release_identity, "resolve_tag_source_sha",
+            side_effect=lambda slug, tag: ("a" * 40) if tag == "v0.3.3" else ("b" * 40),
         ), mock.patch.object(
             poll_mod_updates.github_release_identity, "download_and_verify_sha256",
             return_value=b"new despawn jar",

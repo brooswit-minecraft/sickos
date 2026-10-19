@@ -218,12 +218,26 @@ class EngineTestCase(unittest.TestCase):
         return (self.repo / "mods" / "dynamic-despawn.pw.toml").read_text(encoding="utf-8")
 
     def run_engine(self, pin, candidate, *, content=b"new despawn jar", gate_commands=None,
-                   previous_release_json=None, source_sha="b" * 40):
+                   previous_release_json=None, source_sha=None, resolve_tag_source_sha=None):
+        """`source_sha` is what a NEW tag (anything other than `pin.
+        pinned_tag`) resolves to; defaults to `pin.pinned_source` itself,
+        so neither the already-pinned fast path nor an equal-version
+        retag hits a source conflict unless a test explicitly asks for
+        one (via `source_sha` or a full override via
+        `resolve_tag_source_sha`). `pin.pinned_tag` itself always
+        resolves to `pin.pinned_source` by default, matching the on-disk
+        record -- MINECRAFT-362 review, comment 48492."""
         previous_release_json = previous_release_json or release_json_for(pin.pinned_tag, "0.3.3")
+        if resolve_tag_source_sha is None:
+            effective_source_sha = pin.pinned_source if source_sha is None else source_sha
+
+            def resolve_tag_source_sha(slug, tag):
+                return pin.pinned_source if tag == pin.pinned_tag else effective_source_sha
+
         with mock.patch.object(
             github_release_identity, "fetch_release_by_tag_json", return_value=previous_release_json,
         ), mock.patch.object(
-            github_release_identity, "resolve_tag_source_sha", return_value=source_sha,
+            github_release_identity, "resolve_tag_source_sha", side_effect=resolve_tag_source_sha,
         ):
             return bump.run_engine(
                 self.repo, pin, candidate,
@@ -324,6 +338,88 @@ class TestIntegrityFailures(EngineTestCase):
             )
         self.assertEqual(ctx.exception.exit_code, bump.EXIT_INTEGRITY_FAILURE)
         self.assertEqual(ctx.exception.outcome, "integrity_conflict")
+        self.assertEqual(self.porcelain(), "")
+
+    def test_already_pinned_with_moved_tag_same_artifact_is_rejected(self):
+        """MINECRAFT-362 review, comment 48492: a tag silently re-pointed
+        to a DIFFERENT source commit, with its URL and digest unchanged,
+        must be rejected -- resolve_tag_source_sha was never even called
+        on either no-op path before this fix, so this previously passed
+        as already_pinned/exit 0."""
+        pin = make_pin()
+        candidate = make_candidate(tag=OLD_TAG, version_number="0.3.3")
+        with self.assertRaises(bump.EngineError) as ctx:
+            self.run_engine(
+                pin, candidate, resolve_tag_source_sha=lambda slug, tag: "moved" + "0" * 36,
+            )
+        self.assertEqual(ctx.exception.exit_code, bump.EXIT_INTEGRITY_FAILURE)
+        self.assertEqual(ctx.exception.outcome, "integrity_conflict")
+        self.assertEqual(self.porcelain(), "")
+
+    def test_same_version_different_tag_same_digest_different_source_is_rejected(self):
+        """MINECRAFT-362 review, comment 48492: an equal-version retag
+        with identical bytes but a DIFFERENT source commit must be
+        rejected, not accepted as a replay on digest alone."""
+        pin = make_pin()
+
+        def resolver(slug, tag):
+            if tag == OLD_TAG:
+                return pin.pinned_source
+            return "different-source" + "1" * 23  # 40 chars total
+
+        candidate = make_candidate(tag="0.3.3", version_number="0.3.3")
+        with self.assertRaises(bump.EngineError) as ctx:
+            self.run_engine(
+                pin, candidate,
+                previous_release_json=release_json_for(OLD_TAG, "0.3.3"),
+                resolve_tag_source_sha=resolver,
+            )
+        self.assertEqual(ctx.exception.exit_code, bump.EXIT_INTEGRITY_FAILURE)
+        self.assertEqual(ctx.exception.outcome, "integrity_conflict")
+        self.assertEqual(self.porcelain(), "")
+
+    def test_sha512_pinned_mod_with_replaced_bytes_is_rejected(self):
+        """MINECRAFT-362 review, comment 48492: the real dynamic-despawn
+        pin's own on-disk hash-format is sha512 (predates this engine).
+        _verify_identity_matches_pin must actually download and re-hash
+        the asset in that format, not skip content verification just
+        because it isn't sha256 -- a replaced asset at the same URL,
+        with a DIFFERENT sha512 but a matching GitHub sha256 digest for
+        ITS OWN (different) bytes, must still be rejected."""
+        real_bytes = b"the genuinely pinned bytes"
+        replaced_bytes = b"a replacement with a different sha512"
+        pin = make_pin(
+            pinned_hash_format="sha512", pinned_hash=hashlib.sha512(real_bytes).hexdigest(),
+        )
+        candidate = make_candidate(tag=OLD_TAG, version_number="0.3.3")
+        with self.assertRaises(bump.EngineError) as ctx:
+            self.run_engine(
+                pin, candidate, content=replaced_bytes,
+                previous_release_json=release_json_for(
+                    OLD_TAG, "0.3.3", sha256=hashlib.sha256(replaced_bytes).hexdigest(),
+                ),
+            )
+        self.assertEqual(ctx.exception.exit_code, bump.EXIT_INTEGRITY_FAILURE)
+        self.assertEqual(ctx.exception.outcome, "integrity_conflict")
+        self.assertEqual(self.porcelain(), "")
+
+    def test_sha512_pinned_mod_with_matching_bytes_is_a_clean_noop(self):
+        """Positive control for the above: identical bytes under a
+        sha512-format pin must still verify as a clean no-op, not fail
+        just because the format isn't sha256."""
+        real_bytes = b"the genuinely pinned bytes"
+        pin = make_pin(
+            pinned_hash_format="sha512", pinned_hash=hashlib.sha512(real_bytes).hexdigest(),
+        )
+        candidate = make_candidate(tag=OLD_TAG, version_number="0.3.3")
+        summary, exit_code, _ = self.run_engine(
+            pin, candidate, content=real_bytes,
+            previous_release_json=release_json_for(
+                OLD_TAG, "0.3.3", sha256=hashlib.sha256(real_bytes).hexdigest(),
+            ),
+        )
+        self.assertEqual(exit_code, bump.EXIT_OK)
+        self.assertFalse(summary["changed"])
         self.assertEqual(self.porcelain(), "")
 
     def test_sha256_mismatch_fails_closed(self):
