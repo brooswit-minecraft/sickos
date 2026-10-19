@@ -157,13 +157,28 @@ def _identifier_key(identifier):
 # already produces) is a KNOWN, deliberate limitation, not a bug: there is
 # no real pin where the two schemes are legitimately compared against each
 # other today.
-_RAW_FOUR_COMPONENT_RE = re.compile(r"^\d+\.\d+\.\d+\.\d+$")
+#
+# MINECRAFT-421 review, point 3, second round (comment 48554, P1): a
+# separate "bare digits only" regex here missed the EXACT SAME scheme
+# wearing normalize_native_version_scheme's own other recognised dress --
+# a leading "v"/"V" (confirmed live: Dungeons and Taverns' "v4.4.4+mod"
+# shape, applied to a four-component string) or a "+build" suffix. Both
+# still get folded into a prerelease slot by that function and then
+# silently escape this guard, reproducing the exact invented-precedence
+# bug against a plain "2.1.0" one level removed. Fixed by deriving "is
+# this a four-component scheme" from the SAME parsed identity
+# normalize_native_version_scheme itself acts on (`_NATIVE_SCHEME_RE`'s
+# own `extra`/`prerelease` groups), not a second, narrower regex that can
+# silently drift out of sync with what normalization actually recognises.
+def _is_four_component_native_scheme(version):
+    match = _NATIVE_SCHEME_RE.match(version)
+    return bool(match) and match.group("extra") is not None and match.group("prerelease") is None
 
 
 def compare_semver(left, right):
     """Return -1, 0, or 1 comparing two version strings. Raises ValueError if unparsable."""
-    left_is_four_component = bool(_RAW_FOUR_COMPONENT_RE.match(left))
-    right_is_four_component = bool(_RAW_FOUR_COMPONENT_RE.match(right))
+    left_is_four_component = _is_four_component_native_scheme(left)
+    right_is_four_component = _is_four_component_native_scheme(right)
     if left_is_four_component != right_is_four_component:
         raise ValueError(
             f"refusing to compare a four-numeric-component native version against a "

@@ -295,6 +295,18 @@ def resolve_latest_compatible_version(mod_id, *, game_version, loader, fetcher, 
     best_normalized = None
     unparsable_count = 0
     prerelease_only_count = 0
+    # MINECRAFT-421 review, point 3, second round (comment 48554, P2): a
+    # cross-scheme ValueError used to just discard the newly-examined
+    # entry and keep whatever `best` happened to be picked first --
+    # which one of two mutually-incomparable candidates "wins" then
+    # depends entirely on the order Modrinth's API happened to return
+    # them in (reproduced live: [2.1.0, 2.1.0.3] selects 2.1.0; the
+    # reversed list selects 2.1.0.3). That is a silent, non-deterministic
+    # guess, not an absence of ambiguity. Tracked separately from
+    # `unparsable_count` so it is reported as its own explicit, always-
+    # fatal-when-triggered condition below, independent of iteration
+    # order and independent of what `best` ended up holding.
+    cross_scheme_ambiguous = False
     for entry in versions_json:
         if not isinstance(entry, dict):
             continue
@@ -330,19 +342,27 @@ def resolve_latest_compatible_version(mod_id, *, game_version, loader, fetcher, 
         except ValueError:
             # compare_semver's own cross-scheme guard (MINECRAFT-421
             # review, point 3): this entry and the current `best` are
-            # shaped differently (one is a raw four-numeric-component
-            # native version, the other is not) -- no evidence either
-            # scheme's precedence applies to the other, so this entry
-            # cannot be safely ranked against `best` either way. Counted
-            # as unparsable (same remedy class: nothing a human bump can
-            # reliably fix without the author settling on one scheme),
-            # not silently skipped and not allowed to crash this run.
-            unparsable_count += 1
+            # shaped differently (one is a four-numeric-component native
+            # version, the other is not) -- no evidence either scheme's
+            # precedence applies to the other, so this entry cannot be
+            # safely ranked against `best` either way. Marked ambiguous
+            # (see cross_scheme_ambiguous above), not allowed to crash
+            # this run and not silently resolved by discarding whichever
+            # one came second.
+            cross_scheme_ambiguous = True
             continue
         if is_newer:
             best = candidate
             best_normalized = normalized
 
+    if cross_scheme_ambiguous:
+        raise NoParseableCandidateError(
+            f"{mod_id} has multiple compatible version(s) using mutually-incomparable native "
+            "version schemes (e.g. a four-numeric-component scheme alongside a differently-"
+            "shaped one) -- refusing to silently pick one by API response order; this is a "
+            "genuine, deterministic ambiguity (needs a validated pinned scheme or the author "
+            "settling on one), not 'nothing newer upstream'"
+        )
     if best is not None:
         return best
     if unparsable_count > 0:

@@ -117,9 +117,9 @@ and splits them into:
 
 **MINECRAFT-421: channel preservation and native version-scheme
 normalization.** Two additions driven by the first real scheduled poll
-run's own nine observed coverage-gap outcomes, each revised a second
-round after exact-head review (comment 48541) reproduced three further
-gaps live against the first round's own shapes:
+run's own nine observed coverage-gap outcomes, revised twice more after
+exact-head review (comments 48541, then 48554) reproduced further gaps
+live against each round's own shapes:
 
 - `resolve_latest_compatible_version` gained an `accepted_channel`
   parameter (default `"release"`, same contract as
@@ -170,9 +170,24 @@ gaps live against the first round's own shapes:
   confirmed to apply to -- reproduced live: "2.1.0.2" folds to "2.1.0-2",
   which SemVer's own "no prerelease beats any prerelease" rule then
   ranks OLDER than a bare "2.1.0", though nothing establishes the two
-  schemes compare that way at all. `resolve_latest_compatible_version`'s
-  own best-candidate loop catches that guard's `ValueError` and counts
-  the entry as unparsable rather than crashing or guessing.
+  schemes compare that way at all. Third round (comment 48554): that
+  guard originally checked the RAW shape with a separate, narrower regex
+  (bare digits only), which missed the exact same scheme wearing
+  `normalize_native_version_scheme`'s own other recognised dress -- a
+  leading `v`/`V`, or a `+build` suffix -- both of which still fold into
+  a prerelease slot and so still need the guard. Fixed by deriving "is
+  this a four-component scheme" from the SAME parsed identity
+  (`_NATIVE_SCHEME_RE`'s own `extra`/`prerelease` groups)
+  `normalize_native_version_scheme` itself already acts on, rather than
+  a second regex that can silently drift out of sync with what
+  normalization recognises. `resolve_latest_compatible_version`'s own
+  best-candidate loop catches that guard's `ValueError` and raises
+  `NoParseableCandidateError` -- a DETERMINISTIC ambiguity, not a
+  per-entry "skip it" that left whichever candidate was examined FIRST
+  as `best`: reproduced live, `[2.1.0, 2.1.0.3]` selected `2.1.0`;
+  reversing the list selected `2.1.0.3`. Both orderings now raise the
+  same error instead of returning either version by API response-order
+  accident.
 
 **Explicit scope limit**: compatibility here means the candidate's own
 declared `game_versions`/`loaders`. `modrinth_compat.py` also has

@@ -422,6 +422,45 @@ class TestDowngradeAndAnomaly(EngineTestCase):
             self.run_engine(pin, candidate, content=content)
         self.assertEqual(ctx.exception.exit_code, bump_mod.EXIT_DOWNGRADE_REFUSED)
 
+    def test_cross_scheme_candidate_vs_pinned_version_is_refused_not_written(self):
+        # MINECRAFT-421 review, point 3, second round (comment 48554,
+        # P1): the pin's own currently-pinned version uses the native
+        # four-component scheme (Biomes O' Plenty/GlitchCore's real
+        # shape); the candidate is a differently-shaped plain version.
+        # decide_update's no-downgrade check must refuse this as
+        # unparsable (unsupported_version_scheme), the same as any other
+        # cross-scheme mismatch -- never silently treat the candidate as
+        # newer (or older) than a scheme it cannot actually be ranked
+        # against, and never write anything to the tree either way.
+        content = b"cross scheme jar"
+        candidate = make_candidate(content=content, version_number="2.1.0")
+        self.register(candidate.version_id, metadata_for(candidate))
+        self.register(OLD_VERSION_ID, {
+            "id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "2.1.0.2",
+        })
+        pin = make_pin()
+        before = self.porcelain()
+        with self.assertRaises(bump_mod.EngineError) as ctx:
+            self.run_engine(pin, candidate, content=content)
+        self.assertEqual(ctx.exception.exit_code, bump_mod.EXIT_CONFIG_ERROR)
+        self.assertEqual(ctx.exception.outcome, "unsupported_version_scheme")
+        self.assertEqual(self.porcelain(), before)
+
+    def test_v_prefixed_four_component_pinned_version_vs_candidate_is_also_refused_not_written(self):
+        content = b"cross scheme jar"
+        candidate = make_candidate(content=content, version_number="2.1.0")
+        self.register(candidate.version_id, metadata_for(candidate))
+        self.register(OLD_VERSION_ID, {
+            "id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "v2.1.0.2+build",
+        })
+        pin = make_pin()
+        before = self.porcelain()
+        with self.assertRaises(bump_mod.EngineError) as ctx:
+            self.run_engine(pin, candidate, content=content)
+        self.assertEqual(ctx.exception.exit_code, bump_mod.EXIT_CONFIG_ERROR)
+        self.assertEqual(ctx.exception.outcome, "unsupported_version_scheme")
+        self.assertEqual(self.porcelain(), before)
+
 
 class TestMetadataGate(EngineTestCase):
     def test_wrong_project_id_fails_closed(self):

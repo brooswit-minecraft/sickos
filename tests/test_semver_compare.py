@@ -136,6 +136,26 @@ class TestCompareSemverCrossSchemeGuard(unittest.TestCase):
     def test_neither_side_four_component_is_unaffected(self):
         self.assertEqual(compare_semver("1.2.3", "1.2.3"), 0)
 
+    def test_v_prefixed_four_component_against_plain_three_component_is_refused(self):
+        # MINECRAFT-421 review, point 3, second round (comment 48554,
+        # P1): a leading "v"/"V" still folds via normalize_native_
+        # version_scheme, so the SAME cross-scheme mismatch applies here
+        # too -- a prior round's guard used a bare-digits-only regex and
+        # missed this exact shape, still permitting a real fixture write.
+        with self.assertRaises(ValueError):
+            compare_semver("v2.1.0.2", "2.1.0")
+        with self.assertRaises(ValueError):
+            compare_semver("2.1.0", "v2.1.0.2")
+
+    def test_build_suffixed_four_component_against_plain_three_component_is_refused(self):
+        with self.assertRaises(ValueError):
+            compare_semver("2.1.0.2+build", "2.1.0")
+        with self.assertRaises(ValueError):
+            compare_semver("2.1.0", "2.1.0.2+build")
+
+    def test_v_prefixed_and_build_suffixed_four_component_compare_normally_against_each_other(self):
+        self.assertGreater(compare_semver("v2.1.0.3+build", "2.1.0.2"), 0)
+
 
 class TestSemverDeltaCategory(unittest.TestCase):
     def test_major_change_is_breaking(self):

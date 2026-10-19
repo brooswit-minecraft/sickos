@@ -206,6 +206,54 @@ class TestResolveLatestCompatibleVersion(unittest.TestCase):
         candidate = resolve_latest_compatible_version("EXAMPLE", game_version="1.21.1", loader="neoforge", fetcher=fetcher)
         self.assertIsNone(candidate)
 
+    def test_cross_scheme_candidates_raise_a_deterministic_ambiguity_not_a_silent_pick(self):
+        # MINECRAFT-421 review, point 3, second round (comment 48554,
+        # P2): a prior round's guard correctly refused to RANK a
+        # four-component candidate against a differently-shaped one, but
+        # the resolver's own loop then just discarded whichever one it
+        # saw second and silently returned the other as "best" -- which
+        # one "wins" depended entirely on API response order. Reproduced
+        # live: [2.1.0, 2.1.0.3] selected 2.1.0; the reversed list
+        # selected 2.1.0.3. Both orderings below must now raise the SAME
+        # deterministic error instead of returning either version.
+        forward = mock.Mock(return_value=[
+            version_entry("OLD", "2.1.0"),
+            version_entry("NEW", "2.1.0.3"),
+        ])
+        reversed_order = mock.Mock(return_value=[
+            version_entry("NEW", "2.1.0.3"),
+            version_entry("OLD", "2.1.0"),
+        ])
+        for fetcher in (forward, reversed_order):
+            with self.assertRaises(modrinth_compat.NoParseableCandidateError):
+                resolve_latest_compatible_version("EXAMPLE", game_version="1.21.1", loader="neoforge", fetcher=fetcher)
+
+    def test_cross_scheme_ambiguity_also_triggers_for_v_prefixed_and_build_suffixed_shapes(self):
+        fetcher = mock.Mock(return_value=[
+            version_entry("OLD", "2.1.0"),
+            version_entry("NEW", "v2.1.0.3+build"),
+        ])
+        with self.assertRaises(modrinth_compat.NoParseableCandidateError):
+            resolve_latest_compatible_version("EXAMPLE", game_version="1.21.1", loader="neoforge", fetcher=fetcher)
+
+    def test_same_scheme_four_component_candidates_are_unaffected_by_the_ambiguity_guard(self):
+        # Positive control: real same-scheme entries (Biomes O'
+        # Plenty/GlitchCore's actual shape) must still resolve normally,
+        # in either order.
+        forward = mock.Mock(return_value=[
+            version_entry("OLD", "21.1.0.2"),
+            version_entry("NEW", "21.1.0.14"),
+        ])
+        reversed_order = mock.Mock(return_value=[
+            version_entry("NEW", "21.1.0.14"),
+            version_entry("OLD", "21.1.0.2"),
+        ])
+        for fetcher in (forward, reversed_order):
+            candidate = resolve_latest_compatible_version(
+                "EXAMPLE", game_version="1.21.1", loader="neoforge", fetcher=fetcher,
+            )
+            self.assertEqual(candidate.version_id, "NEW")
+
 
 class TestAcceptedChannelPreservation(unittest.TestCase):
     """MINECRAFT-421 review, point 1 (second round, comment 48541):
