@@ -6,3 +6,10 @@ side = "both"
 url = "https://github.com/brooswit-minecraft/dynamic-battle-axes/releases/download/v0.2.1/dynamicbattleaxes-0.2.1.jar"
 hash-format = "sha256"
 hash = "3acb0feade7a02adb7abb2c9669e537821c3a3a5cd56f1b19ba05a8fe3ba07f7"
+
+[update]
+[update.github]
+slug = "brooswit-minecraft/dynamic-battle-axes"
+tag = "v0.2.1"
+branch = "e1bee3420e7fab2806a547e591ecac313dde5f7e"
+regex = "^.+(?<!-api|-dev|-dev-preshadow|-sources)\\.jar$"

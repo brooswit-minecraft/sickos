@@ -16,9 +16,17 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+import types
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import modrinth_metadata  # noqa: E402 - needs sys.path set up first
+import mod_eligibility  # noqa: E402
+import modrinth_compat  # noqa: E402
+import dependency_closure_check  # noqa: E402
 
 USER_AGENT = "brooswit-minecraft/sickos (SICKOS-75 DA auto-bump engine)"
 DA_MOD_ID = "PZV7RorC"
@@ -167,68 +175,16 @@ def validate_payload(payload):
 
 # --------------------------------------------------------------------------
 # Semver-with-prerelease comparison for DA version strings like
-# "0.19.0-alpha.1". Standard semver precedence (see semver.org #11):
-#   - compare (major, minor, patch) numerically first;
-#   - a version WITH a prerelease suffix is OLDER than the same numeric
-#     triple with no suffix;
-#   - otherwise compare prerelease identifiers left to right, split on '.':
-#     a numeric identifier compares numerically, an alphanumeric identifier
-#     compares lexically (ASCII), a numeric identifier is always older than
-#     an alphanumeric one, and if all shared identifiers are equal, the
-#     prerelease with MORE identifiers is newer.
-# Build metadata (a "+..." suffix) is not used by this pack's DA versions
-# and is intentionally ignored for ordering if present, per semver's own
-# rule that build metadata never affects precedence.
+# "0.19.0-alpha.1". The actual comparator lives in semver_compare.py,
+# shared with the generalized multi-mod resolver (MINECRAFT-362) so there
+# is one implementation of "is this a downgrade?", not two that could
+# drift. Re-exported here under their original names so this module's
+# existing callers and tests are unaffected.
 # --------------------------------------------------------------------------
 
-_SEMVER_RE = re.compile(
-    r"^(?P<major>\d+)\.(?P<minor>\d+)\.(?P<patch>\d+)"
-    r"(?:-(?P<prerelease>[0-9A-Za-z.-]+))?"
-    r"(?:\+[0-9A-Za-z.-]+)?$"
+from semver_compare import (  # noqa: E402 - needs sys.path set up first
+    parse_semver, compare_semver, semver_delta_category, more_severe_category,
 )
-
-
-def parse_semver(version):
-    match = _SEMVER_RE.match(version)
-    if not match:
-        return None
-    core = (int(match.group("major")), int(match.group("minor")), int(match.group("patch")))
-    prerelease = match.group("prerelease")
-    identifiers = tuple(prerelease.split(".")) if prerelease else None
-    return core, identifiers
-
-
-def _identifier_key(identifier):
-    return (0, int(identifier)) if identifier.isdigit() else (1, identifier)
-
-
-def compare_semver(left, right):
-    """Return -1, 0, or 1 comparing two version strings. Raises ValueError if unparsable."""
-    left_parsed = parse_semver(left)
-    right_parsed = parse_semver(right)
-    if left_parsed is None or right_parsed is None:
-        raise ValueError(f"cannot compare non-semver version(s): {left!r}, {right!r}")
-
-    left_core, left_pre = left_parsed
-    right_core, right_pre = right_parsed
-    if left_core != right_core:
-        return -1 if left_core < right_core else 1
-
-    if left_pre is None and right_pre is None:
-        return 0
-    if left_pre is None:
-        return 1
-    if right_pre is None:
-        return -1
-
-    for left_id, right_id in zip(left_pre, right_pre):
-        left_key = _identifier_key(left_id)
-        right_key = _identifier_key(right_id)
-        if left_key != right_key:
-            return -1 if left_key < right_key else 1
-    if len(left_pre) != len(right_pre):
-        return -1 if len(left_pre) < len(right_pre) else 1
-    return 0
 
 
 # --------------------------------------------------------------------------
@@ -516,6 +472,89 @@ def fetch_release_body(github_release_url, override_path):
 
 
 # --------------------------------------------------------------------------
+# Independent integrity gate (AC3): the dispatch payload is untrusted input,
+# so its sha1/sha512/url are NOT accepted on their own authority. They must
+# match the file entry Modrinth itself publishes for the resolved version
+# (GET /v2/version/{id}), and the downloaded jar must match that entry too.
+# Any mismatch, missing entry, non-200 or transport failure (including a
+# project Modrinth does not serve anonymously) fails closed before any repo
+# file is written. An optional MODRINTH_TOKEN in the environment is sent as
+# the Authorization header, for the day the project is only readable
+# with a token; it is never logged or written anywhere.
+# --------------------------------------------------------------------------
+
+# Captured once by main() and REMOVED from os.environ, so the make/packwiz/git
+# subprocesses the gates spawn never inherit it. Only the metadata lookup below
+# (api.modrinth.com) ever sees it.
+_MODRINTH_TOKEN = None
+
+
+def fetch_modrinth_version_metadata(version_id):
+    url = f"https://api.modrinth.com/v2/version/{urllib.parse.quote(version_id, safe='')}"
+    headers = {"User-Agent": USER_AGENT}
+    token = _MODRINTH_TOKEN
+    if token:
+        headers["Authorization"] = token
+    request = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return json.loads(response.read())
+
+
+def verify_against_modrinth_metadata(payload, fetcher, *, game_version=None, loader=None):
+    """Return the full, verified Modrinth version metadata dict (not
+    just the matched file entry -- callers need `dependencies` too, for
+    the dependency-conflict check below), or raise EngineError (fail
+    closed).
+
+    The actual identity/hash checks live in modrinth_metadata.py, shared
+    with the generalized multi-mod resolver (MINECRAFT-362) so there is one
+    implementation of this gate, not two that could drift.
+
+    `game_version`/`loader` (MINECRAFT-362 review, seventeenth round):
+    this dispatch path trusts an external webhook's `payload` directly
+    and, unlike the generalized poll path, has NO earlier step that
+    filters on (game_version, loader) compatibility at all -- so without
+    threading these through to the shared metadata check below, a
+    dispatch for a build declaring the wrong Minecraft version or loader
+    would still pin and publish successfully (confirmed: a prior version
+    of this function did exactly that). Both are required by the shared
+    check when given, so pass both or neither.
+    """
+    version_id = payload["modrinth_version_id"]
+
+    def refuse(reason):
+        raise EngineError(
+            EXIT_INTEGRITY_FAILURE, "integrity_failure",
+            f"Modrinth version metadata check failed for {version_id}: {reason}",
+        )
+
+    try:
+        metadata = fetcher(version_id)
+    except urllib.error.HTTPError as error:
+        refuse(f"metadata lookup returned HTTP {error.code} (a project Modrinth does not "
+               "serve to this caller cannot be verified, so the bump is refused)")
+    except Exception as error:  # noqa: BLE001 - any lookup failure fails closed
+        refuse(f"metadata lookup failed: {error!r}")
+
+    try:
+        modrinth_metadata.verify_version_file_metadata(
+            metadata,
+            expected_version_id=version_id,
+            expected_project_id=DA_MOD_ID,
+            expected_version_number=payload["version"],
+            expected_file_name=payload["file_name"],
+            expected_sha512=payload["sha512"],
+            expected_sha1=payload["sha1"],
+            expected_download_url=payload["download_url"],
+            expected_game_version=game_version,
+            expected_loader=loader,
+        )
+    except modrinth_metadata.MetadataVerificationError as error:
+        refuse(str(error))
+    return metadata
+
+
+# --------------------------------------------------------------------------
 # AC8: Modrinth vouch check. Never fails the run or changes the exit code --
 # so the whole check, including reading the control mod's pin file, is
 # wrapped: ANY exception (a transport failure urllib does not wrap in
@@ -586,13 +625,55 @@ def default_gate_commands(repo_root):
         "refresh": shlex.split(os.environ.get("DA_BUMP_REFRESH_CMD", "make refresh")),
         "check": shlex.split(os.environ.get("DA_BUMP_CHECK_CMD", "make check")),
         "build": shlex.split(os.environ.get("DA_BUMP_BUILD_CMD", "make build")),
+        # MINECRAFT-362 review, twenty-first round: runs the SAME real-jar
+        # dependency-closure checker ci.yml's `dependency-check` job
+        # already trusts (scripts/dependency_closure_check.py, vendored
+        # verbatim at that job's own pinned schematic commit), against
+        # the GENERATED tree, after `build` and before anything is
+        # committed. Closes the gap modrinth_compat.find_dependency_conflicts
+        # cannot: a required Modrinth dependency present with no exact
+        # version_id passes that check unconditionally, even when the
+        # pinned jar's own actual version is outside the real required
+        # range -- confirmed live (a candidate requiring `othermod
+        # [2.0,)` against a pinned `othermod 1.0.0` bumped successfully
+        # under the Modrinth-metadata-only check, but this real-jar
+        # checker correctly refuses it).
+        #
+        # --strict (MINECRAFT-362 review, twenty-second round): this gate
+        # runs unattended, so a warning (e.g. "no nested jars found
+        # anywhere") has no human present to notice it either -- unlike
+        # ci.yml's own `dependency-check` job, which is non-strict by
+        # default (see reusable-dependency-check.yml) because a human
+        # reviews that job's output on every PR. Confirmed live against
+        # the current pack before adding this: 36 nested jars, 71
+        # satisfied required dependencies, zero warnings -- --strict does
+        # not change today's outcome, only tomorrow's if that regresses.
+        "dependency_closure": shlex.split(
+            os.environ.get(
+                "DA_BUMP_DEPENDENCY_CLOSURE_CMD", "python3 scripts/dependency_closure_check.py --strict"
+            )
+        ),
     }
 
 
 def run_gate(repo_root, run_command, commands, name):
+    """MINECRAFT-362 review, twenty-second round: `dependency_closure`
+    failing is NOT the same kind of event as `refresh`/`check`/`build`
+    failing. Those three failing means packwiz/the build pipeline is
+    broken -- unexpected, infrastructure-level, should fail a poll run
+    loudly. `dependency_closure` failing means the real, vendored
+    checker looked at this SPECIFIC candidate's real jar and correctly
+    refused it (same per-candidate unpredictability as
+    `dependency_conflict` -- see modrinth_compat.find_dependency_conflicts'
+    own docstring) -- expected in the same sense a human reviewer finding
+    a real problem is "expected" to happen sometimes, not a bug in this
+    tooling. Giving it a distinct outcome string lets
+    poll-mod-updates.py's `_is_expected_gap` tell the two apart instead of
+    both collapsing into one generic, always-unexpected `gate_failed`."""
     result = run_command(commands[name], cwd=str(repo_root))
     if result.returncode != 0:
-        raise EngineError(EXIT_GATE_FAILURE, "gate_failed", f"'make {name}' failed (exit {result.returncode})")
+        outcome = "dependency_closure_gate_failed" if name == "dependency_closure" else "gate_failed"
+        raise EngineError(EXIT_GATE_FAILURE, outcome, f"gate {name!r} failed (exit {result.returncode})")
 
 
 # --------------------------------------------------------------------------
@@ -600,7 +681,27 @@ def run_gate(repo_root, run_command, commands, name):
 # both hashes before anything is written to the repo.
 # --------------------------------------------------------------------------
 
+# MINECRAFT-362 review, kickback on round 22, comment 47928, smaller
+# item (d): download_and_verify now returns the full jar bytes (needed
+# by check_runtime_compatibility_or_die) and holds them alive through
+# every gate that runs after it, instead of the old streaming
+# hash-and-discard loop. No real mod jar this pack manages is anywhere
+# near this size (the largest pinned jar today is a few MB); this is a
+# cheap backstop against a pathological/compromised response trying to
+# OOM the runner, checked against the file ALREADY ON DISK (the
+# downloader's own temp file) before it is ever read into memory, not
+# against an in-memory buffer that would already exist by the time this
+# check ran.
+MAX_JAR_SIZE_BYTES = 512 * 1024 * 1024
+
+
 def download_and_verify(download_url, expected_sha1, expected_sha512, downloader):
+    """Download, hash-verify, and return the jar's own bytes (MINECRAFT-362
+    review, twenty-second round: previously verified and discarded the
+    bytes without returning them -- callers now need them for
+    `check_runtime_compatibility_or_die` below, which has to read the
+    SAME verified jar's own declared platform requirements, not
+    re-download a second copy)."""
     fd, temp_path = tempfile.mkstemp(prefix="da-bump-", suffix=".jar")
     os.close(fd)
     try:
@@ -610,12 +711,20 @@ def download_and_verify(download_url, expected_sha1, expected_sha512, downloader
             raise EngineError(EXIT_INTEGRITY_FAILURE, "integrity_failure",
                                f"failed to download {download_url}: {error}") from error
 
+        size = os.path.getsize(temp_path)
+        if size > MAX_JAR_SIZE_BYTES:
+            raise EngineError(
+                EXIT_INTEGRITY_FAILURE, "integrity_failure",
+                f"downloaded file from {download_url} is {size} bytes, over the "
+                f"{MAX_JAR_SIZE_BYTES}-byte sanity cap -- refusing to read it into memory",
+            )
+
         sha1 = hashlib.sha1()
         sha512 = hashlib.sha512()
         with open(temp_path, "rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                sha1.update(chunk)
-                sha512.update(chunk)
+            data = handle.read()
+        sha1.update(data)
+        sha512.update(data)
         got_sha1 = sha1.hexdigest()
         got_sha512 = sha512.hexdigest()
         if got_sha1 != expected_sha1 or got_sha512 != expected_sha512:
@@ -624,9 +733,108 @@ def download_and_verify(download_url, expected_sha1, expected_sha512, downloader
                 f"downloaded jar hash mismatch: sha1 expected={expected_sha1} got={got_sha1}, "
                 f"sha512 expected={expected_sha512} got={got_sha512}",
             )
+        return data
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
+
+
+# --------------------------------------------------------------------------
+# Runtime compatibility: the candidate's own jar can declare a platform
+# (minecraft/neoforge/forge/java/fml) requirement scripts/dependency_closure_check.py
+# deliberately never fails on (MINECRAFT-362 review, twenty-second
+# round): that checker only NOTES a platform range mismatch, since an
+# upper-bound mismatch routinely still loads fine (confirmed live:
+# Simple Clouds declares `minecraft [1.21,1.21.1)` and starts on
+# 1.21.1). A LOWER-bound mismatch is different -- a jar built against a
+# NEWER NeoForge than this pack pins will not load at all, and nothing
+# else in either engine checks this: modrinth_compat resolves
+# compatibility only at Modrinth's own (game_version, loader) NAME
+# granularity ("1.21.1" + "neoforge"), never a loader VERSION, and
+# scripts/verify-neoforge-runtime.py (the one script in this repo that
+# does check a NeoForge range) is not a gate on either engine -- it only
+# runs in CI, after a push, evaluating Quark's own declared range, not
+# a freshly-bumped candidate's.
+# --------------------------------------------------------------------------
+
+def _lower_bound_violated(pinned_version, range_spec):
+    """True if `pinned_version` fails the LOWER bound of every
+    alternative in `range_spec` (a Maven version range, same syntax
+    scripts/dependency_closure_check.py's own `in_range` parses) --
+    upper bounds are deliberately ignored, for the reason the block
+    comment above this section explains. Reuses that module's own
+    `_RANGE` token scanner and `compare` ordering rather than a second,
+    divergent range parser."""
+    range_spec = (range_spec or "").strip()
+    if not range_spec:
+        return False
+    for match in dependency_closure_check._RANGE.finditer(range_spec):
+        part = match.group(0).strip()
+        if part[0] not in "[(":
+            # Bare version: a soft minimum, same as dependency_closure_check.in_range.
+            if dependency_closure_check.compare(pinned_version, part) >= 0:
+                return False
+            continue
+        lower_inclusive = part[0] == "["
+        body = part[1:-1]
+        lower = body.split(",", 1)[0].strip() if "," in body else body.strip()
+        if not lower:
+            return False  # this alternative has no lower bound at all -- satisfied
+        comparison = dependency_closure_check.compare(pinned_version, lower)
+        if comparison > 0 or (comparison == 0 and lower_inclusive):
+            return False
+    return True
+
+
+def check_runtime_compatibility_or_die(jar_bytes, pinned_versions):
+    """Raise EngineError if the candidate's own jar declares a platform
+    requirement whose LOWER bound exceeds this pack's own pinned
+    version for that platform component. `pinned_versions` is
+    `pack.toml`'s own `[versions]` table (`{"minecraft": "1.21.1",
+    "neoforge": "21.1.250", ...}` -- keyed by loader name, same shape
+    `dependency_closure_check.pack_versions` already returns).
+
+    A jar that fails to parse at all (not a real zip, or no recognised
+    mods.toml inside it, or a corrupt jarjar manifest) is not this
+    function's problem -- the identity/hash gate already verified these
+    exact bytes match what Modrinth/the payload declared, and
+    scripts/dependency_closure_check.py's own FAIL on an unreadable jar
+    covers that failure mode; this check skips silently rather than
+    raising a second, confusing error for the same root cause.
+
+    Walks NESTED (jarjar) jars too, via the vendored module's own
+    `load_jar`/`flatten` (MINECRAFT-362 review, kickback on round 22,
+    comment 47928, smaller item (a)): the top-level-only `read_mods`
+    this check previously called missed a shaded/bundled library
+    declaring its OWN platform requirement -- today's real pack has 36
+    nested jars, so this was not theoretical. Same walk the vendored
+    checker's own `analyze()` already does for required-dependency
+    satisfaction, reused here rather than re-implemented.
+    """
+    try:
+        top = dependency_closure_check.load_jar("candidate", jar_bytes)
+    except dependency_closure_check.CheckError:
+        return
+    violations = []
+    for jar in dependency_closure_check.flatten(top):
+        for dependency in jar["deps"]:
+            dependency_id = dependency["id"]
+            if dependency_id not in dependency_closure_check.PLATFORM:
+                continue
+            pinned = pinned_versions.get(dependency_id)
+            if not pinned or not dependency["range"]:
+                continue
+            if _lower_bound_violated(pinned, dependency["range"]):
+                violations.append(
+                    f"{jar['label']} declares {dependency_id} {dependency['range']!r}, whose "
+                    f"lower bound exceeds this pack's own pinned {dependency_id} {pinned!r}"
+                )
+    if violations:
+        raise EngineError(
+            EXIT_CONFIG_ERROR, "runtime_incompatible",
+            "candidate's own jar requires a newer platform version than this pack pins: "
+            + "; ".join(violations),
+        )
 
 
 def default_downloader(url, dest_path):
@@ -799,17 +1007,12 @@ def assert_only_da_pin_changed_under_mods(repo_root, run_command=subprocess.run)
 
 def run_engine(repo_root, payload_raw, *, release_body_override=None,
                 downloader=default_downloader, run_command=subprocess.run,
-                gate_commands=None):
+                gate_commands=None, metadata_fetcher=None):
     repo_root = Path(repo_root)
     assert_restore_targets_clean(repo_root, run_command=run_command)
     payload = validate_payload(payload_raw)
     category_received = payload["category"]
-    if category_received in KNOWN_CATEGORIES:
-        category = category_received
-    elif category_received is None:
-        category = None
-    else:
-        category = "__unrecognised__"
+    caller_category = category_received if category_received in KNOWN_CATEGORIES else None
 
     pin = load_da_pin(repo_root)
     previous_pack_version = load_pack_version(repo_root)
@@ -857,6 +1060,39 @@ def run_engine(repo_root, payload_raw, *, release_body_override=None,
             f"{pin['modrinth_version_id']!r})",
         )
 
+    # AC4 category determination (MINECRAFT-362 review, eighth round):
+    # this path previously trusted the trigger payload's own `category`
+    # field alone -- a breaking DA release whose payload omits category,
+    # or mislabels it (e.g. "fix" on a major version bump), would
+    # default to minor with no BREAKING heading and no Migration check,
+    # since the gate below is gated entirely on mapping_rule ==
+    # "breaking_as_minor". `payload["version"]` and `pin["pinned_version"]`
+    # are both already confirmed valid semver by `compare_semver` above,
+    # so the delta between them is derived the same way
+    # scripts/bump_mod.py's generalized engine does, and can only
+    # ESCALATE the payload's own category, never downgrade it -- the
+    # same one-directional rule, for the same reason: a payload category
+    # claiming "breaking" is still trusted over a merely-patch-looking
+    # version bump.
+    # DA's own version scheme is always plain "x.y.z[-prerelease]" (see
+    # load_da_pin's fixed dynamicatmosphere-<version>.jar parsing), so
+    # this normalization is a no-op for DA today -- threaded through
+    # anyway, for the same reason and in the same shape as
+    # scripts/bump_mod.py's own fix, rather than leaving this call site
+    # unnormalized and relying on DA never adopting a prefixed scheme
+    # (MINECRAFT-362 review, ninth round, smaller item).
+    da_game_version, da_loader = mod_eligibility.read_pack_targets(repo_root)
+    delta_category = semver_delta_category(
+        pin["pinned_version"], payload["version"], game_version=da_game_version, loader=da_loader,
+    )
+    category = more_severe_category(caller_category, delta_category)
+    if category is None and category_received is not None and category_received not in KNOWN_CATEGORIES:
+        # Preserve the "payload category was present but not recognised"
+        # sentinel distinctly from "no category was determined at all" --
+        # existing behaviour/tests distinguish the two messages, even
+        # though both still default to minor.
+        category = "__unrecognised__"
+
     new_pack_version, mapping_rule = bump_pack_version(previous_pack_version, category)
 
     releases_dir = repo_root / "docs" / "releases"
@@ -877,18 +1113,67 @@ def run_engine(repo_root, payload_raw, *, release_body_override=None,
                 "own section of the DA GitHub release body",
             )
 
-    download_and_verify(payload["download_url"], payload["sha1"], payload["sha512"], downloader)
+    modrinth_version_metadata = verify_against_modrinth_metadata(
+        payload, metadata_fetcher or fetch_modrinth_version_metadata,
+        game_version=da_game_version, loader=da_loader,
+    )
+
+    # Dependency check (MINECRAFT-362 review, eighteenth round): this
+    # dispatch path never called modrinth_compat.find_dependency_conflicts
+    # at all, unlike the generalized poll path -- a DA candidate
+    # declaring an existing pinned project incompatible would still pin
+    # and publish successfully. Same check, same narrow scope, as
+    # bump_mod.py's own call (incompatible-and-pinned only, as of the
+    # twenty-first round -- see that module's own docstring): reads the
+    # pack's CURRENT on-disk pins before this run writes anything,
+    # against the dependencies Modrinth's own metadata (just verified
+    # above) declares for this exact version.
+    eligible_pins, _untracked = mod_eligibility.discover_eligible_pins(repo_root)
+    pinned_versions_by_mod_id = {eligible_pin.mod_id: eligible_pin.pinned_version_id for eligible_pin in eligible_pins}
+    dependency_candidate = types.SimpleNamespace(
+        dependencies=modrinth_version_metadata.get("dependencies") or [],
+        version_number=payload["version"],
+    )
+    conflicts = modrinth_compat.find_dependency_conflicts(dependency_candidate, pinned_versions_by_mod_id)
+    if conflicts:
+        raise EngineError(
+            EXIT_CONFIG_ERROR, "dependency_conflict",
+            f"Dynamic Atmosphere {payload['version']} has dependency conflicts: " + "; ".join(conflicts),
+        )
+
+    jar_bytes = download_and_verify(payload["download_url"], payload["sha1"], payload["sha512"], downloader)
+    # Twenty-second review round: the candidate's own real jar can
+    # declare a platform (minecraft/neoforge/...) requirement whose
+    # LOWER bound this pack's own pinned version does not meet --
+    # nothing else on this path checks that (see this function's own
+    # block comment above `check_runtime_compatibility_or_die`).
+    check_runtime_compatibility_or_die(
+        jar_bytes, dependency_closure_check.pack_versions(Path(repo_root) / "pack.toml"),
+    )
 
     vouch = run_vouch_check(repo_root, payload["sha512"])
 
     listing_review_required = mapping_rule != "patch"
-    category_note = None
-    if mapping_rule == "minor_default_absent_category":
-        category_note = ("The trigger payload did not include a category. Minor was used as the default bump.")
-    elif mapping_rule == "minor_default_unrecognised_category":
+    if mapping_rule in ("minor_default_absent_category", "minor_default_unrecognised_category"):
+        if category_received is None:
+            category_note = (
+                "The trigger payload did not include a category, and the version delta "
+                f"{pin['pinned_version']} -> {payload['version']} changed no semver component. "
+                "Minor was used as the default bump."
+            )
+        else:
+            category_note = (
+                f"The trigger payload's category ({category_received!r}) was not one of "
+                f"patch/minor/breaking, and the version delta {pin['pinned_version']} -> "
+                f"{payload['version']} changed no semver component. Minor was used as the "
+                "default bump."
+            )
+    else:
         category_note = (
-            f"The trigger payload's category ({category_received!r}) was not one of "
-            "patch/minor/breaking. Minor was used as the default bump."
+            f"Category: {category!r} -- semver delta {pin['pinned_version']} -> "
+            f"{payload['version']} => {delta_category!r}; trigger payload category => "
+            f"{category_received!r}. The more severe of the two is used; the payload category "
+            "can only escalate the semver-delta classification, never downgrade it."
         )
 
     notes_dir_existed_before = releases_dir.exists()
@@ -925,6 +1210,11 @@ def run_engine(repo_root, payload_raw, *, release_body_override=None,
         stage_intended_files(repo_root, notes_path, run_command=run_command)
         run_gate(repo_root, run_command, commands, "check")
         run_gate(repo_root, run_command, commands, "build")
+        # Real-jar dependency closure (MINECRAFT-362 review, twenty-first
+        # round) -- after `build` so the export itself is already proven
+        # to succeed, before anything is committed, so a failure here
+        # restores cleanly same as any other gate.
+        run_gate(repo_root, run_command, commands, "dependency_closure")
     except Exception:
         # Fail-closed applies to ANY exception here, not only a designed
         # EngineError: a missing make/packwiz binary, a CalledProcessError
@@ -981,6 +1271,9 @@ def main(argv=None):
     parser.add_argument("--release-body", default=None,
                          help="local file to use instead of fetching the GitHub release body")
     args = parser.parse_args(argv)
+
+    global _MODRINTH_TOKEN
+    _MODRINTH_TOKEN = os.environ.pop("MODRINTH_TOKEN", None) or None
 
     with open(args.payload, "r", encoding="utf-8") as handle:
         payload_raw = json.load(handle)

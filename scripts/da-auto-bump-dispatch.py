@@ -257,7 +257,54 @@ def build_commit_message(*, mapping_rule: str, new_pack_version: str, da_version
         f"- Modrinth version id: {modrinth_version_id}",
         f"- Mapping rule: {mapping_rule}",
     ]
+    # No Release-Only trailer: this ships the normal rollout contract
+    # (MINECRAFT-362 review, comment 48456, item 5 -- per the resumed
+    # user directive in comment 48363, "make sure the server is updated
+    # (should be auto)") -- server_update_policy.should_deploy() already
+    # defaults to True when no Release-Only trailer is present at all, so
+    # an ordinary automated bump now deploys/restarts normally, the same
+    # as a human-authored release. An explicitly HELD release (a genuine
+    # publication-only case, decided elsewhere, not by this builder)
+    # still sets Release-Only: true itself; this builder just no longer
+    # adds it unconditionally to every automated bump.
     trailer = f"DA-Auto-Bump: {da_version} {modrinth_version_id}"
+    return subject + "\n\n" + "\n".join(body) + "\n\n" + trailer + "\n"
+
+
+def build_generic_commit_message(*, mapping_rule: str, new_pack_version: str, mod_name: str,
+                                   mod_id: str, modrinth_version_id: str, version_number: str,
+                                   source_text: str = "scheduled Modrinth reconciliation") -> str:
+    """Same shape as build_commit_message, generalized to any enrolled mod
+    (MINECRAFT-362's scripts/bump_mod.py), with its own trailer
+    (`Mod-Auto-Bump`) instead of `DA-Auto-Bump` -- so a generic bump is
+    never mistaken for a DA one by anything that greps commit history for
+    either trailer specifically.
+
+    `source_text` describes what actually triggered this bump in the
+    commit body's first line; defaults to the scheduled-poll wording
+    (scripts/poll-mod-updates.py's only caller). scripts/bump_mod.py's
+    CLI passes its own text -- the default previously appeared verbatim
+    on a human-run CLI bump too, claiming an automated trigger that
+    never happened (MINECRAFT-362 review, fifth round)."""
+    commit_type = "feat" if mapping_rule in _FEAT_MAPPING_RULES else "fix"
+    if mapping_rule == "breaking_as_minor":
+        subject = (
+            f"{commit_type}!: release Sickos {new_pack_version} "
+            f"pinning {mod_name} {version_number} (BREAKING)"
+        )
+    else:
+        subject = f"{commit_type}: release Sickos {new_pack_version} pinning {mod_name} {version_number}"
+    body = [
+        f"Automated {mod_name} auto-bump via {source_text}.",
+        "",
+        f"- {mod_name} version: {version_number}",
+        f"- Modrinth mod id: {mod_id}",
+        f"- Modrinth version id: {modrinth_version_id}",
+        f"- Mapping rule: {mapping_rule}",
+    ]
+    # Same normal-rollout reasoning as build_commit_message above (no
+    # Release-Only trailer).
+    trailer = f"Mod-Auto-Bump: {mod_id} {modrinth_version_id}"
     return subject + "\n\n" + "\n".join(body) + "\n\n" + trailer + "\n"
 
 

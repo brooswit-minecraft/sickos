@@ -6,3 +6,10 @@ side = "both"
 url = "https://github.com/brooswit-minecraft/magicavoxel-loader/releases/download/v0.1.3/magicavoxel-loader-0.1.3.jar"
 hash-format = "sha256"
 hash = "65899c6c9b30909291d5d76eee8cafab6f29cc638c4941a53bb6f45d33cef403"
+
+[update]
+[update.github]
+slug = "brooswit-minecraft/magicavoxel-loader"
+tag = "v0.1.3"
+branch = "6fa9a8e3791bf2ec73af9ca20d2005a08197e5c8"
+regex = "^.+(?<!-api|-dev|-dev-preshadow|-sources)\\.jar$"

@@ -5,6 +5,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+from server_update_policy import should_deploy  # noqa: E402
+
 MODULE_PATH = Path(__file__).resolve().parent.parent / "scripts" / "da-auto-bump-dispatch.py"
 _spec = importlib.util.spec_from_file_location("da_auto_bump_dispatch", MODULE_PATH)
 dispatch = importlib.util.module_from_spec(_spec)
@@ -18,6 +21,7 @@ render_job_summary = dispatch.render_job_summary
 render_pushed_commit_line = dispatch.render_pushed_commit_line
 render_paused_summary = dispatch.render_paused_summary
 build_commit_message = dispatch.build_commit_message
+build_generic_commit_message = dispatch.build_generic_commit_message
 build_listing_issue_body = dispatch.build_listing_issue_body
 open_listing_issue = dispatch.open_listing_issue
 has_da_auto_bump_trailer = dispatch._load_has_da_auto_bump_trailer()
@@ -264,6 +268,102 @@ class TestBuildCommitMessage(unittest.TestCase):
         self.assertIn("- Dynamic Atmosphere version:", message)
         self.assertIn("- Mapping rule:", message)
         self.assertTrue(has_da_auto_bump_trailer(message))
+
+    def test_generated_message_deploys_normally_patch(self):
+        message = build_commit_message(
+            mapping_rule="patch", new_pack_version="0.22.2",
+            da_version="0.19.2", modrinth_version_id="abc123",
+        )
+        self.assertTrue(should_deploy(message))
+        self.assertTrue(has_da_auto_bump_trailer(message))
+
+    def test_generated_message_deploys_normally_minor(self):
+        message = build_commit_message(
+            mapping_rule="minor", new_pack_version="0.23.0",
+            da_version="0.20.0", modrinth_version_id="abc123",
+        )
+        self.assertTrue(should_deploy(message))
+        self.assertTrue(has_da_auto_bump_trailer(message))
+
+    def test_generated_message_deploys_normally_minor_default_rules(self):
+        for default_rule in (
+            "minor_default_absent_category",
+            "minor_default_unrecognised_category",
+        ):
+            with self.subTest(mapping_rule=default_rule):
+                message = build_commit_message(
+                    mapping_rule=default_rule, new_pack_version="0.23.0",
+                    da_version="0.20.0", modrinth_version_id="abc123",
+                )
+                self.assertTrue(should_deploy(message))
+                self.assertTrue(has_da_auto_bump_trailer(message))
+
+    def test_generated_message_deploys_normally_breaking(self):
+        message = build_commit_message(
+            mapping_rule="breaking_as_minor", new_pack_version="1.0.0",
+            da_version="1.0.0-beta.1", modrinth_version_id="xyz789",
+        )
+        self.assertTrue(should_deploy(message))
+        self.assertTrue(has_da_auto_bump_trailer(message))
+
+
+def _has_generic_mod_auto_bump_trailer(message):
+    release_decisions_path = Path(__file__).parents[1] / "scripts" / "release_decisions.py"
+    spec = importlib.util.spec_from_file_location("release_decisions_generic", release_decisions_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["release_decisions_generic"] = module
+    spec.loader.exec_module(module)
+    return module.has_trailer("Mod-Auto-Bump", message)
+
+
+class TestBuildGenericCommitMessage(unittest.TestCase):
+    def test_patch_uses_fix_prefix(self):
+        message = build_generic_commit_message(
+            mapping_rule="patch", new_pack_version="0.22.2", mod_name="Example Mod",
+            mod_id="EXAMPLE1", modrinth_version_id="abc123", version_number="1.0.1",
+        )
+        self.assertTrue(message.startswith("fix: release Sickos 0.22.2 pinning Example Mod 1.0.1"))
+
+    def test_minor_uses_feat_prefix(self):
+        message = build_generic_commit_message(
+            mapping_rule="minor", new_pack_version="0.23.0", mod_name="Example Mod",
+            mod_id="EXAMPLE1", modrinth_version_id="abc123", version_number="1.1.0",
+        )
+        self.assertTrue(message.startswith("feat: release Sickos 0.23.0 pinning Example Mod 1.1.0"))
+
+    def test_breaking_marks_subject(self):
+        message = build_generic_commit_message(
+            mapping_rule="breaking_as_minor", new_pack_version="1.0.0", mod_name="Example Mod",
+            mod_id="EXAMPLE1", modrinth_version_id="abc123", version_number="2.0.0",
+        )
+        subject = message.split("\n", 1)[0]
+        self.assertTrue(subject.startswith("feat!: release Sickos 1.0.0"))
+        self.assertIn("BREAKING", subject)
+
+    def test_trailer_is_alone_in_final_paragraph_and_recognised(self):
+        message = build_generic_commit_message(
+            mapping_rule="minor", new_pack_version="0.23.0", mod_name="Example Mod",
+            mod_id="EXAMPLE1", modrinth_version_id="abc123", version_number="1.1.0",
+        )
+        final_paragraph = message.strip("\n").split("\n\n")[-1]
+        self.assertEqual(final_paragraph, "Mod-Auto-Bump: EXAMPLE1 abc123")
+        self.assertTrue(_has_generic_mod_auto_bump_trailer(message))
+
+    def test_never_mistaken_for_a_da_trailer(self):
+        message = build_generic_commit_message(
+            mapping_rule="minor", new_pack_version="0.23.0", mod_name="Example Mod",
+            mod_id="EXAMPLE1", modrinth_version_id="abc123", version_number="1.1.0",
+        )
+        self.assertFalse(has_da_auto_bump_trailer(message))
+
+    def test_generated_message_deploys_normally(self):
+        for mapping_rule in ("patch", "minor", "breaking_as_minor"):
+            with self.subTest(mapping_rule=mapping_rule):
+                message = build_generic_commit_message(
+                    mapping_rule=mapping_rule, new_pack_version="0.23.0", mod_name="Example Mod",
+                    mod_id="EXAMPLE1", modrinth_version_id="abc123", version_number="1.1.0",
+                )
+                self.assertTrue(should_deploy(message))
 
 
 class TestListingIssue(unittest.TestCase):

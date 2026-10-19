@@ -1,12 +1,16 @@
 import hashlib
 import importlib.util
+import io
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.error
+import zipfile
 from unittest import mock
 
 
@@ -21,12 +25,12 @@ CONTROL_HASH = "c" * 128
 OLD_VERSION_ID = "OLDID1234"
 CONTROL_MOD_ID = "LNytGWDc"
 
-STUB_GATES = {"refresh": ["true"], "check": ["true"], "build": ["true"]}
-FAILING_CHECK_GATES = {"refresh": ["true"], "check": ["false"], "build": ["true"]}
-FAILING_BUILD_GATES = {"refresh": ["true"], "check": ["true"], "build": ["false"]}
+STUB_GATES = {"refresh": ["true"], "check": ["true"], "build": ["true"], "dependency_closure": ["true"]}
+FAILING_CHECK_GATES = {"refresh": ["true"], "check": ["false"], "build": ["true"], "dependency_closure": ["true"]}
+FAILING_BUILD_GATES = {"refresh": ["true"], "check": ["true"], "build": ["false"], "dependency_closure": ["true"]}
 MISSING_BINARY_GATES = {
     "refresh": ["/no/such/binary-da-bump-test-missing"],
-    "check": ["true"], "build": ["true"],
+    "check": ["true"], "build": ["true"], "dependency_closure": ["true"],
 }
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
@@ -138,12 +142,47 @@ def make_downloader(content):
     return downloader
 
 
+# Honest Modrinth version metadata, keyed by version id, registered by make_payload()
+# so every test's payload verifies unless a test deliberately overrides its entry.
+MODRINTH_METADATA = {}
+
+
+def modrinth_metadata_for(payload, *, project_id="PZV7RorC", version_id=None,
+                           game_versions=("1.21.1",), loaders=("neoforge",)):
+    # game_versions/loaders match the fixture pack's own target (see
+    # build_fixture_repo below: minecraft = "1.21.1", neoforge = ...) --
+    # MINECRAFT-362 review, seventeenth round added this check to
+    # verify_against_modrinth_metadata/verify_version_file_metadata, so
+    # every test relying on this default helper for an otherwise-honest
+    # metadata response needs these fields present and matching, or the
+    # new check fails them closed for a reason unrelated to what they
+    # actually test.
+    return {
+        "id": version_id or payload["modrinth_version_id"],
+        "project_id": project_id,
+        "version_number": payload["version"],
+        "game_versions": list(game_versions),
+        "loaders": list(loaders),
+        "files": [{
+            "filename": payload["file_name"],
+            "url": payload["download_url"],
+            "hashes": {"sha1": payload["sha1"], "sha512": payload["sha512"]},
+        }],
+    }
+
+
+def fake_modrinth_fetch(version_id):
+    if version_id not in MODRINTH_METADATA:
+        raise urllib.error.HTTPError("https://api.modrinth.com/v2/version/x", 404, "Not Found", {}, None)
+    return MODRINTH_METADATA[version_id]
+
+
 def make_payload(*, version="0.20.0-alpha.1", modrinth_version_id="NEWID5678",
                   content=b"new da jar contents", category="minor",
                   download_url=None, file_name=None, sha1=None, sha512=None):
     content_sha1 = hashlib.sha1(content).hexdigest() if sha1 is None else sha1
     content_sha512 = hashlib.sha512(content).hexdigest() if sha512 is None else sha512
-    return {
+    payload = {
         "version": version,
         "modrinth_version_id": modrinth_version_id,
         "sha1": content_sha1,
@@ -153,6 +192,8 @@ def make_payload(*, version="0.20.0-alpha.1", modrinth_version_id="NEWID5678",
         "category": category,
         "github_release_url": f"https://github.com/brooswit-minecraft/dynamic-atmosphere/releases/tag/v{version}",
     }
+    MODRINTH_METADATA[modrinth_version_id] = modrinth_metadata_for(payload)
+    return payload
 
 
 def stub_vouch(control_status, da_status):
@@ -165,6 +206,10 @@ def stub_vouch(control_status, da_status):
 
 class EngineTestCase(unittest.TestCase):
     def setUp(self):
+        MODRINTH_METADATA.clear()
+        patcher = mock.patch.object(bump, "fetch_modrinth_version_metadata", side_effect=fake_modrinth_fetch)
+        self.fetch_mock = patcher.start()
+        self.addCleanup(patcher.stop)
         self.repo = build_fixture_repo()
         self.addCleanup(shutil.rmtree, self.repo, ignore_errors=True)
 
@@ -212,6 +257,35 @@ class TestHashAnomaly(EngineTestCase):
             self.run_engine(payload)
         self.assertEqual(ctx.exception.exit_code, bump.EXIT_ANOMALY)
         self.assertEqual(self.porcelain(), "")
+
+
+class TestDownloadSizeCap(EngineTestCase):
+    """MINECRAFT-362 review, kickback on round 22, comment 47928, smaller
+    item (d): download_and_verify now returns the full jar bytes and
+    holds them alive through every later gate (needed by
+    check_runtime_compatibility_or_die) -- MAX_JAR_SIZE_BYTES is a cheap
+    backstop, checked against the downloaded file's size ON DISK before
+    it is ever read into memory, so a pathological/compromised response
+    cannot OOM the runner. Patches the module constant down to a tiny
+    value rather than actually downloading 512 MiB in a test."""
+
+    def test_oversized_download_fails_closed_without_reading_it_into_memory(self):
+        content = b"this is definitely over ten bytes"
+        payload = make_payload(category="patch", content=content)
+        with mock.patch.object(bump, "MAX_JAR_SIZE_BYTES", 10):
+            with self.assertRaises(bump.EngineError) as ctx:
+                self.run_engine(payload, content=content)
+        self.assertEqual(ctx.exception.exit_code, bump.EXIT_INTEGRITY_FAILURE)
+        self.assertIn("sanity cap", ctx.exception.message)
+        self.assertEqual(self.porcelain(), "")
+
+    def test_download_under_the_cap_is_unaffected(self):
+        content = b"small jar"
+        payload = make_payload(category="patch", content=content)
+        with mock.patch.object(bump, "MAX_JAR_SIZE_BYTES", 10):
+            summary, exit_code, _ = self.run_engine(payload, content=content)
+        self.assertEqual(exit_code, bump.EXIT_OK)
+        self.assertTrue(summary["changed"])
 
 
 class TestDowngradeRefused(EngineTestCase):
@@ -327,7 +401,12 @@ class TestDirtyTreeGuard(EngineTestCase):
 
 class TestCategoryMapping(EngineTestCase):
     def test_patch_bumps_patch(self):
-        payload = make_payload(category="patch")
+        # 0.19.0-alpha.1 -> 0.19.1-alpha.1 is itself a patch-level delta,
+        # agreeing with the payload's own "patch" category (not merely
+        # not contradicting a higher one -- see
+        # test_payload_category_cannot_downgrade_the_semver_delta for
+        # that case).
+        payload = make_payload(version="0.19.1-alpha.1", category="patch")
         summary, exit_code, _ = self.run_engine(payload)
         self.assertEqual(exit_code, bump.EXIT_OK)
         self.assertEqual(summary["new_pack_version"], "0.22.1")
@@ -401,7 +480,13 @@ class TestCategoryMapping(EngineTestCase):
         self.assertEqual(self.porcelain(), "")
 
     def test_absent_category_defaults_to_minor_and_says_so(self):
-        payload = make_payload(category=None)
+        # Same core (0, 19, 0) as the pin, only the prerelease identifier
+        # advances -- semver_delta_category correctly returns None for
+        # this (no component delta to classify), so this exercises the
+        # genuine "truly undetermined" sentinel path, not a case where
+        # the version delta itself would have said "minor" anyway
+        # (MINECRAFT-362 review, eighth round).
+        payload = make_payload(version="0.19.0-alpha.2", category=None)
         summary, exit_code, _ = self.run_engine(payload)
         self.assertEqual(exit_code, bump.EXIT_OK)
         self.assertEqual(summary["new_pack_version"], "0.23.0")
@@ -410,7 +495,7 @@ class TestCategoryMapping(EngineTestCase):
         self.assertIn("did not include a category", notes)
 
     def test_unrecognised_category_defaults_to_minor_and_says_so(self):
-        payload = make_payload(category="wat")
+        payload = make_payload(version="0.19.0-alpha.2", category="wat")
         summary, exit_code, _ = self.run_engine(payload)
         self.assertEqual(exit_code, bump.EXIT_OK)
         self.assertEqual(summary["new_pack_version"], "0.23.0")
@@ -418,10 +503,36 @@ class TestCategoryMapping(EngineTestCase):
         notes = (self.repo / summary["notes_path"]).read_text(encoding="utf-8")
         self.assertIn("was not one of", notes)
 
+    def test_payload_category_cannot_downgrade_the_semver_delta(self):
+        # 0.19.0-alpha.1 -> 0.20.0-alpha.1 is a minor-component delta;
+        # a payload category of "patch" must not downgrade that --
+        # the more severe of the two wins (MINECRAFT-362 review, eighth
+        # round: the DA dispatch path had no semver-delta derivation at
+        # all before this, so AC4's breaking gate could never fire here
+        # even when a major DA release's payload category was absent or
+        # wrong).
+        payload = make_payload(version="0.20.0-alpha.1", category="patch")
+        summary, exit_code, _ = self.run_engine(payload)
+        self.assertEqual(exit_code, bump.EXIT_OK)
+        self.assertEqual(summary["mapping_rule"], "minor")
+
+    def test_major_semver_delta_alone_triggers_the_migration_gate(self):
+        # No category in the payload at all -- the major-version delta
+        # alone must still reach the "## Migration" required check.
+        release_body = "# 1.0.0\n\n## Changes\n\n- stuff\n"
+        body_file = self.repo.parent / "release-body-nomig-major.md"
+        body_file.write_text(release_body, encoding="utf-8")
+        self.addCleanup(body_file.unlink, missing_ok=True)
+
+        payload = make_payload(version="1.0.0", category=None)
+        with self.assertRaises(bump.EngineError) as ctx:
+            self.run_engine(payload, release_body_override=str(body_file))
+        self.assertEqual(ctx.exception.outcome, "migration_missing")
+
 
 class TestNotesFile(EngineTestCase):
     def test_notes_committed_staged_and_path_in_summary(self):
-        payload = make_payload(category="patch")
+        payload = make_payload(version="0.19.1-alpha.1", category="patch")
         summary, exit_code, _ = self.run_engine(payload)
         self.assertEqual(exit_code, bump.EXIT_OK)
         self.assertEqual(summary["notes_path"], "docs/releases/0.22.1.md")
@@ -435,7 +546,7 @@ class TestNotesFile(EngineTestCase):
         existing = releases_dir / "0.22.1.md"
         existing.write_text("already published\n", encoding="utf-8")
 
-        payload = make_payload(category="patch")
+        payload = make_payload(version="0.19.1-alpha.1", category="patch")
         with self.assertRaises(bump.EngineError) as ctx:
             self.run_engine(payload)
         self.assertEqual(ctx.exception.exit_code, bump.EXIT_NOTES_EXISTS)
@@ -444,7 +555,7 @@ class TestNotesFile(EngineTestCase):
 
 class TestListingReviewRequired(EngineTestCase):
     def test_false_on_patch(self):
-        summary, exit_code, _ = self.run_engine(make_payload(category="patch"))
+        summary, exit_code, _ = self.run_engine(make_payload(version="0.19.1-alpha.1", category="patch"))
         self.assertEqual(exit_code, bump.EXIT_OK)
         self.assertFalse(summary["listing_review_required"])
 
@@ -729,7 +840,7 @@ class TestMigrationExtraction(unittest.TestCase):
 class TestCliMain(EngineTestCase):
     def test_main_writes_summary_out_and_returns_exit_code(self):
         content = b"cli test content"
-        payload = make_payload(category="patch", content=content)
+        payload = make_payload(version="0.19.1-alpha.1", category="patch", content=content)
         payload_path = self.repo.parent / "payload.json"
         payload_path.write_text(json.dumps(payload), encoding="utf-8")
         self.addCleanup(payload_path.unlink, missing_ok=True)
@@ -751,7 +862,7 @@ class TestCliMain(EngineTestCase):
 
     def test_main_reports_unexpected_error_with_nonzero_exit(self):
         content = b"cli unexpected"
-        payload = make_payload(category="patch", content=content)
+        payload = make_payload(version="0.19.1-alpha.1", category="patch", content=content)
         payload_path = self.repo.parent / "payload-unexpected.json"
         payload_path.write_text(json.dumps(payload), encoding="utf-8")
         self.addCleanup(payload_path.unlink, missing_ok=True)
@@ -796,3 +907,387 @@ class TestSharedContractFixture(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestModrinthMetadataGate(EngineTestCase):
+    """AC3: the payload is verified against Modrinth's own version-file metadata, fail closed."""
+
+    CONTENT = b"metadata gate jar"
+
+    def attempt(self, payload, expect_code=None):
+        before = self.porcelain()
+        with self.assertRaises(bump.EngineError) as ctx:
+            self.run_engine(payload, content=self.CONTENT)
+        self.assertEqual(ctx.exception.exit_code, bump.EXIT_INTEGRITY_FAILURE)
+        self.assertEqual(self.porcelain(), before)
+        self.assertFalse((self.repo / "docs" / "releases").exists())
+        return ctx.exception.message
+
+    def test_matching_metadata_bumps(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        summary, exit_code, _ = self.run_engine(payload, content=self.CONTENT)
+        self.assertEqual(exit_code, bump.EXIT_OK)
+        self.assertTrue(summary["changed"])
+        self.fetch_mock.assert_called_once_with(payload["modrinth_version_id"])
+
+    def test_payload_sha512_differs_from_modrinth_fails_closed(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        MODRINTH_METADATA[payload["modrinth_version_id"]]["files"][0]["hashes"]["sha512"] = "e" * 128
+        self.assertIn("sha512", self.attempt(payload))
+
+    def test_payload_sha1_differs_from_modrinth_fails_closed(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        MODRINTH_METADATA[payload["modrinth_version_id"]]["files"][0]["hashes"]["sha1"] = "e" * 40
+        self.assertIn("sha1", self.attempt(payload))
+
+    def test_payload_and_download_agree_but_modrinth_differs_fails_closed(self):
+        # A forged payload whose hashes match the (attacker-served) bytes it points at.
+        payload = make_payload(category="patch", content=b"forged bytes")
+        MODRINTH_METADATA[payload["modrinth_version_id"]] = modrinth_metadata_for(
+            make_payload(category="patch", content=b"the real released jar",
+                         modrinth_version_id="OTHERID99")
+            | {"modrinth_version_id": payload["modrinth_version_id"]}
+        )
+        self.attempt_forged(payload)
+
+    def attempt_forged(self, payload):
+        before = self.porcelain()
+        with self.assertRaises(bump.EngineError) as ctx:
+            self.run_engine(payload, content=b"forged bytes")
+        self.assertEqual(ctx.exception.exit_code, bump.EXIT_INTEGRITY_FAILURE)
+        self.assertEqual(self.porcelain(), before)
+
+    def test_download_url_differs_from_modrinth_fails_closed(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        MODRINTH_METADATA[payload["modrinth_version_id"]]["files"][0]["url"] = "https://evil.example/x.jar"
+        self.assertIn("url", self.attempt(payload))
+
+    def test_wrong_project_fails_closed(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        MODRINTH_METADATA[payload["modrinth_version_id"]]["project_id"] = "SOMEOTHER"
+        self.assertIn("project_id", self.attempt(payload))
+
+    def test_forged_older_bytes_labelled_as_newer_version_fails_closed(self):
+        # Valid, genuinely published OLDER release (hashes, url, file all real) presented
+        # under a NEWER payload version string: version_number must equal payload.version.
+        payload = make_payload(version="0.21.0-alpha.1", category="patch", content=self.CONTENT)
+        MODRINTH_METADATA[payload["modrinth_version_id"]]["version_number"] = "0.20.0-alpha.1"
+        message = self.attempt(payload)
+        self.assertIn("version_number", message)
+        self.assertIn("0.20.0-alpha.1", message)
+
+    def test_metadata_without_version_number_fails_closed(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        del MODRINTH_METADATA[payload["modrinth_version_id"]]["version_number"]
+        self.assertIn("version_number", self.attempt(payload))
+
+    def test_metadata_version_id_mismatch_fails_closed(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        MODRINTH_METADATA[payload["modrinth_version_id"]]["id"] = "DIFFERENT"
+        self.assertIn("does not match", self.attempt(payload))
+
+    def test_no_file_with_payload_name_fails_closed(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        MODRINTH_METADATA[payload["modrinth_version_id"]]["files"][0]["filename"] = "other.jar"
+        self.assertIn("exactly one file", self.attempt(payload))
+
+    def test_lookup_404_private_project_fails_closed(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        del MODRINTH_METADATA[payload["modrinth_version_id"]]
+        self.assertIn("HTTP 404", self.attempt(payload))
+
+    # MINECRAFT-362 review, seventeenth round: this dispatch path trusts
+    # an external webhook's payload directly and, unlike the generalized
+    # poll path, had NO (game_version, loader) compatibility check at
+    # all before a write -- a dispatch for a build declaring the wrong
+    # Minecraft version or loader would still pin and publish
+    # successfully. These three tests prove the fix: wrong loader, wrong
+    # game version, and metadata missing the fields entirely all fail
+    # closed, same as every other metadata mismatch above.
+
+    def test_wrong_loader_fails_closed(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        MODRINTH_METADATA[payload["modrinth_version_id"]]["loaders"] = ["fabric"]
+        message = self.attempt(payload)
+        self.assertIn("loaders", message)
+        self.assertIn("neoforge", message)
+
+    def test_wrong_game_version_fails_closed(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        MODRINTH_METADATA[payload["modrinth_version_id"]]["game_versions"] = ["1.20.1"]
+        message = self.attempt(payload)
+        self.assertIn("game_versions", message)
+        self.assertIn("1.21.1", message)
+
+    def test_metadata_missing_compatibility_fields_fails_closed(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        del MODRINTH_METADATA[payload["modrinth_version_id"]]["game_versions"]
+        del MODRINTH_METADATA[payload["modrinth_version_id"]]["loaders"]
+        message = self.attempt(payload)
+        self.assertIn("game_versions", message)
+
+    def test_lookup_transport_error_fails_closed(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        self.fetch_mock.side_effect = OSError("network down")
+        self.assertIn("lookup failed", self.attempt(payload))
+
+    def test_already_pinned_noop_makes_no_metadata_lookup(self):
+        payload = make_payload(
+            version="0.19.0-alpha.1", modrinth_version_id=OLD_VERSION_ID,
+            content=b"x", sha1="0" * 40, sha512=OLD_DA_HASH,
+        )
+        summary, exit_code, _ = self.run_engine(payload)
+        self.assertEqual(summary["outcome"], "already_pinned")
+        self.fetch_mock.assert_not_called()
+
+
+class TestDependencyConflict(EngineTestCase):
+    """MINECRAFT-362 review, eighteenth round: this dispatch path never
+    called modrinth_compat.find_dependency_conflicts at all, unlike the
+    generalized poll path -- a DA candidate declaring an existing pinned
+    project incompatible, or requiring an unverifiable project, would
+    still pin and publish successfully (confirmed live by the reviewer
+    with otherwise-valid identity/hashes/compatibility metadata).
+    `create.pw.toml` (CONTROL_MOD_ID) is the one other mod this fixture
+    repo already has pinned."""
+
+    CONTENT = b"dependency conflict jar"
+
+    def test_incompatible_with_a_currently_pinned_mod_fails_closed(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        MODRINTH_METADATA[payload["modrinth_version_id"]]["dependencies"] = [
+            {"project_id": CONTROL_MOD_ID, "dependency_type": "incompatible"},
+        ]
+        before = self.porcelain()
+        with self.assertRaises(bump.EngineError) as ctx:
+            self.run_engine(payload, content=self.CONTENT)
+        self.assertEqual(ctx.exception.exit_code, bump.EXIT_CONFIG_ERROR)
+        self.assertEqual(ctx.exception.outcome, "dependency_conflict")
+        self.assertIn(CONTROL_MOD_ID, ctx.exception.message)
+        self.assertEqual(self.porcelain(), before)
+
+    def test_required_dependency_not_pinned_at_all_still_bumps(self):
+        # MINECRAFT-362 review, twenty-first round: previously a
+        # conflict (eighteenth round); reverted along with the rest of
+        # modrinth_compat.find_dependency_conflicts' `required`-
+        # dependency checks -- see tests/test_bump_mod.py's
+        # TestDependencyConflict for why (a confirmed false positive on
+        # Cristel Lib). The real-jar dependency_closure gate (see
+        # TestDependencyClosureGateWiring below) is what now catches a
+        # genuinely missing required dependency on this path.
+        payload = make_payload(category="patch", content=self.CONTENT)
+        MODRINTH_METADATA[payload["modrinth_version_id"]]["dependencies"] = [
+            {"project_id": "SOME_UNRELATED_MOD", "dependency_type": "required"},
+        ]
+        summary, exit_code, _ = self.run_engine(payload, content=self.CONTENT)
+        self.assertEqual(exit_code, bump.EXIT_OK)
+        self.assertTrue(summary["changed"])
+
+    def test_no_dependencies_field_at_all_still_bumps(self):
+        # The honest-metadata default (modrinth_metadata_for above) has
+        # no "dependencies" key at all -- must not crash or refuse.
+        payload = make_payload(category="patch", content=self.CONTENT)
+        summary, exit_code, _ = self.run_engine(payload, content=self.CONTENT)
+        self.assertEqual(exit_code, bump.EXIT_OK)
+        self.assertTrue(summary["changed"])
+
+    def test_required_dependency_matching_the_pin_still_bumps(self):
+        payload = make_payload(category="patch", content=self.CONTENT)
+        MODRINTH_METADATA[payload["modrinth_version_id"]]["dependencies"] = [
+            {"project_id": CONTROL_MOD_ID, "dependency_type": "required"},
+        ]
+        summary, exit_code, _ = self.run_engine(payload, content=self.CONTENT)
+        self.assertEqual(exit_code, bump.EXIT_OK)
+        self.assertTrue(summary["changed"])
+
+
+class TestDependencyClosureGateWiring(EngineTestCase):
+    """MINECRAFT-362 review, twenty-first round, required item: wires
+    the real dependency_closure_check.py gate into THIS engine too (see
+    tests/test_bump_mod.py's TestRealDependencyClosureGate for the full
+    real-jar, real-checker reproduction on the generalized path, which
+    has no restriction on where a candidate's download_url can point).
+
+    DA's own `validate_payload` requires `download_url` to be a real
+    `https://cdn.modrinth.com/...` URL (anti-tampering against an
+    untrusted webhook payload) -- deliberately NOT relaxed for this
+    test, so DA's candidate pin cannot point at a local `file://` jar
+    the real checker could fetch offline/deterministically the way
+    `create.pw.toml` (not payload-constrained) can. These tests instead
+    verify the WIRING -- gate position (after build, before anything is
+    committed), exit code/outcome, and clean rollback on failure --
+    with a stub `dependency_closure` command standing in for the real
+    checker, the same way `refresh`/`check`/`build` are already stubbed
+    in every other test in this file."""
+
+    CONTENT = b"dependency closure gate wiring jar"
+
+    def test_failing_dependency_closure_gate_fails_closed_with_clean_rollback(self):
+        gates = dict(STUB_GATES, dependency_closure=["false"])
+        payload = make_payload(category="patch", content=self.CONTENT)
+        before = self.porcelain()
+        with self.assertRaises(bump.EngineError) as ctx:
+            self.run_engine(payload, content=self.CONTENT, gates=gates)
+        self.assertEqual(ctx.exception.exit_code, bump.EXIT_GATE_FAILURE)
+        # MINECRAFT-362 review, twenty-second round: dependency_closure
+        # gets its OWN outcome string, distinct from refresh/check/build's
+        # generic "gate_failed" -- see run_gate's own docstring.
+        self.assertEqual(ctx.exception.outcome, "dependency_closure_gate_failed")
+        self.assertEqual(self.porcelain(), before)
+        self.assertFalse((self.repo / "docs" / "releases").exists() and
+                          any((self.repo / "docs" / "releases").iterdir()))
+
+    def test_passing_dependency_closure_gate_still_bumps(self):
+        gates = dict(STUB_GATES, dependency_closure=["true"])
+        payload = make_payload(category="patch", content=self.CONTENT)
+        summary, exit_code, _ = self.run_engine(payload, content=self.CONTENT, gates=gates)
+        self.assertEqual(exit_code, bump.EXIT_OK)
+        self.assertTrue(summary["changed"])
+
+    def test_dependency_closure_gate_runs_after_build(self):
+        # Ordering matters the same way refresh->stage->check->build
+        # does (fourteenth round): if dependency_closure ran before
+        # build, a build failure downstream could still leave a bad
+        # pin staged. Confirmed by making "build" itself fail and
+        # asserting dependency_closure (stubbed to print a marker) is
+        # never reached.
+        calls = []
+
+        def recording_run_command(args, **kwargs):
+            calls.append(args)
+            return subprocess.run(args, **kwargs)
+
+        marker = ["echo", "dependency_closure_marker_should_not_run"]
+        gates = dict(STUB_GATES, build=["false"], dependency_closure=marker)
+        payload = make_payload(category="patch", content=self.CONTENT)
+        with self.assertRaises(bump.EngineError):
+            self.run_engine(payload, content=self.CONTENT, gates=gates, run_command=recording_run_command)
+        self.assertNotIn(marker, calls)
+
+
+def _build_neoforge_jar(mod_id, version, requires=()):
+    """Same minimal, real, valid NeoForge jar builder as
+    tests/test_bump_mod.py's own copy -- see that file for why this
+    needs to be a real zip, not a mock."""
+    lines = ['modLoader="javafml"', 'loaderVersion="[1,)"', 'license="Test"', "",
+             "[[mods]]", f'modId="{mod_id}"', f'version="{version}"', f'displayName="{mod_id}"']
+    for dep_mod_id, version_range in requires:
+        lines += ["", f"[[dependencies.{mod_id}]]", f'modId="{dep_mod_id}"',
+                  'type="required"', f'versionRange="{version_range}"',
+                  'ordering="NONE"', 'side="BOTH"']
+    toml_text = "\n".join(lines) + "\n"
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("META-INF/neoforge.mods.toml", toml_text)
+    return buf.getvalue()
+
+
+class TestRuntimeCompatibilityCheck(EngineTestCase):
+    """MINECRAFT-362 review, twenty-second round, required item: same
+    check as tests/test_bump_mod.py's TestRuntimeCompatibilityCheck,
+    for this engine. Unlike the dependency_closure GATE (a subprocess,
+    which DA's own validate_payload's cdn.modrinth.com URL requirement
+    rules out testing for real), check_runtime_compatibility_or_die
+    runs in-process against the SAME stubbed-downloader bytes every
+    other test in this file already uses -- no payload-URL restriction
+    applies, since nothing here actually fetches `download_url` over a
+    real network. build_fixture_repo's own pack.toml pins
+    `neoforge = "21.1.250"`."""
+
+    def test_candidate_jar_requiring_a_newer_neoforge_fails_closed(self):
+        jar_bytes = _build_neoforge_jar("dynamicatmosphere", "0.19.1-alpha.1", requires=[("neoforge", "[21.2,)")])
+        payload = make_payload(version="0.19.1-alpha.1", category="patch", content=jar_bytes)
+        before = self.porcelain()
+        with self.assertRaises(bump.EngineError) as ctx:
+            self.run_engine(payload, content=jar_bytes)
+        self.assertEqual(ctx.exception.exit_code, bump.EXIT_CONFIG_ERROR)
+        self.assertEqual(ctx.exception.outcome, "runtime_incompatible")
+        self.assertIn("neoforge", ctx.exception.message)
+        self.assertIn("21.1.250", ctx.exception.message)
+        self.assertEqual(self.porcelain(), before)
+
+    def test_candidate_jar_requiring_an_already_satisfied_neoforge_still_bumps(self):
+        jar_bytes = _build_neoforge_jar("dynamicatmosphere", "0.19.1-alpha.1", requires=[("neoforge", "[21.1,)")])
+        payload = make_payload(version="0.19.1-alpha.1", category="patch", content=jar_bytes)
+        summary, exit_code, _ = self.run_engine(payload, content=jar_bytes)
+        self.assertEqual(exit_code, bump.EXIT_OK)
+        self.assertTrue(summary["changed"])
+
+    def test_candidate_jar_with_an_empty_lower_bound_still_bumps(self):
+        # Same fix as tests/test_bump_mod.py's own test of this name
+        # (MINECRAFT-362 review, kickback on round 22, comment 47928,
+        # P1): _lower_bound_violated's "no lower bound at all" branch
+        # was `continue`, which fell through to its terminal `return
+        # True` -- the opposite of what it should do for an
+        # upper-bound-only range like `(,1.22)`.
+        jar_bytes = _build_neoforge_jar("dynamicatmosphere", "0.19.1-alpha.1", requires=[("minecraft", "(,1.22)")])
+        payload = make_payload(version="0.19.1-alpha.1", category="patch", content=jar_bytes)
+        summary, exit_code, _ = self.run_engine(payload, content=jar_bytes)
+        self.assertEqual(exit_code, bump.EXIT_OK)
+        self.assertTrue(summary["changed"])
+
+
+class TestDefaultGateCommandsStrict(unittest.TestCase):
+    """MINECRAFT-362 review, kickback on round 22, comment 47928, smaller
+    item (b): default_gate_commands' dependency_closure command string
+    (the one actually used unattended -- the real-gate TESTS build their
+    own gate dicts without --strict, so nothing previously asserted this
+    flag is actually in the PRODUCTION command, meaning it could silently
+    disappear with no test catching it)."""
+
+    def test_dependency_closure_command_includes_strict_by_default(self):
+        commands = bump.default_gate_commands(Path("/tmp/example-repo-root"))
+        self.assertIn("--strict", commands["dependency_closure"])
+
+    def test_dependency_closure_command_env_override_is_not_forced_to_include_strict(self):
+        # DA_BUMP_DEPENDENCY_CLOSURE_CMD stays a full override, same as
+        # every other *_CMD env var here -- an operator who overrides it
+        # is trusted to include --strict themselves if they want it.
+        with mock.patch.dict(os.environ, {"DA_BUMP_DEPENDENCY_CLOSURE_CMD": "python3 scripts/dependency_closure_check.py"}):
+            commands = bump.default_gate_commands(Path("/tmp/example-repo-root"))
+        self.assertNotIn("--strict", commands["dependency_closure"])
+
+
+class TestMetadataFetcherAuth(unittest.TestCase):
+    def fetch(self, version_id, token):
+        captured = {}
+
+        class Resp:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): return b"{}"
+
+        def fake_urlopen(request, timeout=0):
+            captured["url"] = request.full_url
+            captured["auth"] = request.get_header("Authorization")
+            return Resp()
+
+        with mock.patch.object(bump.urllib.request, "urlopen", fake_urlopen), \
+                mock.patch.object(bump, "_MODRINTH_TOKEN", token):
+            bump.fetch_modrinth_version_metadata(version_id)
+        return captured
+
+    def test_token_sent_only_when_set_and_version_id_is_quoted(self):
+        captured = self.fetch("a/b", None)
+        self.assertIsNone(captured["auth"])
+        self.assertTrue(captured["url"].endswith("/v2/version/a%2Fb"))
+        self.assertEqual(self.fetch("abc", "tok")["auth"], "tok")
+
+    def test_main_removes_token_from_environment_before_gates_run(self):
+        seen = {}
+
+        def fake_run_engine(repo_root, payload_raw, **kwargs):
+            seen["env_token"] = bump.os.environ.get("MODRINTH_TOKEN")
+            seen["module_token"] = bump._MODRINTH_TOKEN
+            return {"changed": False}, bump.EXIT_OK, "ok"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            payload_path = Path(tmp) / "p.json"
+            payload_path.write_text("{}", encoding="utf-8")
+            with mock.patch.dict(bump.os.environ, {"MODRINTH_TOKEN": "secret-tok"}), \
+                    mock.patch.object(bump, "run_engine", fake_run_engine), \
+                    mock.patch.object(bump, "_MODRINTH_TOKEN", None):
+                self.assertEqual(bump.main(["--payload", str(payload_path), "--repo-root", tmp]), bump.EXIT_OK)
+                self.assertNotIn("MODRINTH_TOKEN", bump.os.environ)
+        self.assertIsNone(seen["env_token"])
+        self.assertEqual(seen["module_token"], "secret-tok")

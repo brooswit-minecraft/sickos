@@ -126,12 +126,12 @@ metafile = true
 
 [[files]]
 file = "mods/dynamic-battle-axes.pw.toml"
-hash = "4cc74747631f3d4b1b23951245f640ad6321d240ae7e1364a8214c2def8c82ac"
+hash = "7cbdce352c2090f5059971fb1db3d25f09a2430df9dfcd3f8d46b9792b38fe73"
 metafile = true
 
 [[files]]
 file = "mods/dynamic-despawn.pw.toml"
-hash = "e50f5ce21c45ac01fb286d719e86222bd818c637fbcb540022369522aadd6d28"
+hash = "8f0b9f403b2a4461df46e066f3e0f40c872645cc535826365d6288a8c6a52c20"
 metafile = true
 
 [[files]]
@@ -226,7 +226,7 @@ metafile = true
 
 [[files]]
 file = "mods/magicavoxel-loader.pw.toml"
-hash = "22f355f5aec1604cf8586c92bcba66e019a33121695b356a8af2c4d640278aa0"
+hash = "bee5645f93533ee01d9fd3c7d56cd8d3b96138aa4588aa3df6f22baecff7b815"
 metafile = true
 
 [[files]]

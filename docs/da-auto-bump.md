@@ -72,11 +72,11 @@ these environment variables to build.
 | 0 | `EXIT_OK` | Success: either a clean bump was prepared and staged, or the payload's version was already pinned (a clean no-op). Check the summary's `changed`/`outcome` fields to tell which. |
 | 1 | *(none)* | An unhandled exception. Always a bug in this script; never a designed outcome. |
 | 2 | `EXIT_INVALID_PAYLOAD` | The payload failed validation (see "Payload validation" below). No file was touched. |
-| 3 | `EXIT_INTEGRITY_FAILURE` | The downloaded jar's sha1 or sha512 did not match the payload, or the download itself failed. No repo file was touched; the temp jar is always deleted. |
+| 3 | `EXIT_INTEGRITY_FAILURE` | The payload's sha1/sha512/url/filename did not match the file entry Modrinth publishes for the version (`GET /v2/version/{id}`; non-200, transport error, wrong project or missing entry all count), or the downloaded jar's sha1 or sha512 did not match, or the download itself failed. No repo file was touched; the temp jar is always deleted. |
 | 4 | `EXIT_DOWNGRADE_REFUSED` | The payload's DA version is older than the currently pinned version. No file was touched. |
 | 5 | `EXIT_ANOMALY` | Either (a) the payload's `modrinth_version_id` matches the pinned one but the sha512 differs, or (b) the payload's version string equals the pinned version string but the `modrinth_version_id` differs. Both are refused rather than silently resolved. No file was touched. |
 | 6 | `EXIT_GATE_FAILURE` | `make refresh`, `make check`, or `make build` failed. The repo is restored to its pre-run state (see "Fail-closed restore" below). |
-| 7 | `EXIT_MIGRATION_MISSING` | The category is `breaking` and either the release body could not be fetched, or no `## Migration` section was found in this release's own section of it. No file was touched. |
+| 7 | `EXIT_MIGRATION_MISSING` | The DETERMINED category -- the more severe of the payload's own `category` and the semver delta between `payload.version` and the pinned version, see "Version selection" below -- is `breaking`, and either the release body could not be fetched, or no `## Migration` section was found in this release's own section of it. Reachable even when the payload's `category` is absent or not `breaking`, if the version delta alone is major. No file was touched. |
 | 8 | `EXIT_NOTES_EXISTS` | `docs/releases/<new-version>.md` already exists. The engine never overwrites a published release's notes. No file was touched. |
 | 9 | `EXIT_CONFIG_ERROR` | The repo's own state doesn't match what the engine expects (an unparsable DA pin filename, a `pack.toml` version that isn't a plain `x.y.z`, zero or more than one mechanical README sentence, an unexpected change under `mods/`, or `git status --porcelain` itself exiting non-zero while the dirty-tree guard below was checking whether the repo is clean -- not a git repo, `safe.directory` "dubious ownership", a corrupt index, etc.). This is a repo-state problem, not a payload problem, and needs a human. If any writes had already happened, the repo is restored (see below); the `git status` failure case fires before anything is touched. |
 | 10 | `EXIT_UNEXPECTED_ERROR` | Any exception the write/gate phase raises that is *not* a designed `EngineError` -- a missing `make`/`packwiz` binary, an `OSError` writing a file, a `CalledProcessError`, anything unforeseen. The repo is still restored to its pre-run state exactly as for a designed failure (see below); this code exists only so `main()` never falls through to a bare Python traceback and exit 1 -- the summary and a non-zero, documented exit code are always produced. |
@@ -177,7 +177,9 @@ read-only):
   only repository this engine will ever fetch a release body from.
 - `category`: must be a JSON string or absent/`null`. A string that isn't
   `patch`/`minor`/`breaking` is accepted here (validation doesn't reject
-  it) but is treated as "unrecognised" downstream -- see the mapping table.
+  it) but is treated as "unrecognised" downstream -- see "Version
+  selection" below, where it is combined with the semver delta between
+  `payload.version` and the pinned version, not used alone.
   Any other JSON type (number, object, array, boolean) is rejected.
 
 Any failure here exits `EXIT_INVALID_PAYLOAD` (2) before any repo file,
@@ -226,26 +228,199 @@ is `EXIT_CONFIG_ERROR`.
 
 ## Version selection (pack.toml bump)
 
-Never a blind patch bump. The mapping (see `bump_pack_version()`):
+Never a blind patch bump, and -- since MINECRAFT-362's review, eighth
+round -- never a function of the trigger payload's `category` field
+ALONE either. The category actually used is the more severe of TWO
+independently-derived inputs:
 
-| Category received | New pack version | `mapping_rule` in the summary |
+1. **The semver delta.** `payload.version` and the currently-pinned
+   version string are both already confirmed valid semver by the
+   version-ordering check above, so the delta between them is derived
+   the same way `scripts/bump_mod.py`'s generalized engine does
+   (`semver_compare.semver_delta_category`): the major component
+   changed -> `breaking`, else the minor component changed -> `minor`,
+   else the patch component changed -> `patch`, else (only the
+   prerelease identifier advanced) -> no delta signal at all.
+2. **The payload's own `category` field**, exactly as before.
+
+`semver_compare.more_severe_category` picks whichever of the two ranks
+higher (`breaking` > `minor` > `patch`); the payload's category can
+ESCALATE the semver-delta classification but never downgrade it -- a
+payload that says `"patch"` on what is actually a major version bump
+does not get to suppress the breaking classification the version
+numbers themselves already declare. This exists because the opposite
+used to be true: a breaking DA release whose payload omitted category,
+or labelled it wrong, would default to minor with no `## Migration`
+check at all, since that check is gated entirely on `mapping_rule ==
+"breaking_as_minor"` (see "Migration extraction" below) -- AC4's
+breaking-change requirement had no enforcement on this path regardless
+of what the generalized multi-mod poll path did for the exact same kind
+of release.
+
+The resulting `mapping_rule` values (see `bump_pack_version()`):
+
+| How the category was determined | New pack version | `mapping_rule` in the summary |
 | --- | --- | --- |
-| `"patch"` | `x.y.z` -> `x.y.(z+1)` | `patch` |
-| `"minor"` | `x.y.z` -> `x.(y+1).0` | `minor` |
-| `"breaking"` | `x.y.z` -> `x.(y+1).0` (a **minor** bump; Sickos is pre-1.0, see CONTRIBUTING.md) | `breaking_as_minor` |
-| absent / `null` | `x.y.z` -> `x.(y+1).0` | `minor_default_absent_category` |
-| present but not `patch`/`minor`/`breaking` | `x.y.z` -> `x.(y+1).0` | `minor_default_unrecognised_category` |
+| Resolved to `"patch"` (delta, payload, or both agree) | `x.y.z` -> `x.y.(z+1)` | `patch` |
+| Resolved to `"minor"` | `x.y.z` -> `x.(y+1).0` | `minor` |
+| Resolved to `"breaking"` (by EITHER signal, even if the other disagrees or is absent) | `x.y.z` -> `x.(y+1).0` (a **minor** bump; Sickos is pre-1.0, see CONTRIBUTING.md) | `breaking_as_minor` |
+| Neither signal produced anything (no semver-component delta, and the payload's category was absent/`null`) | `x.y.z` -> `x.(y+1).0` | `minor_default_absent_category` |
+| Neither signal produced anything, and the payload's category was present but not `patch`/`minor`/`breaking` | `x.y.z` -> `x.(y+1).0` | `minor_default_unrecognised_category` |
 
 For the two default-to-minor cases, the notes file explicitly states that
 the category was missing or unrecognised and that minor was used as the
-default -- never silently.
+default -- never silently. **This also means `EXIT_MIGRATION_MISSING` (7)
+is now reachable with NO `category` in the payload at all**, whenever the
+version delta alone is major -- a payload shape that previously published
+a minor bump and exited 0 now hard-fails if the release body has no
+`## Migration` section, exactly as it would for an explicit
+`category: "breaking"` payload.
+
+## Independent Modrinth metadata gate
+
+The dispatch payload is untrusted, so its hashes are not accepted on their
+own authority. Before downloading, the engine fetches
+`https://api.modrinth.com/v2/version/<modrinth_version_id>` and requires:
+`id` equals the payload's `modrinth_version_id`; `project_id` is
+`PZV7RorC`; `version_number` equals the payload's `version` (the
+version that drives the downgrade check and the release notes); the
+metadata's own `game_versions`/`loaders` include the pack's pinned
+target (MINECRAFT-362 review, seventeenth round -- see below for why
+this was missing); exactly one file has the payload's `file_name`; and
+that file's `hashes.sha512`, `hashes.sha1` and `url` equal the payload's.
+The downloaded jar is then hashed and must match too. Any failure
+(including HTTP 404 or a transport error) is `EXIT_INTEGRITY_FAILURE`
+and nothing in the repo is touched. The "vouch check" below stays
+informational only.
+
+**The compatibility check is new as of the seventeenth review round.**
+This dispatch path trusts an external webhook's payload directly and,
+unlike the generalized poll path (`modrinth_compat.resolve_latest_compatible_version`,
+which filters on `(game_version, loader)` before a candidate is ever
+selected), had NO compatibility check at all before a write -- a
+dispatch for a build declaring the wrong Minecraft version or loader
+would pin and publish successfully (confirmed live with fixture
+metadata declaring Minecraft 1.20.1/Fabric against the 1.21.1/NeoForge
+pack target: `outcome=bumped, exit=0`). `verify_against_modrinth_metadata`
+now threads the pack's own `(game_version, loader)` target -- already
+read via `mod_eligibility.read_pack_targets` for the semver-delta
+normalization above -- into `modrinth_metadata.verify_version_file_metadata`'s
+own optional compatibility check, the same shared function the
+generalized path's own defense-in-depth re-check uses.
+
+**Authenticated access.** The workflow passes the repository's existing
+`MODRINTH_TOKEN` secret (the one `release.yml` already uses; no secret is
+added or changed) to the engine step only. The engine sends it solely as the
+`Authorization` header of the `api.modrinth.com` metadata request, and
+removes it from its own environment before it runs `make`/packwiz/git, so no
+other subprocess inherits it. It is never logged or written. **Unverified:**
+whether that token can read DA project `PZV7RorC` has not been tested (live
+runs are held). If it cannot, the gate returns `EXIT_INTEGRITY_FAILURE`
+(HTTP 401/403/404) and refuses the bump rather than trusting the payload. With
+no token (for example a local run) and the project private, the same
+refusal happens.
+
+## Dependency check -- new as of the eighteenth review round
+
+This dispatch path never called `modrinth_compat.find_dependency_conflicts`
+at all before the eighteenth round, unlike the generalized poll path --
+a DA candidate declaring an existing pinned project `incompatible`
+would still pin and publish successfully. `verify_against_modrinth_metadata`
+now returns the FULL, verified metadata dict (not only the matched file
+entry) so its own `dependencies` field is available; `run_engine` reads
+the pack's current on-disk pins via `mod_eligibility.discover_eligible_pins`
+and passes both into the same `find_dependency_conflicts` the
+generalized path uses, before `download_and_verify` runs. Same narrow
+scope on both paths today (see `docs/mod-auto-bump.md`'s "Compatibility
+and no-downgrade resolution" section, revised in the twenty-first
+round): refuses only a currently-pinned `incompatible` declaration --
+the one thing Modrinth's own metadata can answer with no guessing. A
+conflict raises `EXIT_CONFIG_ERROR` / `"dependency_conflict"`, same
+exit code/outcome `scripts/bump_mod.py` uses for the identical check.
+
+The eighteenth and nineteenth rounds briefly extended this to also
+compare a `required` dependency's exact version (pinned or not); both
+extensions were reverted in the twenty-first round after they produced
+a confirmed false positive (Cristel Lib's pinned version declares Cloth
+Config API `required`, a Fabric-only need the actual NeoForge jar does
+not have -- Modrinth's `dependencies` array is a project-WIDE author
+declaration, not loader-scoped, so the comparison inherited a
+completely unrelated loader's requirement). See
+`docs/mod-auto-bump.md`'s "Dependency closure -- the real-jar gate"
+section for what replaced required-dependency validation on this path.
+
+## Dependency closure -- the real-jar gate (twenty-first review round)
+
+`default_gate_commands` gained a fourth gate, `"dependency_closure"`,
+run after `build` and before anything is committed -- same
+fail-closed/clean-rollback guarantee as `refresh`/`check`/`build`. It
+runs `scripts/dependency_closure_check.py` (vendored verbatim from
+`brooswit-minecraft/schematic` at the exact commit `ci.yml`'s own
+`dependency-check` job already trusts), which downloads every pinned
+mod's REAL jar, reads its actual `META-INF/neoforge.mods.toml`, and
+confirms every `required` dependency is satisfied in range -- strictly
+more accurate than comparing Modrinth's metadata, with no
+loader-mismatch false-positive class, and the gate this pack's own CI
+already trusts for exactly this question.
+
+This path's own test coverage (`tests/test_bump_dynamic_atmosphere.py`'s
+`TestDependencyClosureGateWiring`) stops at wiring/ordering/rollback
+with a stubbed command, not the real checker: `validate_payload`
+requires `download_url` to be a real `https://cdn.modrinth.com/...` URL
+(anti-tampering against an untrusted webhook payload), which rules out
+pointing a DA candidate's own pin at a local, deterministic `file://`
+jar the way the generalized path's own test (no such restriction) does
+-- see `docs/mod-auto-bump.md`'s "Dependency closure" section for that
+full real-jar, real-checker reproduction.
+
+`default_gate_commands` now runs this gate with `--strict`, and a
+failure now raises its own outcome, `"dependency_closure_gate_failed"`,
+distinct from `refresh`/`check`/`build`'s generic `"gate_failed"` --
+both twenty-second review round, shared code with the generalized path
+(`run_gate`/`default_gate_commands` in `scripts/bump-dynamic-atmosphere.py`
+live there, re-exported by `bump_mod.py`, not duplicated) -- see
+`docs/mod-auto-bump.md`'s "Dependency closure" section for the full
+reasoning.
+
+## Runtime/platform compatibility (twenty-second review round)
+
+`download_and_verify` now returns the verified jar bytes instead of
+discarding them, so `run_engine` can pass them to
+`check_runtime_compatibility_or_die(jar_bytes, pack_versions(pack.toml))`
+right after download -- the same function, same call shape, the
+generalized path uses (see `docs/mod-auto-bump.md`'s "Runtime/platform
+compatibility" section for the full explanation of what it checks and
+why it's a separate check rather than a `dependency_closure_check.py`
+edit). Raises `EngineError(EXIT_CONFIG_ERROR, "runtime_incompatible",
+...)` on a lower-bound-only platform violation, with the same clean
+rollback every other pre-commit check gets.
+
+Test coverage is `tests/test_bump_dynamic_atmosphere.py`'s own
+`TestRuntimeCompatibilityCheck` class -- unlike
+`TestDependencyClosureGateWiring` above, this one CAN use real jar
+bytes despite the same `validate_payload` URL-format restriction: the
+check runs in-process against bytes the test's stubbed `downloader`
+already delivered, with no second real network fetch, so the
+restriction that blocks a true `file://`-based dependency_closure GATE
+test simply doesn't apply here.
 
 ## Pin write
 
 The DA pin (`mods/dynamic-atmosphere.pw.toml`) is rewritten directly from
 the payload with a small hand-written TOML emitter (`render_da_pin()`) --
-never via `packwiz update`, because DA's Modrinth project (`PZV7RorC`) is
-not publicly listed and packwiz cannot resolve it through the API. Every
+never via `packwiz update`. Concrete conflict (checked 2026-10-15):
+anonymous `GET /v2/project/PZV7RorC`, `GET /v2/version/<pinned id>` and
+`GET /v2/version_file/<pinned sha512>` all return 404, and `packwiz update`
+resolves a mod only through that API and can only move to the latest
+version, not to the version a dispatch names. packwiz still validates the
+result: `make refresh`, `make check` and `make build` run packwiz over the
+rewritten pin before anything is committed. Re-evaluate using `packwiz
+update` once the project is publicly resolvable.
+This direct-pin write, backed by the metadata gate above, is the accepted
+alternative to the literal `packwiz update` requirement -- an engineering
+implementation decision for MINECRAFT-362 (see `docs/mod-auto-bump.md`'s
+"Direct-pin vs. `packwiz update`" section for the generalized rationale
+that applies to any enrolled mod, not only DA). Every
 string value is TOML-escaped. `name` and `side` are preserved from the
 existing pin; `filename`, `download.url`, `download.hash` (with
 `hash-format` fixed at `sha512`), and `update.modrinth.version` come from
