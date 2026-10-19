@@ -117,28 +117,36 @@ and splits them into:
 
 **MINECRAFT-421: channel preservation and native version-scheme
 normalization.** Two additions driven by the first real scheduled poll
-run's own nine observed coverage-gap outcomes:
+run's own nine observed coverage-gap outcomes, each revised a second
+round after exact-head review (comment 48541) reproduced three further
+gaps live against the first round's own shapes:
 
-- `resolve_latest_compatible_version` gained an `include_prerelease`
-  parameter (default `False`, same contract as
+- `resolve_latest_compatible_version` gained an `accepted_channel`
+  parameter (default `"release"`, same contract as
   `github_release_identity.resolve_latest_matching_release`'s identical
-  per-pin flag for GitHub-tracked pins): when `True`, a `version_type !=
-  "release"` entry competes for `best` on equal footing with a release
-  entry, rather than being excluded outright. `scripts/poll-mod-updates.py`'s
-  `_resolve_candidate_preserving_channel` decides this PER PIN, never as
-  a global default: on `OnlyPrereleaseAvailableError`, it fetches the
-  pin's own currently-pinned version metadata and retries with
-  `include_prerelease=True` only if that pin's own channel is itself
-  non-release -- this pack's real Biomes O' Plenty and GlitchCore pins
-  are confirmed-live on exactly this channel already. `scripts/bump_mod.py`'s
-  own hard version_type gate (previously an unconditional "refuse any
-  non-release candidate") was reordered to fetch the previous-pin
-  metadata first and now allows the same channel-preserving exception,
-  so a candidate this resolver now returns does not hit a second,
-  contradicting gate deeper in the write path. A pin pinned to a real
-  release is entirely unaffected -- this never lets a stable-channel mod
-  newly opt into prereleases, only lets a pin already there keep
-  accepting them.
+  per-pin flag for GitHub-tracked pins): an entry whose `version_type`
+  EXACTLY equals `accepted_channel` competes for `best` on equal footing
+  with a release entry. EXACT match, not "any prerelease" -- a first
+  round's `include_prerelease` boolean would have let a Beta-pinned pin
+  accept an Alpha candidate the moment one existed, a channel
+  EXPANSION, not a preservation. `accepted_channel` is validated against
+  `KNOWN_PRERELEASE_CHANNELS` (`{"alpha", "beta"}`); an unrecognised
+  value (a corrupt/invalid `version_type`, e.g. a typo'd string) is
+  refused, never silently trusted as a real channel to widen into.
+  `scripts/poll-mod-updates.py`'s `_resolve_candidate_preserving_channel`
+  resolves this pin's own channel UP FRONT, before any candidate
+  selection -- never only as a retry after `OnlyPrereleaseAvailableError`
+  (a first round's shape missed a real, reproduced case: an old stable
+  release plus a newer accepted-channel prerelease never raises that
+  error at all, since a release entry already exists, so the update was
+  silently reported as `downgrade_refused` forever instead of ever being
+  considered). `scripts/bump_mod.py`'s own hard version_type gate
+  requires the candidate's channel to equal the pin's own currently-
+  pinned channel exactly, and that channel to be a recognised one, same
+  discipline as the resolver -- so a candidate the resolver now returns
+  does not hit a second, contradicting (or more permissive) gate deeper
+  in the write path. A pin pinned to a real release is entirely
+  unaffected.
 - `semver_compare.normalize_native_version_scheme` (consulted by
   `parse_semver` as a fallback only after the strict SemVer regex
   already failed, so an already-valid version string is never touched)
@@ -155,7 +163,16 @@ run's own nine observed coverage-gap outcomes:
   Applying this inside `parse_semver` itself means every existing caller
   (the resolver above, `decide_update`, `semver_delta_category`,
   `scripts/bump_mod.py`'s own category-message fallback) benefits with
-  no call-site changes.
+  no call-site changes. `compare_semver` carries its OWN separate guard
+  (second round, point 3): it refuses to compare a RAW four-numeric-
+  component string against a differently-shaped one at all, rather than
+  letting the fold above invent precedence against a scheme it was never
+  confirmed to apply to -- reproduced live: "2.1.0.2" folds to "2.1.0-2",
+  which SemVer's own "no prerelease beats any prerelease" rule then
+  ranks OLDER than a bare "2.1.0", though nothing establishes the two
+  schemes compare that way at all. `resolve_latest_compatible_version`'s
+  own best-candidate loop catches that guard's `ValueError` and counts
+  the entry as unparsable rather than crashing or guessing.
 
 **Explicit scope limit**: compatibility here means the candidate's own
 declared `game_versions`/`loaders`. `modrinth_compat.py` also has

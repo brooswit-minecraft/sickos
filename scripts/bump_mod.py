@@ -70,7 +70,8 @@ import server_update_policy  # noqa: E402
 import semver_compare  # noqa: E402
 import dependency_closure_check  # noqa: E402
 from modrinth_compat import (  # noqa: E402
-    VersionCandidate, decide_update, find_dependency_conflicts, version_candidate_from_json,
+    KNOWN_PRERELEASE_CHANNELS, VersionCandidate, decide_update, find_dependency_conflicts,
+    version_candidate_from_json,
 )
 
 
@@ -482,25 +483,34 @@ def run_engine(repo_root, pin, candidate, *, category=None,
     # principle as modrinth_compat's own docstring -- closes that gap
     # for both callers at once (MINECRAFT-362 review, eighth round).
     #
-    # MINECRAFT-421 channel preservation: a prerelease candidate is
-    # refused UNLESS this pin's own CURRENTLY-pinned version is itself
-    # non-release -- never a global default, determined fresh, per pin,
-    # from previous_metadata fetched just above (this pack's real Biomes
-    # O' Plenty/GlitchCore/IceAndFire Community Edition pins are
-    # confirmed-live on this channel already; a pin pinned to a real
-    # release stays stable-only). This is channel PRESERVATION, not
-    # expansion: a pin cannot newly opt into prereleases through this
-    # gate, only continue accepting them if it was already there.
-    pin_channel_is_prerelease = (
-        isinstance(previous_metadata, dict) and previous_metadata.get("version_type") not in (None, "release")
+    # MINECRAFT-421 channel preservation (second round, review comment
+    # 48541): a non-release candidate is refused UNLESS its version_type
+    # EXACTLY equals this pin's own CURRENTLY-pinned channel -- never a
+    # global default, and never "any prerelease" either. A bare "is this
+    # pin on SOME prerelease channel" check (a prior round's shape) would
+    # let a Beta-pinned pin accept an Alpha candidate the moment one
+    # existed -- a channel EXPANSION, not a preservation -- and would also
+    # treat an unrecognised/corrupt version_type (e.g. "surprise") as a
+    # trusted prerelease channel merely because it wasn't literally
+    # "release". Both this pin's own channel AND the candidate's channel
+    # must be the SAME value, and that value must be one of
+    # KNOWN_PRERELEASE_CHANNELS, before this gate ever
+    # lets a non-release candidate through (this pack's real Biomes O'
+    # Plenty/GlitchCore pins are confirmed-live on exactly this pattern;
+    # a pin pinned to a real release stays stable-only, unaffected).
+    pinned_channel = previous_metadata.get("version_type") if isinstance(previous_metadata, dict) else None
+    candidate_channel = metadata.get("version_type")
+    channel_preserved = (
+        pinned_channel in KNOWN_PRERELEASE_CHANNELS and candidate_channel == pinned_channel
     )
-    if metadata.get("version_type") != "release" and not pin_channel_is_prerelease:
+    if candidate_channel != "release" and not channel_preserved:
         raise EngineError(
             EXIT_INTEGRITY_FAILURE, "integrity_failure",
             f"Modrinth version {candidate.version_id} for {pin.name} has version_type "
-            f"{metadata.get('version_type')!r}, not 'release', and this pin's own currently-"
-            f"pinned channel ({previous_metadata.get('version_type')!r}) is not a prerelease "
-            "channel either -- refusing to pin a prerelease/alpha/beta build",
+            f"{candidate_channel!r}, not 'release', and does not exactly match this pin's own "
+            f"currently-pinned channel ({pinned_channel!r}) from a recognised prerelease "
+            f"channel ({sorted(KNOWN_PRERELEASE_CHANNELS)}) either -- refusing "
+            "to pin a prerelease/alpha/beta build",
         )
 
     downgrade_decision = decide_update(

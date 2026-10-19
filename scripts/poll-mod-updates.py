@@ -365,41 +365,53 @@ read_pack_targets = mod_eligibility.read_pack_targets
 
 
 def _resolve_candidate_preserving_channel(pin, *, game_version, loader, fetcher, token):
-    """modrinth_compat.resolve_latest_compatible_version, but on
-    OnlyPrereleaseAvailableError, retries with include_prerelease=True
-    IFF this pin's OWN currently-pinned version is itself non-release
-    (MINECRAFT-421 channel preservation): this pack's real Biomes O'
-    Plenty, GlitchCore, and IceAndFire Community Edition pins are
-    confirmed-live on a prerelease channel, and a poll run that always
-    excludes prereleases permanently reports a real update as an
-    unconditional, un-investigated gap for all three -- this is "resolve
-    the update," not a second global default. Never a global default:
-    the retry only fires after independently verifying the PINNED
-    version's own channel, never from the candidate's shape alone, and
-    the common case (a pin pinned to a real release) takes exactly one
-    fetch, same as before this round -- the second metadata lookup only
-    happens for a pin that already hit the gap.
+    """modrinth_compat.resolve_latest_compatible_version, with
+    `accepted_channel` set from this pin's OWN currently-pinned version's
+    real channel (MINECRAFT-421 channel preservation; second round,
+    review comment 48541): resolved UP FRONT, before any candidate
+    selection happens -- never only after an OnlyPrereleaseAvailableError.
+    A prior version of this helper resolved the channel lazily, as a
+    retry triggered by that one exception; that missed a real case this
+    round's review reproduced live: a project with an old stable RELEASE
+    plus a newer prerelease on the pin's own accepted channel never
+    raises OnlyPrereleaseAvailableError at all (a release entry exists,
+    so `best` already resolves to it) -- the lazy retry never fired, and
+    the pin stayed pinned to a real update's OLDER release sibling
+    forever, reported as a clean `downgrade_refused` with no indication
+    anything was wrong. Resolving the channel first make resolution
+    itself channel-aware from the start, so both the old release AND the
+    newer accepted-channel prerelease compete for `best` on equal
+    footing, with the higher semver precedence winning regardless of
+    type -- exactly the existing, already-reviewed contract within one
+    call.
 
-    Re-raises the ORIGINAL OnlyPrereleaseAvailableError unchanged (not a
-    new kind) when the pin's own channel is release, or the pinned
-    version's own metadata cannot be fetched/trusted -- fails closed to
-    the exact outcome this had before this round, for every pin that is
-    not already on a prerelease channel."""
+    This pack's real Biomes O' Plenty and GlitchCore pins are the
+    confirmed-live pins on a prerelease channel today. `accepted_channel`
+    defaults to (and fails closed to) `"release"` -- i.e. today's
+    existing, already-reviewed behavior -- whenever the pin's own
+    previously-pinned metadata cannot be fetched/trusted, or its
+    `version_type` is not exactly one of `modrinth_compat.
+    KNOWN_PRERELEASE_CHANNELS` (an unrecognised value is never treated as
+    safe to widen into, same "reject invalid/mismatched metadata"
+    discipline as `bump_mod.run_engine`'s own write-gate). The channel
+    passed is EXACT, not "any prerelease" -- a Beta-pinned pin considers
+    Release and Beta candidates only, never Alpha (review, point 2,
+    second round: a boolean `include_prerelease` would have silently
+    expanded onto any prerelease type, a channel EXPANSION, not a
+    preservation)."""
+    accepted_channel = "release"
     try:
-        return modrinth_compat.resolve_latest_compatible_version(
-            pin.mod_id, game_version=game_version, loader=loader, fetcher=fetcher,
-        )
-    except modrinth_compat.OnlyPrereleaseAvailableError as error:
-        try:
-            pinned_metadata = bump_mod.fetch_version_metadata(pin.pinned_version_id, token=token)
-        except Exception:  # noqa: BLE001 - any lookup failure fails closed to the original gap
-            raise error
-        if not isinstance(pinned_metadata, dict) or pinned_metadata.get("version_type") in (None, "release"):
-            raise error
-        return modrinth_compat.resolve_latest_compatible_version(
-            pin.mod_id, game_version=game_version, loader=loader, fetcher=fetcher,
-            include_prerelease=True,
-        )
+        pinned_metadata = bump_mod.fetch_version_metadata(pin.pinned_version_id, token=token)
+    except Exception:  # noqa: BLE001 - any lookup failure fails closed to release-only
+        pinned_metadata = None
+    if isinstance(pinned_metadata, dict):
+        pinned_channel = pinned_metadata.get("version_type")
+        if pinned_channel in modrinth_compat.KNOWN_PRERELEASE_CHANNELS:
+            accepted_channel = pinned_channel
+    return modrinth_compat.resolve_latest_compatible_version(
+        pin.mod_id, game_version=game_version, loader=loader, fetcher=fetcher,
+        accepted_channel=accepted_channel,
+    )
 
 
 def commit_bump(repo_root, message, paths, run_command=subprocess.run):

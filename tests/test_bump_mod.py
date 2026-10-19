@@ -578,6 +578,42 @@ class TestChannelPreservation(EngineTestCase):
         self.assertEqual(exit_code, bump_mod.EXIT_OK)
         self.assertEqual(summary["outcome"], "bumped")
 
+    def test_beta_pin_does_not_expand_to_accept_an_alpha_candidate(self):
+        # MINECRAFT-421 review, point 2, second round: a Beta-pinned pin
+        # must never accept an Alpha candidate -- that is a channel
+        # EXPANSION, not a preservation, even though Alpha is also
+        # non-release.
+        content = b"alpha jar"
+        candidate = make_candidate(content=content, version_number="1.1.0-alpha.1")
+        self.register(candidate.version_id, metadata_for(candidate, version_type="alpha"))
+        self.register(OLD_VERSION_ID, {
+            "id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0-beta.1", "version_type": "beta",
+        })
+        pin = make_pin()
+        before = self.porcelain()
+        with self.assertRaises(bump_mod.EngineError) as ctx:
+            self.run_engine(pin, candidate, content=content)
+        self.assertEqual(ctx.exception.exit_code, bump_mod.EXIT_INTEGRITY_FAILURE)
+        self.assertEqual(self.porcelain(), before)
+
+    def test_unknown_candidate_channel_is_refused_even_if_pin_matches_it(self):
+        # MINECRAFT-421 review, point 2, second round: an unrecognised
+        # version_type is never treated as a trusted channel, even when
+        # the pin's own currently-pinned version reports the SAME
+        # unrecognised value -- both must be a real, known channel.
+        content = b"surprise jar"
+        candidate = make_candidate(content=content, version_number="1.1.0")
+        self.register(candidate.version_id, metadata_for(candidate, version_type="surprise"))
+        self.register(OLD_VERSION_ID, {
+            "id": OLD_VERSION_ID, "project_id": MOD_ID, "version_number": "1.0.0", "version_type": "surprise",
+        })
+        pin = make_pin()
+        before = self.porcelain()
+        with self.assertRaises(bump_mod.EngineError) as ctx:
+            self.run_engine(pin, candidate, content=content)
+        self.assertEqual(ctx.exception.exit_code, bump_mod.EXIT_INTEGRITY_FAILURE)
+        self.assertEqual(self.porcelain(), before)
+
 
 class TestRealPackwizDryRun(EngineTestCase):
     """MINECRAFT-362 review, fourteenth round: the one test in this file

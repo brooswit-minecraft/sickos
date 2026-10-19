@@ -107,6 +107,36 @@ class TestNormalizeNativeVersionScheme(unittest.TestCase):
         self.assertEqual(semver_compare.normalize_native_version_scheme("0.2a"), "0.2a")
 
 
+class TestCompareSemverCrossSchemeGuard(unittest.TestCase):
+    """MINECRAFT-421 review, point 3: comparing a raw four-numeric-
+    component native version (Biomes O' Plenty/GlitchCore's own scheme)
+    against a DIFFERENTLY-shaped string must refuse, not silently invent
+    precedence by folding only one side into SemVer's prerelease slot.
+    Confirmed-live exploit: "2.1.0.2" folds to "2.1.0-2", which SemVer's
+    "no prerelease beats any prerelease" rule then ranks OLDER than a
+    bare "2.1.0" -- even though nothing establishes the two schemes
+    compare that way at all."""
+
+    def test_four_component_against_plain_three_component_is_refused(self):
+        with self.assertRaises(ValueError):
+            compare_semver("2.1.0.2", "2.1.0")
+        with self.assertRaises(ValueError):
+            compare_semver("2.1.0", "2.1.0.2")
+
+    def test_four_component_against_four_component_compares_normally(self):
+        self.assertGreater(compare_semver("2.1.0.3", "2.1.0.2"), 0)
+
+    def test_four_component_against_a_real_prerelease_is_refused(self):
+        # The right side here is ordinary SemVer (not four-component),
+        # so this is the same cross-scheme mismatch, not a legitimate
+        # prerelease comparison.
+        with self.assertRaises(ValueError):
+            compare_semver("2.1.0.2", "2.1.0-beta.1")
+
+    def test_neither_side_four_component_is_unaffected(self):
+        self.assertEqual(compare_semver("1.2.3", "1.2.3"), 0)
+
+
 class TestSemverDeltaCategory(unittest.TestCase):
     def test_major_change_is_breaking(self):
         self.assertEqual(semver_compare.semver_delta_category("1.2.3", "2.0.0"), "breaking")

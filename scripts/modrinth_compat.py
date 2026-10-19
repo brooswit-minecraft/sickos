@@ -66,6 +66,18 @@ from semver_compare import (  # noqa: E402 - needs sys.path set up first
 USER_AGENT = "brooswit-minecraft/sickos (MINECRAFT-362 mod auto-bump resolver)"
 
 
+# The only non-release Modrinth `version_type` values this module will
+# ever trust as a pin's own preserved channel (MINECRAFT-421 review,
+# point 2, second round). An `accepted_channel` (resolve_latest_
+# compatible_version) or a pin's own currently-pinned `version_type`
+# (bump_mod.run_engine's write-gate) outside this set -- Modrinth's
+# "release"/"beta"/"alpha" plus this set covers every real value this
+# module has ever observed -- is treated as invalid/untrusted metadata,
+# never as "safe to widen into," per the reviewer's explicit "reject
+# invalid/mismatched metadata" instruction.
+KNOWN_PRERELEASE_CHANNELS = frozenset({"alpha", "beta"})
+
+
 class CompatResolutionError(Exception):
     """Fetching or parsing Modrinth's version list for a project failed --
     the TRUE catch-all/systemic class (HTTP 5xx, timeout, DNS failure,
@@ -195,7 +207,7 @@ def version_candidate_from_json(version_json):
     )
 
 
-def resolve_latest_compatible_version(mod_id, *, game_version, loader, fetcher, include_prerelease=False):
+def resolve_latest_compatible_version(mod_id, *, game_version, loader, fetcher, accepted_channel="release"):
     """Return the newest VersionCandidate compatible with (game_version, loader), or None.
 
     Modrinth's own `game_versions`/`loaders` query filter already does the
@@ -221,22 +233,34 @@ def resolve_latest_compatible_version(mod_id, *, game_version, loader, fetcher, 
     `version_number`, so a prerelease that happens to sort higher by
     semver (e.g. "1.3.0-beta.1" > "1.2.0") must not be auto-pinned into
     the public pack ahead of its own eventual full release
-    (MINECRAFT-362 review). `include_prerelease` (default False) lifts
-    that filter for THIS call only -- it must be set True explicitly, per
-    pin, by a caller that has independently confirmed the pin's OWN
-    currently-pinned version is itself non-release (MINECRAFT-421 channel
-    preservation, mirroring github_release_identity.
-    resolve_latest_matching_release's identical per-pin
-    `include_prerelease` contract for GitHub-tracked pins): this module
-    never infers it from this call alone, so a stable-channel mod is
-    never silently opted into prereleases, and a mod whose accepted
-    channel genuinely IS prerelease (this pack's real Biomes O' Plenty,
-    GlitchCore, and IceAndFire Community Edition pins, confirmed live) is
+    (MINECRAFT-362 review). `accepted_channel` (default `"release"`)
+    additionally accepts entries whose `version_type` EXACTLY equals it
+    -- it must be set explicitly, per pin, by a caller that has
+    independently confirmed the pin's OWN currently-pinned version is
+    itself on that exact channel (MINECRAFT-421 channel preservation,
+    mirroring github_release_identity.resolve_latest_matching_release's
+    identical per-pin `include_prerelease` contract for GitHub-tracked
+    pins): this module never infers it from this call alone, so a
+    stable-channel mod is never silently opted into prereleases, and a
+    mod whose accepted channel genuinely IS a prerelease one (this
+    pack's real Biomes O' Plenty and GlitchCore pins, confirmed live) is
     not silently blocked from a real update on that same channel either.
-    When True, a prerelease entry competes for `best` on equal footing
-    with a release entry -- whichever has the higher semver precedence
-    wins regardless of type, so a pin on this channel still prefers an
-    actual release the moment its author publishes one.
+    EXACT match, not "any prerelease" (MINECRAFT-421 review, point 2,
+    second round -- a prior version of this parameter was a bare
+    `include_prerelease` boolean that accepted ANY non-release entry once
+    true, which would have silently expanded a Beta-pinned mod onto an
+    Alpha candidate the moment one existed: a channel EXPANSION, not a
+    preservation): a Beta-pinned pin considers Release and Beta entries
+    only, never Alpha; an Alpha-pinned pin considers Release and Alpha
+    only. `accepted_channel` itself is validated against
+    `KNOWN_PRERELEASE_CHANNELS` below -- an unrecognised value (a
+    corrupt/invalid `version_type` on the pin's own currently-pinned
+    version, e.g. a typo'd string) is refused rather than silently
+    trusted as a real channel to widen into. Within the accepted set, a
+    release entry still wins over an accepted-channel one at equal or
+    higher semver precedence -- whichever has the higher precedence wins
+    regardless of type, so a pin still prefers an actual release the
+    moment its author publishes one.
 
     `None` means ONLY "no entry declaring (game_version, loader)
     compatibility exists at all for this project" -- genuinely nothing
@@ -257,6 +281,12 @@ def resolve_latest_compatible_version(mod_id, *, game_version, loader, fetcher, 
       with a different remedy than the above (nothing a human bump can
       fix; only the mod author publishing a release helps).
     """
+    if accepted_channel != "release" and accepted_channel not in KNOWN_PRERELEASE_CHANNELS:
+        raise ValueError(
+            f"accepted_channel={accepted_channel!r} is not a recognised Modrinth version_type "
+            f"({KNOWN_PRERELEASE_CHANNELS | {'release'}}) -- refusing to treat an unrecognised "
+            "value as a channel safe to widen into"
+        )
     versions_json = fetch_project_versions(mod_id, game_version=game_version, loader=loader, fetcher=fetcher)
     if not isinstance(versions_json, list):
         raise CompatResolutionError(f"version list for {mod_id} was not a JSON array")
@@ -274,10 +304,14 @@ def resolve_latest_compatible_version(mod_id, *, game_version, loader, fetcher, 
             continue
         # Compatible by (game_version, loader) from here on -- now check
         # version_type, so a prerelease-only project can be told apart
-        # from a project with no compatible entry at all. Unless
-        # include_prerelease (MINECRAFT-421), a non-release entry is
-        # counted and skipped, never allowed to become `best`.
-        if entry.get("version_type") != "release" and not include_prerelease:
+        # from a project with no compatible entry at all. An entry
+        # qualifies if it's a real release, OR its version_type EXACTLY
+        # matches accepted_channel (MINECRAFT-421, second round: exact
+        # match, not "any non-release" -- a Beta-pinned mod must never
+        # expand onto an Alpha candidate just because prereleases are
+        # accepted at all).
+        entry_channel = entry.get("version_type")
+        if entry_channel != "release" and entry_channel != accepted_channel:
             prerelease_only_count += 1
             continue
         candidate = version_candidate_from_json(entry)
@@ -287,7 +321,25 @@ def resolve_latest_compatible_version(mod_id, *, game_version, loader, fetcher, 
         if parse_semver(normalized) is None:
             unparsable_count += 1
             continue
-        if best is None or compare_semver(normalized, best_normalized) > 0:
+        if best is None:
+            best = candidate
+            best_normalized = normalized
+            continue
+        try:
+            is_newer = compare_semver(normalized, best_normalized) > 0
+        except ValueError:
+            # compare_semver's own cross-scheme guard (MINECRAFT-421
+            # review, point 3): this entry and the current `best` are
+            # shaped differently (one is a raw four-numeric-component
+            # native version, the other is not) -- no evidence either
+            # scheme's precedence applies to the other, so this entry
+            # cannot be safely ranked against `best` either way. Counted
+            # as unparsable (same remedy class: nothing a human bump can
+            # reliably fix without the author settling on one scheme),
+            # not silently skipped and not allowed to crash this run.
+            unparsable_count += 1
+            continue
+        if is_newer:
             best = candidate
             best_normalized = normalized
 
