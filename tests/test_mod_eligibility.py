@@ -192,6 +192,37 @@ class TestDiscoverEligiblePins(unittest.TestCase):
         self.assertEqual(untracked, [])
 
 
+class TestDynamicSkateboardsIsGithubTracked(unittest.TestCase):
+    """MINECRAFT-421 regression: dynamic-skateboards.pw.toml's real
+    [download].url was always a github.com release asset, but its
+    [update] table used to be [update.modrinth] -- a live, authenticated
+    poll run found that Modrinth project (n0hFQ5AT) has no release-type
+    version for this pack's target at all, only prereleases, which is a
+    run-failing gap for one of this pack's own managed mods (not a
+    third-party one KNOWN_ONLY_PRERELEASE_PIN_IDS tolerates). Reconciled
+    by switching the pin to the same native [update.github] schema this
+    pack's other GitHub-sourced managed mods already use. Reads the REAL
+    pin file in this repo (not a synthetic fixture) so a future revert
+    back to [update.modrinth] fails this test, not just a live poll run."""
+
+    REPO_ROOT = Path(__file__).parents[1]
+
+    def test_is_github_tracked_not_modrinth_eligible(self):
+        eligible, untracked = discover_eligible_pins(self.REPO_ROOT)
+        self.assertNotIn("Dynamic Skateboards", {p.name for p in eligible})
+        self.assertNotIn("Dynamic Skateboards", {p.name for p in untracked})
+
+        github_pins = {p.name: p for p in discover_github_pins(self.REPO_ROOT)}
+        self.assertIn("Dynamic Skateboards", github_pins)
+        pin = github_pins["Dynamic Skateboards"]
+        self.assertEqual(pin.slug, "brooswit-minecraft/dynamic-skateboards")
+        self.assertTrue(pin.pinned_tag)
+        self.assertTrue(pin.pinned_source)
+        self.assertIn(r"\.jar$", pin.regex)
+        self.assertEqual(pin.pinned_hash_format, "sha256")
+        self.assertTrue(pin.pinned_url.startswith("https://github.com/"))
+
+
 class TestReadPackTargets(unittest.TestCase):
     """Moved here from scripts/poll-mod-updates.py (MINECRAFT-362 review,
     fourth round) so scripts/bump_mod.py's CLI can share the exact same

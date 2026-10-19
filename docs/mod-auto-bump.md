@@ -15,17 +15,31 @@ and splits them into:
 - **Eligible**: a pin with an `[update.modrinth]` table (`mod-id` +
   `version`) -- packwiz's own update-tracking fields, reused rather than
   duplicated into a second enrollment file that could drift from the pack.
-  At the time of writing this is 75 of the pack's pins, including
-  `dynamic-skateboards.pw.toml` -- its `[download].url` happens to point
-  at a `github.com` asset URL, which comment 48456's "reconcile
-  Skateboards' mixed GitHub-download/Modrinth-update identity" flagged
-  for a look. Confirmed NOT a bug: enrollment keys on the `[update.*]`
-  table, never the download host, and Skateboards' only `[update]`
-  table is `[update.modrinth]`, with a real, resolvable `mod-id`/
-  `version` -- Modrinth mirrors some mods' own GitHub-hosted jars
-  rather than rehosting them, which is unrelated to how this pin is
-  tracked. It is `eligible`, not `[update.github]`-tracked, and belongs
-  nowhere near the 10-pin count below.
+  At the time of writing this is 74 of the pack's pins.
+  `dynamic-skateboards.pw.toml` is NOT one of them (MINECRAFT-421,
+  superseding MINECRAFT-362 review comment 48456's "confirmed not a bug"
+  on this exact pin): that round's theory -- Modrinth mirrors Skateboards'
+  own GitHub-hosted jars as a real `release`-type version, so the
+  `[download].url` pointing at `github.com` was unrelated to how the pin
+  is tracked -- was never checked against a live, authenticated
+  resolution. MINECRAFT-421's first real scheduled-poll run was that live
+  check, with `MODRINTH_TOKEN` actually configured, and it found Modrinth
+  project `n0hFQ5AT` has no `release`-type version for this pack's
+  (game_version, loader) target at all, only prereleases
+  (`only_prerelease_available`) -- a real, run-failing gap, since
+  Skateboards is one of this pack's own managed mods, not a third-party
+  one the `KNOWN_ONLY_PRERELEASE_PIN_IDS` allowlist tolerates. Its actual
+  current, authoritative releases are the GitHub ones its `[download].url`
+  already named (confirmed live: `gh release list` shows `v0.3.0` as
+  latest, matching the pinned jar). Reconciled by switching its `[update]`
+  table from `[update.modrinth]` to the same native-schema
+  `[update.github]` (`slug`/`tag`/`branch`/`regex`) this pack's other
+  10 `[update.github]`-tracked pins already use (see "GitHub-release-only
+  managed mods" below) -- reusing the existing, reviewed GitHub-release
+  engine (`scripts/github_release_identity.py`, `scripts/bump_mod_github.py`)
+  rather than inventing a third channel. It is now `[update.github]`-tracked
+  (11 such pins total as of this change, confirmed via
+  `mod_eligibility.discover_github_pins`), not counted in this 74.
 - **Untracked**: everything else under `mods/`, for two distinct reasons,
   both reported explicitly rather than silently dropped:
   - `EXCLUDED_MOD_NAMES` (Herobrine API, Baritone): local-only client
@@ -257,15 +271,17 @@ candidate jar's real manifest correctly refusing a real pack is exactly
 as unpredictable per-candidate as those two, so a poll run hitting it
 should not hard-fail the whole run any more than they do.
 
-## GitHub-release-only managed mods (twenty-third review round)
+## GitHub-release-only managed mods (twenty-third review round; `dynamic-skateboards` added MINECRAFT-421)
 
 Four managed mods ship jars as GitHub Release assets rather than through
 Modrinth -- `dynamic-despawn`, `magicavoxel-loader`, `dynamic-battle-axes`,
-`dynamic-whips`. All four, and three OTHER managed mods that DO have
-GitHub-release pins for reasons unrelated to this ticket (`dynamic-
-atmosphere`'s own pin, `dynamic-backpacks`, `dynamic-population`,
-`dynamic-terrain`, `dynamic-vehicles`, `isometric-camera` -- confirmed by
-reading `origin/main` directly), are tracked via packwiz's OWN native
+`dynamic-whips`. All four, `dynamic-skateboards` (MINECRAFT-421 -- see
+"Enrollment" above for why its Modrinth tracking was reconciled to
+GitHub), and the other managed mods that DO have GitHub-release pins for
+reasons unrelated to this ticket (`dynamic-atmosphere`'s own pin,
+`dynamic-backpacks`, `dynamic-population`, `dynamic-terrain`,
+`dynamic-vehicles`, `isometric-camera` -- confirmed by reading
+`origin/main` directly), are tracked via packwiz's OWN native
 `[update.github]` pin schema: `slug` (`"owner/repo"`), `tag` (the
 currently-pinned release tag), `branch` (see below), `regex` (an
 asset-name filter). This is NOT an invented schema -- an earlier round of
