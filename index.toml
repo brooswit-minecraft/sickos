@@ -151,7 +151,7 @@ metafile = true
 
 [[files]]
 file = "mods/dynamic-vehicles.pw.toml"
-hash = "73c95298e7b7797a00f35e0d048d039129c839637b92fae9c8c14d8928532446"
+hash = "c31692d6a822ccf11c89d5d7fb0ad4f56cfe715510c76f7a6bdba037e1e2678b"
 metafile = true
 
 [[files]]
