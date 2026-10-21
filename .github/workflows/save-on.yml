@@ -1,0 +1,36 @@
+name: Enable automatic saving (one attempt)
+
+# Manual only; no command input, retry, or deployment operation.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: schematic-sftp-${{ github.repository }}
+  cancel-in-progress: false
+jobs:
+  save-on:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: brooswit-minecraft/schematic
+          ref: f27f43679e34a4975e8e1b18cdf6528877c6e66d
+          path: .schematic-tools
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Offline contract tests
+        run: python3 -m unittest discover -s tests -p 'test_save_on.py' -v
+      - name: Issue save-on once and record recognized outcome
+        run: python3 scripts/save-on.py
+        env:
+          SERVER_RCON_HOST: ${{ vars.SERVER_RCON_HOST }}
+          SERVER_RCON_PORT: ${{ vars.SERVER_RCON_PORT }}
+          SERVER_RCON_PASSWORD: ${{ secrets.SERVER_RCON_PASSWORD }}
