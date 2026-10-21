@@ -1,0 +1,40 @@
+name: Inspect save evidence (read-only)
+
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: sickos-save-evidence
+  cancel-in-progress: false
+jobs:
+  inspect:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: brooswit-minecraft/schematic
+          ref: f27f43679e34a4975e8e1b18cdf6528877c6e66d
+          path: .schematic-tools
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Offline diagnostic tests
+        run: python3 -m unittest discover -s tests -p 'test_inspect_save_evidence.py' -v
+      - run: python3 -m pip install 'paramiko==4.0.0'
+      - name: Read bounded save evidence
+        run: python3 scripts/inspect-save-evidence.py
+        env:
+          SERVER_SFTP_HOST: ${{ vars.SERVER_SFTP_HOST }}
+          SERVER_SFTP_PORT: ${{ vars.SERVER_SFTP_PORT }}
+          SERVER_SFTP_PATH: ${{ vars.SERVER_SFTP_PATH }}
+          SERVER_SFTP_USERNAME: ${{ secrets.SERVER_SFTP_USERNAME }}
+          SERVER_SFTP_PASSWORD: ${{ secrets.SERVER_SFTP_PASSWORD }}
+          SERVER_SFTP_PRIVATE_KEY: ${{ secrets.SERVER_SFTP_PRIVATE_KEY }}
+          SERVER_SFTP_KNOWN_HOSTS: ${{ secrets.SERVER_SFTP_KNOWN_HOSTS }}
