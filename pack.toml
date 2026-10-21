@@ -1,12 +1,12 @@
 name = "Sickos"
 author = "brooswit"
-version = "0.71.0"
+version = "0.72.0"
 pack-format = "packwiz:1.1.0"
 
 [index]
 file = "index.toml"
 hash-format = "sha256"
-hash = "d000f5b03c93320a494bbebf5e2951713b2ee5bd13e60cabfcf5a2435d96c485"
+hash = "60d2625df15e5bec7ac79a93b8b0a7bd73990eb2722d60e8150b965393e02a0f"
 
 [versions]
 minecraft = "1.21.1"
