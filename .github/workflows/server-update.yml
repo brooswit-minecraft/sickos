@@ -79,7 +79,8 @@ jobs:
     uses: brooswit-minecraft/schematic/.github/workflows/reusable-server-update.yml@c6c2d0a660794d37f2d177771a7e0058b2c4b93a
     with:
       version: ${{ inputs.version }}
-      allow-stopped: true
+      allow-stopped: false
+      backup: true
       server-address: breezy-trident848.modrinth.gg:25565
       tools-ref: c6c2d0a660794d37f2d177771a7e0058b2c4b93a
     secrets: inherit
