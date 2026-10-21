@@ -76,11 +76,11 @@ jobs:
     needs: deployment-policy
     if: needs.deployment-policy.outputs.deploy == 'true'
     # Pin workflow and tools together, including readiness-gated compatibility publication.
-    uses: brooswit-minecraft/schematic/.github/workflows/reusable-server-update.yml@c6c2d0a660794d37f2d177771a7e0058b2c4b93a
+    uses: brooswit-minecraft/schematic/.github/workflows/reusable-server-update.yml@f27f43679e34a4975e8e1b18cdf6528877c6e66d
     with:
       version: ${{ inputs.version }}
       allow-stopped: false
       backup: true
       server-address: breezy-trident848.modrinth.gg:25565
-      tools-ref: c6c2d0a660794d37f2d177771a7e0058b2c4b93a
+      tools-ref: f27f43679e34a4975e8e1b18cdf6528877c6e66d
     secrets: inherit
