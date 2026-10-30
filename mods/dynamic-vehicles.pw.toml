@@ -1,15 +1,15 @@
 name = "Dynamic Vehicles"
-filename = "dynamicvehicles-0.77.0.jar"
+filename = "dynamicvehicles-0.80.0.jar"
 side = "both"
 
 [download]
-url = "https://github.com/brooswit-minecraft/dynamic-vehicles/releases/download/v0.77.0/dynamicvehicles-0.77.0.jar"
+url = "https://github.com/brooswit-minecraft/dynamic-vehicles/releases/download/v0.80.0/dynamicvehicles-0.80.0.jar"
 hash-format = "sha256"
-hash = "102bd30a457e284f98ae2fcc000667214e7511a91e06a765d92d1e41437ca228"
+hash = "8308c37a625e2a2ec141dc1717f90c26711a41fcaeb38247e93f7223cd37e347"
 
 [update]
 [update.github]
-branch = "77c0bb6ebc3b954b09cce859fa2ff25f02de9c1e"
-regex = "^.+(?<!-api|-dev|-dev-preshadow|-sources)\\.jar$"
 slug = "brooswit-minecraft/dynamic-vehicles"
-tag = "v0.77.0"
+tag = "v0.80.0"
+branch = "6ca052fa3222b01fdbde6943521bcd6eb3109b6b"
+regex = "^.+(?<!-api|-dev|-dev-preshadow|-sources)\\.jar$"
