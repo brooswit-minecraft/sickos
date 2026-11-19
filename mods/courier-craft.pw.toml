@@ -1,0 +1,15 @@
+name = "Courier Craft"
+filename = "couriercraft-0.2.0.jar"
+side = "both"
+
+[download]
+url = "https://github.com/brooswit-minecraft/courier-craft/releases/download/v0.2.0/couriercraft-0.2.0.jar"
+hash-format = "sha256"
+hash = "11b2160c0cc2acd836bcd33dc976d8263951b2ec3126560a1513a1af67d412bd"
+
+[update]
+[update.github]
+branch = "f50e847b23ffa78be5d551ba128c6631bb2e97f8"
+regex = "^.+(?<!-api|-dev|-dev-preshadow|-sources)\\.jar$"
+slug = "brooswit-minecraft/courier-craft"
+tag = "v0.2.0"

@@ -33,6 +33,21 @@ their steps, so the border between old and new terrain can show a step). Erosion
 compatible with existing worlds; removing them later would delete the placed blocks and cars.
 The client and the server must run the same Sickos version.
 
+**MINECRAFT-562 isolated test branch only (not on `main`):** this branch retires both
+Dynamic Terrain and Dynamic Vehicles entirely, with no coexistence gate — this is a
+breaking change requiring a fresh world, see `changelog.d/MINECRAFT-562.md`. Terrain is
+replaced by the split Layered Slopes family (Layered Slopes, Layered Slope Grading,
+Smooth Slopes, the Layered Slopes × Flowing Fluids compat mod, and Layered Slope Dynamic
+Paths). Dynamic Vehicles' Dispatcher/Courier delivery gameplay is replaced by the
+standalone Courier Craft mod (the sole Dispatcher implementation on this branch — Dynamic
+Vehicles is not installed, so there is no duplicate). Dynamic Vehicles' placeholder Car and
+its Sable-physics driving are **not replaced** on this branch: Dynamic Immersive Vehicles
+and its layered-slopes-dynamic-immersive-vehicles erosion compat mod are deliberately not
+integrated here because neither has a stable, publicly pinnable release artifact, and
+Dynamic Immersive Vehicles' own required `sablecompanion` dependency has no discoverable
+Modrinth-hosted NeoForge 1.21.1 build — see MINECRAFT-562 for the full writeup. This
+branch is a test pack only: it is not merged to `main`, not released, and not tagged.
+
 ## Passable Foliage
 
 Sickos adds [Passable Foliage](https://modrinth.com/mod/passable-foliage)

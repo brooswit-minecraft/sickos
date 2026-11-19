@@ -35,6 +35,11 @@ hash = "c3f6787722664fdfe26e70949caa4e440243f56f78d0a18392a11e0609ad0d7b"
 metafile = true
 
 [[files]]
+file = "mods/courier-craft.pw.toml"
+hash = "4e5ad12575cd5f2f1fa5782a6e3ee8f0086f816ae0cadf2001822e123aa77fd4"
+metafile = true
+
+[[files]]
 file = "mods/create-aeronautics.pw.toml"
 hash = "3b8895369640b2a52d3e05f7186185ba6798e44d513f11c5427a0fe9c16769e9"
 metafile = true
@@ -145,16 +150,6 @@ hash = "a1f2257b094b6435aba1df7a3037dc7e4f5ffdcea283e4d892b50ceb089aa217"
 metafile = true
 
 [[files]]
-file = "mods/dynamic-terrain.pw.toml"
-hash = "07618b2aea46ddfb9d1bc2db4ac9159c06b352d1f7e1c7a60177c8bf6ca5e9a6"
-metafile = true
-
-[[files]]
-file = "mods/dynamic-vehicles.pw.toml"
-hash = "e3a6325f75a742da943080495aad1b94810619409a1b305449cb46cc7ea9ef0d"
-metafile = true
-
-[[files]]
 file = "mods/dynamic-whips.pw.toml"
 hash = "4876a8ef50346ce8f5f388643e3e3e95e7a5af415cee13c14aa807365f8cc61c"
 metafile = true
@@ -222,6 +217,26 @@ metafile = true
 [[files]]
 file = "mods/kiwi.pw.toml"
 hash = "547d5668cd5858a1c243a4ff6efaa23e48e4a60c8336fd144c29036cedb0f730"
+metafile = true
+
+[[files]]
+file = "mods/layered-slope-dynamic-paths.pw.toml"
+hash = "a232b7fa85c2ba7dff8967d285cfd026ee17cd05ef8dcbd8e36794998a2b3c02"
+metafile = true
+
+[[files]]
+file = "mods/layered-slope-grading.pw.toml"
+hash = "aa7173265f3476a5d98115f0fd5b5c3a6b93f579399d96d517885b2ae06bdea9"
+metafile = true
+
+[[files]]
+file = "mods/layered-slopes-flowing-fluids.pw.toml"
+hash = "a1a276dccc57f029302f7bb07778c56e4c892eadc9dbe4145dc35d6db8f18b9d"
+metafile = true
+
+[[files]]
+file = "mods/layered-slopes.pw.toml"
+hash = "8602f4f005d4cdc7ebe80997c634e42fd0c36850a1b84439bc4436a19c10b3ec"
 metafile = true
 
 [[files]]
@@ -317,6 +332,11 @@ metafile = true
 [[files]]
 file = "mods/serene-seasons.pw.toml"
 hash = "bcaac076ac981463ee57b7469430e5fb7ff99f8e2387681e7ac737ca5d22596b"
+metafile = true
+
+[[files]]
+file = "mods/smooth-slopes.pw.toml"
+hash = "f592d558e2bb9756bc10c51ac3704cb10f80c8f76be2c845e8be9f660793a22f"
 metafile = true
 
 [[files]]

@@ -1,0 +1,15 @@
+name = "Layered Slopes Flowing Fluids Compat"
+filename = "layeredslopesflowingfluids-0.2.1.jar"
+side = "both"
+
+[download]
+url = "https://github.com/brooswit-minecraft/layered-slopes-flowing-fluids/releases/download/v0.2.1/layeredslopesflowingfluids-0.2.1.jar"
+hash-format = "sha256"
+hash = "4eab71e27ff2d1f227c9a1648a368c28927e4a9e32a7cda4f5238242a35d96b9"
+
+[update]
+[update.github]
+branch = "08fbbb34098c28d7dc62fce4bbc3bf650483837c"
+regex = "^.+(?<!-api|-dev|-dev-preshadow|-sources)\\.jar$"
+slug = "brooswit-minecraft/layered-slopes-flowing-fluids"
+tag = "v0.2.1"

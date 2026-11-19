@@ -1,0 +1,15 @@
+name = "Smooth Slopes"
+filename = "smoothslopes-0.2.1.jar"
+side = "both"
+
+[download]
+url = "https://github.com/brooswit-minecraft/layered-slopes-smooth-terrain/releases/download/v0.2.1/smoothslopes-0.2.1.jar"
+hash-format = "sha256"
+hash = "b724a61a6dee269ba708416d29a7a7c29833b8368293412af9e37fbfeb4c033a"
+
+[update]
+[update.github]
+branch = "7651e1197f4c587614332a7c83ccadd1b367f836"
+regex = "^.+(?<!-api|-dev|-dev-preshadow|-sources)\\.jar$"
+slug = "brooswit-minecraft/layered-slopes-smooth-terrain"
+tag = "v0.2.1"
