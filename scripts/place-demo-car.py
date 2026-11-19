@@ -12,6 +12,12 @@ import socket
 import struct
 import sys
 
+# MINECRAFT-562 (isolated test branch only): this branch retires Dynamic Vehicles
+# entirely with no replacement vehicle entity (Dynamic Immersive Vehicles is blocked --
+# see changelog.d/MINECRAFT-562.md), so running this script against a server built from
+# this branch will summon nothing: `dynamicvehicles:car` does not exist on this branch's
+# pack. Left unmodified/untriggered otherwise -- this is live-server RCON tooling
+# (.github/workflows/place-demo-car.yml), out of this ticket's deploy-nothing scope.
 CAR = "dynamicvehicles:car"
 
 

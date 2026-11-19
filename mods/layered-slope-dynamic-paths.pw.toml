@@ -1,0 +1,15 @@
+name = "Layered Slope Dynamic Paths"
+filename = "layeredslopedynamicpaths-0.2.2.jar"
+side = "both"
+
+[download]
+url = "https://github.com/brooswit-minecraft/layered-slopes-dynamic-paths/releases/download/v0.2.2/layeredslopedynamicpaths-0.2.2.jar"
+hash-format = "sha256"
+hash = "d8d96f924b58ccae2d96ed5f829b8d329b14e49181b34cf0b3a22189a7ee8803"
+
+[update]
+[update.github]
+branch = "fd18d46e2c62261f3e5b5d4ad34625ce782f26ea"
+regex = "^.+(?<!-api|-dev|-dev-preshadow|-sources)\\.jar$"
+slug = "brooswit-minecraft/layered-slopes-dynamic-paths"
+tag = "v0.2.2"
